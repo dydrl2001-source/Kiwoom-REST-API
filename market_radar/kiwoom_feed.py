@@ -41,6 +41,58 @@ def schema():
           nxt_enabled TEXT,
           updated_at TIMESTAMPTZ NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS market_rank_snapshots(
+          snapshot_time TIMESTAMPTZ NOT NULL,
+          stock_code TEXT NOT NULL,
+          stock_name TEXT,
+          rank_no INTEGER,
+          rank_change INTEGER,
+          change_rate DOUBLE PRECISION,
+          market_cap_krw NUMERIC,
+          official_sector TEXT,
+          market_theme TEXT,
+          current_price_krw NUMERIC,
+          PRIMARY KEY(snapshot_time,stock_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rank_time ON market_rank_snapshots(snapshot_time DESC);
+        CREATE TABLE IF NOT EXISTS market_trade_value_snapshots(
+          snapshot_time TIMESTAMPTZ NOT NULL,
+          stock_code TEXT NOT NULL,
+          stock_name TEXT,
+          rank_no INTEGER,
+          trade_value_krw NUMERIC,
+          change_rate DOUBLE PRECISION,
+          market_cap_krw NUMERIC,
+          official_sector TEXT,
+          market_theme TEXT,
+          current_price_krw NUMERIC,
+          PRIMARY KEY(snapshot_time,stock_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_trade_time ON market_trade_value_snapshots(snapshot_time DESC);
+        CREATE TABLE IF NOT EXISTS market_sector_snapshots(
+          snapshot_time TIMESTAMPTZ NOT NULL,
+          sector_code TEXT NOT NULL,
+          sector_name TEXT NOT NULL,
+          change_rate DOUBLE PRECISION,
+          trade_value_krw NUMERIC,
+          rising_count INTEGER,
+          flat_count INTEGER,
+          falling_count INTEGER,
+          PRIMARY KEY(snapshot_time,sector_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sector_time ON market_sector_snapshots(snapshot_time DESC);
+        CREATE TABLE IF NOT EXISTS market_index_snapshots(
+          snapshot_time TIMESTAMPTZ NOT NULL,
+          index_code TEXT NOT NULL,
+          index_name TEXT NOT NULL,
+          current_value DOUBLE PRECISION,
+          change_rate DOUBLE PRECISION,
+          open_value DOUBLE PRECISION,
+          high_value DOUBLE PRECISION,
+          low_value DOUBLE PRECISION,
+          PRIMARY KEY(snapshot_time,index_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_index_time ON market_index_snapshots(snapshot_time DESC);
         ALTER TABLE market_rank_snapshots ADD COLUMN IF NOT EXISTS current_price_krw NUMERIC;
         ALTER TABLE market_trade_value_snapshots ADD COLUMN IF NOT EXISTS current_price_krw NUMERIC;
         """)
@@ -215,8 +267,9 @@ def one_cycle():
 
 def main():
     schema()
+    print(f"Kiwoom feed started: mode={MODE}, poll={POLL}s", flush=True)
     if not APPKEY or not SECRET:
-        set_status("WAITING_FOR_CREDENTIALS","Railway에 Kiwoom App Key/Secret을 입력하세요.")
+        set_status("WAITING_FOR_CREDENTIALS","로컬 .env에 Kiwoom App Key/Secret을 입력하세요.")
     while True:
         try:
             if not APPKEY or not SECRET:
