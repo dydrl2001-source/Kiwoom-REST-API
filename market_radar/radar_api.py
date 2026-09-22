@@ -1,5 +1,6 @@
 import os, json, re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as dtime
+from zoneinfo import ZoneInfo
 from typing import Optional
 import psycopg
 from fastapi import FastAPI, Header, HTTPException, Body
@@ -11,10 +12,10 @@ except Exception:
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.4.1")
+app = FastAPI(title="Market Radar", version="0.4.2")
 
 THEME_KEYWORDS = {
-    "반도체/HBM": ["HBM", "반도체", "하이닉스", "삼성전자", "패키징", "테스트", "퀄"],
+    "반도체/HBM": ["HBM", "반도체", "패키징", "테스트", "파운드리", "D램", "DRAM", "낸드"],
     "PCB/반도체기판": ["PCB", "기판", "FC-BGA", "CCL", "회로", "패키지기판"],
     "2차전지/배터리": ["2차전지", "배터리", "양극재", "음극재", "전고체"],
     "전력/변압기/케이블": ["전력", "변압기", "케이블", "데이터센터 전력"],
@@ -30,6 +31,56 @@ THEME_KEYWORDS = {
     "화장품": ["화장품", "뷰티"],
     "금융": ["은행", "금융", "증권", "보험"],
 }
+
+
+KST=ZoneInfo("Asia/Seoul")
+
+ETF_PREFIXES=(
+    "KODEX","TIGER","RISE","ACE","KOSEF","HANARO","SOL ","ARIRANG","TIMEFOLIO",
+    "PLUS ","WOORI ","FOCUS ","1Q ","KIWOOM ","BNK ","HK","KBSTAR"
+)
+
+STOCK_THEME_HINTS = {
+    "삼성전자":"반도체/HBM","SK하이닉스":"반도체/HBM","한미반도체":"반도체/HBM",
+    "HPSP":"반도체/HBM","테크윙":"반도체/HBM","주성엔지니어링":"반도체/HBM",
+    "코리아써키트":"PCB/반도체기판","심텍":"PCB/반도체기판","티엘비":"PCB/반도체기판",
+    "대덕전자":"PCB/반도체기판","이수페타시스":"PCB/반도체기판",
+    "대한전선":"전력/변압기/케이블","가온전선":"전력/변압기/케이블","LS ELECTRIC":"전력/변압기/케이블",
+    "효성중공업":"전력/변압기/케이블","HD현대일렉트릭":"전력/변압기/케이블",
+    "대한항공":"항공/여행",
+    "현대차":"자동차/EV","기아":"자동차/EV",
+}
+
+def is_etf_like(name):
+    n=(name or "").strip().upper()
+    return any(n.startswith(p.upper()) for p in ETF_PREFIXES) or " ETN" in n or n.endswith("ETN")
+
+def market_session_state(now=None):
+    now=(now or datetime.now(KST)).astimezone(KST)
+    wd=now.weekday()
+    t=now.time()
+    if wd >= 5:
+        return {"code":"CLOSED","label":"주말 장외","is_live":False}
+    # 한국 주식 통합 관찰 창: 프리마켓/NXT/정규/애프터마켓을 넓게 포함.
+    if dtime(8,0) <= t <= dtime(20,0):
+        if dtime(9,0) <= t <= dtime(15,30):
+            label="정규장"
+        elif t < dtime(9,0):
+            label="장전/NXT"
+        else:
+            label="장후/NXT"
+        return {"code":"OPEN","label":label,"is_live":True}
+    return {"code":"CLOSED","label":"장외","is_live":False}
+
+def choose_market_theme(name, official_sector, catalyst):
+    if name in STOCK_THEME_HINTS:
+        return STOCK_THEME_HINTS[name]
+    strength=int((catalyst or {}).get("material_strength") or 0)
+    if strength >= 2:
+        t=infer_theme((catalyst or {}).get("best_text") or "")
+        if t:
+            return t
+    return official_sector or "미분류"
 
 def get_db():
     if not DB:
@@ -275,8 +326,7 @@ def enrich_catalyst(cat, stock_name=None):
         candidates.append((score,kind,"Telegram",txt,it))
     candidates.sort(key=lambda x:x[0],reverse=True)
     best=candidates[0] if candidates else (0,"NONE","미확인","",None)
-    combined=" ".join(x[3] for x in candidates[:8])
-    inferred=infer_theme(combined)
+    inferred=infer_theme(best[3]) if best and best[3] else None
     if inferred:
         cat["theme"]=inferred
     cat["material_strength"]=best[0]
@@ -611,8 +661,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     cat["status"] = "NEWS_ONLY"
                     cat["note"] = "Telegram 직접매칭 없음 · 외부 뉴스 fallback"
                 cat=enrich_catalyst(cat,name)
-                if not theme2:
-                    theme2 = cat["theme"]
+                theme2 = choose_market_theme(name, sector2, cat)
                 flow = stock_flow_state(rank_no, rank_change, tv.get("rank"), cat)
                 row = {
                     "rank": rank_no, "rank_change": rank_change, "code": code, "name": name,
@@ -635,11 +684,15 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
             query_by_code={x["code"]:x for x in rows}
             trade_rows=[]
+            etf_trade_rows=[]
             for code,tv in sorted(trade_map.items(),key=lambda kv:(kv[1].get("rank") is None,kv[1].get("rank") or 999))[:30]:
                 if code in query_by_code:
                     x=dict(query_by_code[code])
                     x["trade_rank"]=tv.get("rank")
-                    trade_rows.append(x)
+                    if is_etf_like(x.get("name")):
+                        etf_trade_rows.append(x)
+                    else:
+                        trade_rows.append(x)
                     continue
                 name=tv.get("name") or code
                 cat=catalyst_for_stock(messages,code,name)
@@ -649,7 +702,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 cat=enrich_catalyst(cat,name)
                 cap=tv.get("market_cap"); value=tv.get("trade_value")
                 ratio=(float(value)/float(cap)*100) if value is not None and cap and float(cap)>0 else None
-                theme=tv.get("theme") or cat.get("theme")
+                theme=choose_market_theme(name, tv.get("sector"), cat)
                 flow=stock_flow_state(None,None,tv.get("rank"),cat)
                 x={"rank":None,"rank_change":None,"code":code,"name":name,"change_rate":tv.get("change_rate"),
                    "trade_rank":tv.get("rank"),"trade_value_krw":value,"market_cap_krw":cap,"trade_to_cap_pct":ratio,
@@ -661,7 +714,10 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 x["material_digest"].update(material_synthesis(
                     x["material_digest"],None,tv.get("rank"),tv.get("change_rate"),flow
                 ))
-                trade_rows.append(x)
+                if is_etf_like(name):
+                    etf_trade_rows.append(x)
+                else:
+                    trade_rows.append(x)
 
             material_seen=set(); material_rows=[]
             for x in rows+trade_rows:
@@ -705,7 +761,14 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             )
             latest_market=max([x for x in (rank_time,trade_time) if x],default=None)
             market_age_sec=int((datetime.now(timezone.utc)-latest_market).total_seconds()) if latest_market else None
-            market_snapshot={"time":iso(latest_market),"age_sec":market_age_sec,"stale":bool(market_age_sec is None or market_age_sec>180)}
+            session=market_session_state()
+            fresh=bool(market_age_sec is not None and market_age_sec<=180)
+            market_snapshot={
+                "time":iso(latest_market),"age_sec":market_age_sec,
+                "session_code":session["code"],"session_label":session["label"],
+                "is_live":bool(session["is_live"] and fresh),
+                "stale":bool(not fresh),
+            }
 
             sectors = []
             if table_exists(cur, "market_sector_snapshots"):
@@ -739,6 +802,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "rows": rows,
         "query_ranking": rows,
         "trade_ranking": trade_rows,
+        "etf_trade_ranking": etf_trade_rows,
         "sector_rankings": sector_groups,
         "materials": material_rows,
         "material_stats": material_stats,
