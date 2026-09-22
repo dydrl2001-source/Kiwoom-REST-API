@@ -93,6 +93,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      chart-feed:
+        condition: service_started
 
   telegram-collector:
     build:
