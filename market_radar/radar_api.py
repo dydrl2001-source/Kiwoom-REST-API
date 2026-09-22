@@ -2,7 +2,7 @@ import os, json, re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import psycopg
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Body
 from fastapi.responses import HTMLResponse, JSONResponse
 try:
     from radar_ui_v2 import DASHBOARD_HTML_V2
@@ -11,7 +11,7 @@ except Exception:
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.4.0")
+app = FastAPI(title="Market Radar", version="0.4.1")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "하이닉스", "삼성전자", "패키징", "테스트", "퀄"],
@@ -356,6 +356,81 @@ def material_digest(cat, flow_state, stock_name=None):
         "quality_note": cat.get("quality_note"),
     }
 
+def response_band(query_rank, trade_rank, trade_value=None):
+    if query_rank is not None and query_rank <= 5 and trade_rank is not None and trade_rank <= 10:
+        return "조회·거래대금 모두 강함"
+    if query_rank is not None and query_rank <= 10 and trade_rank is not None and trade_rank <= 30:
+        return "조회 강함 · 거래대금 동행"
+    if query_rank is not None and query_rank <= 10 and (trade_rank is None or trade_rank > 30):
+        return "조회 관심 선행 · 거래대금 동행 약함"
+    if trade_rank is not None and trade_rank <= 20:
+        return "거래대금 선행"
+    return "관찰 단계"
+
+def material_synthesis(digest, query_rank=None, trade_rank=None, change_rate=None, flow_state=None):
+    now=datetime.now(timezone.utc)
+    first=digest.get("first_seen")
+    last=digest.get("last_seen")
+    first_dt=None
+    try:
+        first_dt=datetime.fromisoformat(first) if first else None
+    except Exception:
+        first_dt=None
+    if first_dt and (now-first_dt).total_seconds() <= 90*60:
+        newness="신규 후보"
+    elif (digest.get("channels") or 0) >= 3:
+        newness="확산·재부각"
+    elif (digest.get("material_strength") or 0) >= 2:
+        newness="확인 필요"
+    else:
+        newness="직접 재료 미확인"
+
+    response=response_band(query_rank,trade_rank)
+    strength=int(digest.get("material_strength") or 0)
+    if strength >= 3:
+        base="개별 종목 직접 재료가 확인되는 편"
+    elif strength == 2:
+        base="업종·테마형 재료와 연결되는 편"
+    elif strength == 1:
+        base="종목 언급은 있으나 현재 가격 움직임의 직접 원인으로 보기엔 약함"
+    else:
+        base="현재 수집 범위에서는 가격 움직임을 설명할 직접 재료가 뚜렷하지 않음"
+
+    if flow_state=="재료↔돈 동행":
+        conclusion=f"{base}. 조회 관심과 거래대금도 함께 확인됩니다."
+    elif flow_state=="돈 선행 / 재료 미확인":
+        conclusion="거래대금이 먼저 강해졌지만 현재 수집 범위에서는 직접 촉발 재료가 확인되지 않았습니다."
+    elif flow_state=="재료 확인 / 돈 미약":
+        conclusion=f"{base}. 다만 거래대금 상위권 동행은 아직 제한적입니다."
+    elif flow_state=="관심 선행":
+        conclusion=f"{base}. 조회 관심이 먼저 붙는 단계로 보입니다."
+    else:
+        conclusion=base+"."
+
+    if change_rate is not None and abs(float(change_rate)) >= 20 and strength <= 1:
+        conclusion += " 등락폭에 비해 설명 가능한 재료 강도가 약해 추가 확인이 필요합니다."
+
+    return {
+        "newness":newness,
+        "market_response":response,
+        "synthesis":conclusion,
+    }
+
+def ensure_feedback_table(cur):
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS radar_feedback(
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      category TEXT NOT NULL,
+      stock_code TEXT,
+      predicted_state TEXT,
+      verdict TEXT NOT NULL,
+      note TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+    CREATE INDEX IF NOT EXISTS idx_radar_feedback_cat_time ON radar_feedback(category,created_at DESC);
+    """)
+
 @app.get("/health")
 def health():
     try:
@@ -366,6 +441,28 @@ def health():
         return {"status": "ok", "db": "ok"}
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+@app.post("/api/feedback")
+def feedback(payload: dict = Body(...), x_dashboard_token: Optional[str] = Header(None)):
+    require_token(x_dashboard_token)
+    category=str(payload.get("category") or "").strip()
+    verdict=str(payload.get("verdict") or "").strip()
+    if category not in ("material","mimosa"):
+        raise HTTPException(status_code=400,detail="invalid category")
+    if verdict not in ("correct","wrong"):
+        raise HTTPException(status_code=400,detail="invalid verdict")
+    stock_code=str(payload.get("stock_code") or "").strip() or None
+    predicted_state=str(payload.get("predicted_state") or "").strip() or None
+    note=str(payload.get("note") or "").strip() or None
+    with get_db() as c:
+        with c.cursor() as cur:
+            ensure_feedback_table(cur)
+            cur.execute("""INSERT INTO radar_feedback(category,stock_code,predicted_state,verdict,note,payload)
+                           VALUES(%s,%s,%s,%s,%s,%s::jsonb)""",
+                        (category,stock_code,predicted_state,verdict,note,json.dumps(payload,ensure_ascii=False)))
+            c.commit()
+    return {"status":"ok"}
 
 @app.get("/api/dashboard")
 def dashboard(x_dashboard_token: Optional[str] = Header(None)):
@@ -528,6 +625,9 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 }
                 row["analysis"] = stock_analysis(row)
                 row["material_digest"] = material_digest(cat,flow,name)
+                row["material_digest"].update(material_synthesis(
+                    row["material_digest"],rank_no,tv.get("rank"),chg,flow
+                ))
                 rows.append(row)
 
             sector_groups = build_sector_groups(rows)
@@ -558,6 +658,9 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                    "mimosa":chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0}}
                 x["analysis"]=stock_analysis(x)
                 x["material_digest"]=material_digest(cat,flow,name)
+                x["material_digest"].update(material_synthesis(
+                    x["material_digest"],None,tv.get("rank"),tv.get("change_rate"),flow
+                ))
                 trade_rows.append(x)
 
             material_seen=set(); material_rows=[]
@@ -593,6 +696,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 "weak":sum(1 for x in material_rows if int((x.get("digest") or {}).get("material_strength") or 0)<=1),
                 "spreading":sum(1 for x in material_rows if (x.get("catalyst") or {}).get("channels",0)>=3),
             }
+            if sector_groups:
+                tops=", ".join([f"{g['name']}({g['count']})" for g in sector_groups[:3]])
+                global_analysis.append(f"상위 조회집중 섹터: {tops}.")
+            global_analysis.append(
+                f"재료 품질: 직접 재료 후보 {material_stats['direct']}개, 테마형 {material_stats['sector']}개, "
+                f"약한 언급/미확인 {material_stats['weak']}개."
+            )
             latest_market=max([x for x in (rank_time,trade_time) if x],default=None)
             market_age_sec=int((datetime.now(timezone.utc)-latest_market).total_seconds()) if latest_market else None
             market_snapshot={"time":iso(latest_market),"age_sec":market_age_sec,"stale":bool(market_age_sec is None or market_age_sec>180)}
