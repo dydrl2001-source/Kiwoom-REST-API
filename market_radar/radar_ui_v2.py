@@ -47,7 +47,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 <div class="statusbar">
  <div class="stat"><div class="k">오늘 장</div><div class="v" id="regime">대기</div><div class="s" id="regimeSub">시장 데이터 확인 중</div></div>
  <div class="stat"><div class="k">Kiwoom</div><div class="v" id="kiwoom">-</div><div class="s" id="kiwoomSub"></div></div>
- <div class="stat"><div class="k">Telegram / News</div><div class="v" id="newsStatus">-</div><div class="s" id="newsSub"></div></div>
+ <div class="stat"><div class="k">재료 / 뉴스</div><div class="v" id="newsStatus">-</div><div class="s" id="newsSub"></div></div>
  <div class="stat"><div class="k">조회 Top20 교체율</div><div class="v" id="turnover">-</div><div class="s">관심 순환 속도</div></div>
  <div class="stat"><div class="k">미모사 엔진</div><div class="v" id="mimosaStatus">-</div><div class="s" id="mimosaSub"></div></div>
 </div>
@@ -160,7 +160,7 @@ function evidence(c){
 function materialCards(list){
  return (list||[]).slice(0,30).map(x=>{
    const d=x.digest||{},c=x.catalyst||{};
-   return '<article class="material-card"><div class="material-top"><h3>'+esc(x.name||x.code)+'</h3><span class="'+klass(x.change_rate)+'"><b>'+esc(rate(x.change_rate))+'</b></span></div><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+' · '+esc(x.sector||"미분류")+'</div><div class="material-summary">'+esc(d.summary||"직접 재료 미확인")+'</div><div class="legend"><span class="pill">'+esc(d.assessment||"미확인")+'</span><span class="pill">'+esc(x.flow_state||"관찰")+'</span></div><div class="material-why">'+esc(d.interpretation||"추가 확인 필요")+'</div><details><summary>근거 원문·기사 보기</summary>'+evidence(c)+'</details></article>';
+   return '<article class="material-card"><div class="material-top"><h3>'+esc(x.name||x.code)+'</h3><span class="'+klass(x.change_rate)+'"><b>'+esc(rate(x.change_rate))+'</b></span></div><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+' · '+esc(x.sector||"미분류")+'</div><div class="material-summary">'+esc(d.summary||"직접 재료 미확인")+'</div><div class="legend"><span class="pill">'+esc(d.assessment||"미확인")+'</span><span class="pill">'+esc(x.flow_state||"관찰")+'</span></div><div class="material-why">'+esc(d.interpretation||"추가 확인 필요")+'<div class="sub" style="margin-top:4px">'+esc(d.quality_note||"")+'</div></div><details><summary>근거 원문·기사 보기</summary>'+evidence(c)+'</details></article>';
  }).join("")||'<div class="panel pad muted">재료 데이터 대기 중</div>';
 }
 function mimosaCards(list){
@@ -175,10 +175,12 @@ function render(d){
  const label=d.regime.stable_label||d.regime.candidate_label||d.regime.status;
  document.getElementById("regime").textContent=label;
  document.getElementById("regimeSub").textContent=d.regime.note||"";
- document.getElementById("kiwoom").textContent=d.system.kiwoom.status;
- document.getElementById("kiwoomSub").textContent=d.system.kiwoom.note||"";
- document.getElementById("newsStatus").textContent=(d.system.telegram.count_24h||0).toLocaleString()+"건";
- document.getElementById("newsSub").textContent="외부뉴스 "+(d.system.newsfeed?.status||"-");
+ const snap=d.market_snapshot||{};
+ document.getElementById("kiwoom").textContent=d.system.kiwoom.status+(snap.stale?" · 마감/지연":" · LIVE");
+ document.getElementById("kiwoomSub").textContent=(snap.time?"데이터 "+new Date(snap.time).toLocaleString("ko-KR"):"")+(d.system.kiwoom.note?" · "+d.system.kiwoom.note:"");
+ const ms=d.material_stats||{};
+ document.getElementById("newsStatus").textContent="직접 "+(ms.direct||0)+" · 테마 "+(ms.sector||0);
+ document.getElementById("newsSub").textContent="확산 "+(ms.spreading||0)+" · 약한언급 "+(ms.weak||0)+" · Telegram "+(d.system.telegram.count_24h||0).toLocaleString()+"건";
  document.getElementById("turnover").textContent=d.regime_metrics?.rank_turnover_5m==null?"-":pct(d.regime_metrics.rank_turnover_5m);
  document.getElementById("mimosaStatus").textContent=d.system.mimosa?.status||"미연결";
  document.getElementById("mimosaSub").textContent=d.system.chartfeed?.status?"차트 "+d.system.chartfeed.status:"";
@@ -187,6 +189,8 @@ function render(d){
  if((d.sector_rankings||[])[0])sig.push("조회집중 "+d.sector_rankings[0].name);
  const noMat=(d.query_ranking||[]).filter(x=>x.flow_state==="돈 선행 / 재료 미확인").length;
  if(noMat)sig.push("돈선행 "+noMat+"종목");
+ if((d.material_stats?.direct||0)>0)sig.push("직접재료 "+d.material_stats.direct+"종목");
+ if((d.material_stats?.spreading||0)>0)sig.push("확산 "+d.material_stats.spreading+"종목");
  if(d.regime_metrics?.rank_turnover_5m!=null)sig.push("교체율 "+pct(d.regime_metrics.rank_turnover_5m));
  document.getElementById("quickSignals").innerHTML=sig.map(x=>'<span class="pill">'+esc(x)+'</span>').join("");
  document.getElementById("homeSectors").innerHTML=sectorCards(d.sector_rankings,8);
