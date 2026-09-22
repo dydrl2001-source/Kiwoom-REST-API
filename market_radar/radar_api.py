@@ -12,7 +12,7 @@ except Exception:
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.4.2")
+app = FastAPI(title="Market Radar", version="0.5.0")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "패키징", "테스트", "파운드리", "D램", "DRAM", "낸드"],
@@ -627,6 +627,22 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 except Exception:
                     chart_map = {}
 
+            strategy_map = {}
+            if table_exists(cur, "mimosa_strategy_signals"):
+                try:
+                    cur.execute("""SELECT DISTINCT ON (stock_code,strategy)
+                                          stock_code,strategy,state,state_ko,score,metrics,reasons,source_note,snapshot_time
+                                   FROM mimosa_strategy_signals
+                                   ORDER BY stock_code,strategy,snapshot_time DESC""")
+                    for x in cur.fetchall():
+                        strategy_map.setdefault(x[0],{})[x[1]]={
+                            "strategy":x[1],"state":x[2],"state_ko":x[3],"score":x[4],
+                            "metrics":x[5] or {},"reasons":x[6] or [],"source_note":x[7],
+                            "snapshot_time":iso(x[8])
+                        }
+                except Exception:
+                    strategy_map = {}
+
             news_map = {}
             if table_exists(cur, "stock_news_cache"):
                 cur.execute("""SELECT stock_code,stock_name,title,source,published_at,link
@@ -670,7 +686,8 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "official_sector": sector2, "market_theme": theme2,
                     "catalyst": cat, "flow_state": flow,
                     "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
-                    "mimosa": chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0}
+                    "mimosa": chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
+                    "mimosa_strategies": strategy_map.get(code,{})
                 }
                 row["analysis"] = stock_analysis(row)
                 row["material_digest"] = material_digest(cat,flow,name)
@@ -708,7 +725,8 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                    "trade_rank":tv.get("rank"),"trade_value_krw":value,"market_cap_krw":cap,"trade_to_cap_pct":ratio,
                    "official_sector":tv.get("sector"),"market_theme":theme,"catalyst":cat,"flow_state":flow,
                    "chart_state":(chart_map.get(code) or {}).get("state_ko","대기"),
-                   "mimosa":chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0}}
+                   "mimosa":chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
+                   "mimosa_strategies":strategy_map.get(code,{})}
                 x["analysis"]=stock_analysis(x)
                 x["material_digest"]=material_digest(cat,flow,name)
                 x["material_digest"].update(material_synthesis(
@@ -741,10 +759,30 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 mimosa_rows.append({
                     "code":x["code"],"name":x["name"],"change_rate":x.get("change_rate"),
                     "query_rank":x.get("rank"),"trade_rank":x.get("trade_rank"),
-                    "sector":x.get("official_sector") or x.get("market_theme") or "미분류",
+                    "sector":x.get("market_theme") or x.get("official_sector") or "미분류",
+                    "strategies":x.get("mimosa_strategies") or {},
                     **m
                 })
             mimosa_rows.sort(key=lambda x:(-(float(x.get("score") or 0)),x.get("query_rank") or 999))
+
+            strategy_lists={"CLOSE_BET":[],"OVERSOLD":[],"FALLING_STOCK":[]}
+            seen_strategy=set()
+            for x in rows+trade_rows:
+                if x["code"] in seen_strategy: continue
+                seen_strategy.add(x["code"])
+                for sk in strategy_lists:
+                    sig=(x.get("mimosa_strategies") or {}).get(sk)
+                    if not sig: continue
+                    item={"code":x["code"],"name":x["name"],"change_rate":x.get("change_rate"),
+                          "query_rank":x.get("rank"),"trade_rank":x.get("trade_rank"),
+                          "sector":x.get("market_theme") or x.get("official_sector") or "미분류",**sig}
+                    strategy_lists[sk].append(item)
+            for sk in strategy_lists:
+                strategy_lists[sk].sort(key=lambda z:(
+                    z.get("state","").endswith("_NO"),
+                    -(float(z.get("score") or 0)),
+                    z.get("query_rank") or 999
+                ))
 
             material_stats={
                 "direct":sum(1 for x in material_rows if int((x.get("digest") or {}).get("material_strength") or 0)>=3),
@@ -780,6 +818,26 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                                    ORDER BY trade_value_krw DESC NULLS LAST LIMIT 10""",(st,))
                     sectors=[{"name":x[0],"change_rate":x[1],"trade_value_krw":x[2],"rising":x[3],"falling":x[4]} for x in cur.fetchall()]
 
+            index_charts={}
+            if table_exists(cur, "index_minute_bars") or table_exists(cur, "index_daily_bars"):
+                for idx_code,idx_name in (("001","KOSPI"),("101","KOSDAQ")):
+                    intraday=[];daily=[]
+                    if table_exists(cur, "index_minute_bars"):
+                        cur.execute("""SELECT bar_time,open_value,high_value,low_value,close_value,volume
+                                       FROM index_minute_bars
+                                       WHERE index_code=%s
+                                       ORDER BY bar_time DESC LIMIT 120""",(idx_code,))
+                        rr=list(reversed(cur.fetchall()))
+                        intraday=[{"time":iso(x[0]),"open":x[1],"high":x[2],"low":x[3],"close":x[4],"volume":x[5]} for x in rr]
+                    if table_exists(cur, "index_daily_bars"):
+                        cur.execute("""SELECT trade_date,open_value,high_value,low_value,close_value,volume,trade_value
+                                       FROM index_daily_bars
+                                       WHERE index_code=%s
+                                       ORDER BY trade_date DESC LIMIT 120""",(idx_code,))
+                        rr=list(reversed(cur.fetchall()))
+                        daily=[{"date":x[0].isoformat(),"open":x[1],"high":x[2],"low":x[3],"close":x[4],"volume":x[5],"trade_value":x[6]} for x in rr]
+                    index_charts[idx_name]={"code":idx_code,"intraday":intraday,"daily":daily}
+
             # recent telegram: full text is preserved in the API/UI
             recent_telegram=[]
             for m in messages[:40]:
@@ -808,6 +866,8 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "material_stats": material_stats,
         "market_snapshot": market_snapshot,
         "mimosa_rows": mimosa_rows,
+        "mimosa_strategies": strategy_lists,
+        "index_charts": index_charts,
         "analysis": {
             "mode": "RULE_BASED",
             "lines": global_analysis,
