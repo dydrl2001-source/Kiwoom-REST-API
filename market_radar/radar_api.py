@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.3.0")
+app = FastAPI(title="Market Radar", version="0.3.1")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "하이닉스", "삼성전자", "패키징", "테스트", "퀄"],
@@ -249,6 +249,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 if r:
                     kiwoom = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
 
+            newsfeed = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
+            if table_exists(cur, "news_feed_status"):
+                cur.execute("SELECT status,last_success_at,note FROM news_feed_status WHERE id=1")
+                r = cur.fetchone()
+                if r:
+                    newsfeed = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
+
             regime = {"status": "WAITING_FOR_MARKET_DATA", "stable_label": None, "candidate_label": None, "confidence": None}
             if table_exists(cur, "market_regime_status"):
                 cur.execute("SELECT status,last_market_data_at,stable_label,candidate_label,candidate_count,note,updated_at FROM market_regime_status WHERE id=1")
@@ -318,6 +325,20 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 except Exception:
                     chart_map = {}
 
+            news_map = {}
+            if table_exists(cur, "stock_news_cache"):
+                cur.execute("""SELECT stock_code,stock_name,title,source,published_at,link
+                               FROM stock_news_cache
+                               WHERE COALESCE(published_at,fetched_at) > now()-interval '48 hours'
+                               ORDER BY stock_code,COALESCE(published_at,fetched_at) DESC""")
+                for x in cur.fetchall():
+                    arr = news_map.setdefault(x[0], [])
+                    if len(arr) < 6:
+                        arr.append({
+                            "stock_name": x[1], "title": x[2], "source": x[3],
+                            "published_at": iso(x[4]), "link": x[5]
+                        })
+
             rows = []
             for r in ranks:
                 code,name,rank_no,rank_change,chg,cap,sector,theme = r
@@ -333,6 +354,10 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 except Exception:
                     ratio = None
                 cat = catalyst_for_stock(messages, code, name)
+                cat["external_news"] = news_map.get(code, [])
+                if cat["status"] == "NO_MATCH" and cat["external_news"]:
+                    cat["status"] = "NEWS_ONLY"
+                    cat["note"] = "Telegram 직접매칭 없음 · 외부 뉴스 fallback"
                 if not theme2:
                     theme2 = cat["theme"]
                 flow = stock_flow_state(rank_no, rank_change, tv.get("rank"), cat)
@@ -374,7 +399,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "system": {"telegram": telegram, "kiwoom": kiwoom},
+        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed},
         "regime": regime,
         "regime_metrics": regime_metrics,
         "rank_time": iso(rank_time),
@@ -417,7 +442,7 @@ details{white-space:normal}summary{cursor:pointer;color:#dbe4ff}.item{padding:8p
 <div class="grid">
 <div class="card"><div class="label">오늘 시장</div><div class="big" id="regime">대기</div></div>
 <div class="card"><div class="label">Kiwoom Feed</div><div class="big" id="kiwoom">대기</div></div>
-<div class="card"><div class="label">Telegram</div><div class="big" id="telegram">대기</div></div>
+<div class="card"><div class="label">Telegram / 외부뉴스</div><div class="big" id="telegram">대기</div><div class="label" id="newsfeed">뉴스 대기</div></div>
 <div class="card"><div class="label">조회 Top20 교체율</div><div class="big" id="turnover">-</div></div>
 </div>
 
@@ -449,14 +474,19 @@ const cls=(v)=>Number(v)>0?"up":Number(v)<0?"dn":"";
 const esc=(v)=>String(v??"").replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]));
 function linkHtml(u,label){if(!u)return"";return '<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(label||"링크")+'</a>';}
 function renderCatalyst(c){
- if(!c||c.status==="NO_MATCH") return '<span class="pill wait">재료 미확인</span><div class="muted">'+esc(c?.note||"최근 24시간 직접매칭 없음")+'</div>';
- let head='<span class="pill">'+esc(c.status)+'</span><span class="pill">'+esc(c.channels)+'ch</span>';
+ if(!c) return '<span class="pill wait">재료 미확인</span>';
+ let head='<span class="pill">'+esc(c.status||"NO_MATCH")+'</span>';
+ if(c.channels) head+='<span class="pill">'+esc(c.channels)+'ch</span>';
  let items=(c.items||[]).map(function(it){
    let links=(it.links||[]).map(function(u,i){return linkHtml(u,"기사/링크 "+(i+1));}).join("");
    if(it.telegram_url) links+=linkHtml(it.telegram_url,"Telegram 원문");
    return '<div class="item"><b>'+esc(it.channel||"")+' · '+esc(it.time?new Date(it.time).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):"")+'</b><p>'+esc(it.text||"")+'</p><div>'+links+'</div></div>';
  }).join("");
- return head+'<details><summary>'+esc(c.summary||"관련 재료 보기")+'</summary>'+items+'</details>';
+ let news=(c.external_news||[]).map(function(n){
+   return '<div class="item"><b>외부뉴스 · '+esc(n.source||"source")+'</b><p>'+esc(n.title||"")+'</p><div>'+linkHtml(n.link,"기사 열기")+'</div></div>';
+ }).join("");
+ if(!items && !news) return head+'<div class="muted">'+esc(c.note||"최근 24시간 직접매칭 없음")+'</div>';
+ return head+'<details><summary>'+esc(c.summary||((c.external_news||[])[0]?.title)||"관련 재료·기사 보기")+'</summary>'+items+news+'</details>';
 }
 async function load(){
  if(!token){document.getElementById("regime").innerHTML='<span class="wait">접속키 필요</span>';return;}
@@ -468,6 +498,7 @@ async function load(){
   document.getElementById("regime").textContent=d.regime.stable_label||d.regime.candidate_label||d.regime.status;
   document.getElementById("kiwoom").textContent=d.system.kiwoom.status+(d.system.kiwoom.note?" · "+d.system.kiwoom.note:"");
   document.getElementById("telegram").textContent=(d.system.telegram.count_24h||0).toLocaleString()+"건 / 24h";
+  document.getElementById("newsfeed").textContent="외부뉴스: "+(d.system.newsfeed?.status||"미연결")+(d.system.newsfeed?.note?" · "+d.system.newsfeed.note:"");
   document.getElementById("turnover").textContent=d.regime_metrics?.rank_turnover_5m==null?"-":pct(d.regime_metrics.rank_turnover_5m);
 
   document.getElementById("analysis").innerHTML=(d.analysis?.lines||[]).map(function(x){return '<div class="analysis-line">'+esc(x)+'</div>';}).join("")||'<div class="wait">분석 데이터 대기</div>';
