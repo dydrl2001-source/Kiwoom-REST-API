@@ -10,7 +10,7 @@ BASE=os.getenv("PRD","https://api.kiwoom.com") if MODE=="real" else os.getenv("M
 APPKEY=os.getenv("APP_KEY","") if MODE=="real" else os.getenv("APP_KEY_MOCK","")
 SECRET=os.getenv("APP_SECRET","") if MODE=="real" else os.getenv("APP_SECRET_MOCK","")
 POLL=int(os.getenv("CHART_POLL_SECONDS","60"))
-TOPN=int(os.getenv("CHART_TOP_STOCKS","12"))
+TOPN=int(os.getenv("CHART_TOP_STOCKS","20"))
 MIN_INTERVAL=os.getenv("CHART_MINUTE_INTERVAL","3")
 DAILY_REFRESH=int(os.getenv("CHART_DAILY_REFRESH_SECONDS","1800"))
 KST=ZoneInfo("Asia/Seoul")
