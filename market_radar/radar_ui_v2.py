@@ -86,8 +86,10 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 </section>
 
 <section class="view" id="view-trade">
- <div class="section-title"><h2>거래대금 순위</h2><span>관심이 아니라 실제 돈의 순위</span></div>
+ <div class="section-title"><h2>거래대금 순위 · 주식</h2><span>ETF/ETN 제외, 실제 종목 수급 중심</span></div>
  <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th>대금순위</th><th class="left">종목</th><th>등락</th><th>거래대금</th><th>조회순위</th><th>시총대비*</th><th class="left">섹터</th><th class="left">흐름</th><th class="left">재료 요약</th><th class="left">미모사</th></tr></thead><tbody id="tradeRows"></tbody></table></div></div>
+ <div class="section-title"><h2>ETF / ETN 거래대금</h2><span>시장 방향성 참고용으로 분리</span></div>
+ <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th>대금순위</th><th class="left">ETF/ETN</th><th>등락</th><th>거래대금</th><th class="left">비고</th></tr></thead><tbody id="etfTradeRows"></tbody></table></div></div>
 </section>
 
 <section class="view" id="view-material">
@@ -179,6 +181,13 @@ function mimosaCards(list){
    return '<div class="m-card"><div class="m-head"><div><b>'+esc(x.name||x.code)+'</b><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+'</div></div><div class="score">'+esc(Math.round(Number(x.score||0)))+'</div></div><div class="m-state">'+esc(x.state_ko||"차트 데이터 대기")+'</div><div class="sub">'+esc(x.minute_trend||"분봉 미확인")+' · '+esc(x.daily_context||"일봉 미확인")+'</div><div class="reason">'+reasons+'</div><div class="fb"><button onclick="sendFeedback(\'mimosa\',\''+esc(x.code)+'\',\''+esc(x.state||x.state_ko||"")+'\',\'correct\',this)">판독 맞음</button><button onclick="sendFeedback(\'mimosa\',\''+esc(x.code)+'\',\''+esc(x.state||x.state_ko||"")+'\',\'wrong\',this)">판독 아님</button></div></div>';
  }).join("")||'<div class="panel pad muted">미모사 차트 데이터 대기 중</div>';
 }
+
+function renderEtfRows(rows){
+ return (rows||[]).slice(0,30).map(x=>
+   '<tr><td>'+esc(x.trade_rank??"-")+'</td><td class="left"><b>'+esc(x.name||x.code)+'</b><div class="sub">'+esc(x.code||"")+'</div></td><td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td><td>'+esc(money(x.trade_value_krw))+'</td><td class="left"><span class="pill">ETF/ETN 분리</span></td></tr>'
+ ).join("")||'<tr><td colspan="5" class="muted">ETF/ETN 데이터 없음</td></tr>';
+}
+
 function render(d){
  DATA=d;
  document.getElementById("stamp").textContent=new Date(d.generated_at).toLocaleString("ko-KR");
@@ -186,8 +195,9 @@ function render(d){
  document.getElementById("regime").textContent=label;
  document.getElementById("regimeSub").textContent=d.regime.note||"";
  const snap=d.market_snapshot||{};
- document.getElementById("kiwoom").textContent=d.system.kiwoom.status+(snap.stale?" · 마감/지연":" · LIVE");
- document.getElementById("kiwoomSub").textContent=(snap.time?"데이터 "+new Date(snap.time).toLocaleString("ko-KR"):"")+(d.system.kiwoom.note?" · "+d.system.kiwoom.note:"");
+ const liveText=snap.is_live?"LIVE":(snap.session_label||"장외");
+ document.getElementById("kiwoom").textContent=d.system.kiwoom.status+" · "+liveText;
+ document.getElementById("kiwoomSub").textContent=(snap.time?"수집 "+new Date(snap.time).toLocaleString("ko-KR"):"")+(snap.stale?" · 지연":"")+(d.system.kiwoom.note?" · "+d.system.kiwoom.note:"");
  const ms=d.material_stats||{};
  document.getElementById("newsStatus").textContent="직접 "+(ms.direct||0)+" · 테마 "+(ms.sector||0);
  document.getElementById("newsSub").textContent="확산 "+(ms.spreading||0)+" · 약한언급 "+(ms.weak||0)+" · Telegram "+(d.system.telegram.count_24h||0).toLocaleString()+"건";
@@ -208,6 +218,7 @@ function render(d){
  document.getElementById("homeStocks").innerHTML=renderHomeStocks(d.query_ranking);
  document.getElementById("queryRows").innerHTML=(d.query_ranking||[]).map(x=>stockRow(x,"query")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
  document.getElementById("tradeRows").innerHTML=(d.trade_ranking||[]).map(x=>stockRow(x,"trade")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
+ document.getElementById("etfTradeRows").innerHTML=renderEtfRows(d.etf_trade_ranking);
  document.getElementById("officialSectors").innerHTML=(d.sectors||[]).map(x=>'<tr><td class="left"><b>'+esc(x.name)+'</b></td><td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td><td>'+esc(money(x.trade_value_krw))+'</td><td>'+esc(x.rising??"-")+'</td><td>'+esc(x.falling??"-")+'</td></tr>').join("");
  document.getElementById("materials").innerHTML=materialCards(d.materials);
  document.getElementById("mimosaCards").innerHTML=mimosaCards(d.mimosa_rows);
