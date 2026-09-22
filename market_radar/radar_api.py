@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.2.0")
+app = FastAPI(title="Market Radar", version="0.3.0")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "하이닉스", "삼성전자", "패키징", "테스트", "퀄"],
@@ -47,36 +47,177 @@ def infer_theme(text: str) -> Optional[str]:
             return theme
     return None
 
+URL_RE = re.compile(r'https?://[^\s<>"\']+')
+
+def stock_aliases(code, name):
+    out = []
+    for x in (code, name):
+        if x and str(x).strip():
+            out.append(str(x).strip())
+    if name:
+        compact = re.sub(r"[\s㈜()주식회사]+", "", str(name))
+        if len(compact) >= 2 and compact not in out:
+            out.append(compact)
+    return out
+
+def extract_links(text):
+    links = []
+    for u in URL_RE.findall(text or ""):
+        u = u.rstrip(".,)]}>")
+        if u not in links:
+            links.append(u)
+    return links[:8]
+
 def catalyst_for_stock(messages, code, name):
+    aliases = stock_aliases(code, name)
     matched = []
     for m in messages:
         txt = m["text"] or ""
-        if (code and code in txt) or (name and len(name) >= 2 and name in txt):
+        compact = re.sub(r"\s+", "", txt)
+        if any((a in txt) or (len(a) >= 2 and a in compact) for a in aliases):
             matched.append(m)
     if not matched:
-        return {"text": None, "status": None, "channels": 0, "theme": None, "first_seen": None, "last_seen": None}
+        return {
+            "summary": None, "status": "NO_MATCH", "channels": 0, "theme": None,
+            "first_seen": None, "last_seen": None, "items": [], "article_links": [],
+            "note": "최근 24시간 Telegram 직접 일치 재료 미확인"
+        }
+
     matched.sort(key=lambda x: x["message_date"] or x["collected_at"])
-    chs = len(set(x["channel_name"] for x in matched))
-    last = matched[-1]
-    first = matched[0]
+    channels = len(set((x["channel_name"] or "") for x in matched))
+    first, last = matched[0], matched[-1]
     now = datetime.now(timezone.utc)
     last_dt = last["message_date"] or last["collected_at"]
-    age_min = (now - last_dt).total_seconds()/60 if last_dt else 9999
-    status = "SPREADING" if chs >= 2 else ("NEW" if age_min <= 90 else "REPEAT")
+    age_min = (now - last_dt).total_seconds() / 60 if last_dt else 9999
+    if channels >= 3:
+        status = "SPREADING"
+    elif channels >= 2:
+        status = "MULTI_CHANNEL"
+    elif age_min <= 90:
+        status = "NEW_MENTION"
+    else:
+        status = "SINGLE_OR_REPEAT"
+
     theme = None
     for x in reversed(matched):
         theme = infer_theme(x["text"])
         if theme:
             break
-    txt = re.sub(r"\s+", " ", last["text"] or "").strip()
+
+    items = []
+    article_links = []
+    for x in reversed(matched[-8:]):
+        txt = re.sub(r"\s+", " ", x["text"] or "").strip()
+        links = extract_links(x["text"] or "")
+        for u in links:
+            if u not in article_links and "t.me/" not in u:
+                article_links.append(u)
+        items.append({
+            "time": iso(x["message_date"] or x["collected_at"]),
+            "channel": x["channel_name"],
+            "text": txt[:6000],
+            "telegram_url": x.get("message_url"),
+            "links": links,
+        })
+    summary = re.sub(r"\s+", " ", last["text"] or "").strip()
     return {
-        "text": txt[:160] if txt else None,
+        "summary": summary[:1200] if summary else None,
         "status": status,
-        "channels": chs,
+        "channels": channels,
         "theme": theme,
         "first_seen": iso(first["message_date"] or first["collected_at"]),
         "last_seen": iso(last_dt),
+        "items": items,
+        "article_links": article_links[:8],
+        "note": None,
     }
+
+def build_sector_groups(rows):
+    groups = {}
+    for x in rows:
+        sector = x.get("official_sector") or x.get("market_theme") or "미분류"
+        g = groups.setdefault(sector, {
+            "name": sector, "count": 0, "query_score": 0.0, "rank_sum": 0.0,
+            "change_sum": 0.0, "change_n": 0, "positive": 0,
+            "trade_value_krw": 0.0, "stocks": []
+        })
+        rank = x.get("rank")
+        g["count"] += 1
+        if rank is not None:
+            g["query_score"] += max(1, 31 - int(rank))
+            g["rank_sum"] += float(rank)
+        chg = x.get("change_rate")
+        if chg is not None:
+            g["change_sum"] += float(chg)
+            g["change_n"] += 1
+            if float(chg) > 0:
+                g["positive"] += 1
+        tv = x.get("trade_value_krw")
+        if tv is not None:
+            g["trade_value_krw"] += float(tv)
+        g["stocks"].append({
+            "rank": rank, "code": x.get("code"), "name": x.get("name"),
+            "change_rate": chg, "flow_state": x.get("flow_state")
+        })
+    out = []
+    for g in groups.values():
+        g["avg_rank"] = g["rank_sum"] / g["count"] if g["count"] else None
+        g["avg_change_rate"] = g["change_sum"] / g["change_n"] if g["change_n"] else None
+        g["positive_ratio"] = g["positive"] / g["change_n"] if g["change_n"] else None
+        g["stocks"] = sorted(g["stocks"], key=lambda z: (z["rank"] is None, z["rank"] or 999))[:8]
+        out.append(g)
+    out.sort(key=lambda z: (z["query_score"], z["count"], z["trade_value_krw"]), reverse=True)
+    for i, g in enumerate(out, 1):
+        g["sector_rank"] = i
+    return out
+
+def stock_flow_state(rank_no, rank_change, trade_rank, catalyst):
+    material = catalyst.get("status") not in (None, "NO_MATCH")
+    money = trade_rank is not None and int(trade_rank) <= 20
+    interest = (rank_no is not None and int(rank_no) <= 10) or (rank_change is not None and int(rank_change) >= 5)
+    if material and money:
+        return "재료↔돈 동행"
+    if money and not material:
+        return "돈 선행 / 재료 미확인"
+    if material and not money:
+        return "재료 확인 / 돈 미약"
+    if interest:
+        return "관심 선행"
+    return "관찰"
+
+def stock_analysis(row):
+    bits = []
+    if row.get("rank") is not None and row["rank"] <= 5:
+        bits.append("조회 최상위")
+    if row.get("rank_change") is not None and row["rank_change"] >= 5:
+        bits.append("조회순위 급상승")
+    if row.get("trade_rank") is not None and row["trade_rank"] <= 20:
+        bits.append("거래대금 상위권")
+    if row.get("catalyst", {}).get("status") == "SPREADING":
+        bits.append("여러 채널 확산")
+    elif row.get("catalyst", {}).get("status") == "NO_MATCH":
+        bits.append("재료 직접 매칭 없음")
+    return " · ".join(bits) if bits else "추가 확인 필요"
+
+def build_global_analysis(regime, metrics, rows, sector_groups):
+    lines = []
+    label = regime.get("stable_label") or regime.get("candidate_label")
+    if label:
+        lines.append("장세 판독: " + str(label))
+    if not rows:
+        lines.append("실시간 종목조회 데이터가 아직 없습니다. 장중 데이터 수신 여부와 Kiwoom Feed 상태를 확인해야 합니다.")
+        return lines
+    if sector_groups:
+        g = sector_groups[0]
+        names = ", ".join([x.get("name") or x.get("code") or "" for x in g["stocks"][:4]])
+        lines.append(f"조회상위 집중 섹터: {g['name']} · {g['count']}종목 · 대표 {names}")
+    material_n = sum(1 for x in rows if x.get("catalyst", {}).get("status") != "NO_MATCH")
+    money_no_material = sum(1 for x in rows if x.get("flow_state") == "돈 선행 / 재료 미확인")
+    lines.append(f"재료 직접 매칭: {material_n}/{len(rows)}종목. 거래대금이 먼저 잡혔지만 재료를 못 찾은 종목은 {money_no_material}개입니다.")
+    if metrics and metrics.get("rank_turnover_5m") is not None:
+        lines.append(f"조회 Top20 5분 교체율: {float(metrics['rank_turnover_5m'])*100:.1f}%. 높을수록 관심이 빠르게 순환하는 장으로 해석합니다.")
+    lines.append("이 패널은 현재 규칙 기반 Radar 해석입니다. ChatGPT 모델의 별도 LLM 분석은 아직 대시보드에 직접 연결하지 않았습니다.")
+    return lines
 
 @app.get("/health")
 def health():
@@ -136,11 +277,11 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             # latest telegram sample for catalyst matching
             messages = []
             if table_exists(cur, "telegram_messages"):
-                cur.execute("""SELECT collected_at,message_date,channel_name,text
+                cur.execute("""SELECT collected_at,message_date,channel_name,text,message_url
                                FROM telegram_messages
-                               WHERE collected_at > now()-interval '8 hours'
-                               ORDER BY collected_at DESC LIMIT 500""")
-                messages = [{"collected_at":x[0],"message_date":x[1],"channel_name":x[2],"text":x[3]} for x in cur.fetchall()]
+                               WHERE collected_at > now()-interval '24 hours'
+                               ORDER BY collected_at DESC LIMIT 2000""")
+                messages = [{"collected_at":x[0],"message_date":x[1],"channel_name":x[2],"text":x[3],"message_url":x[4]} for x in cur.fetchall()]
 
             # latest ranks
             ranks = []
@@ -163,16 +304,28 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     cur.execute("""SELECT stock_code,rank_no,trade_value_krw,change_rate,market_cap_krw,official_sector,market_theme
                                    FROM market_trade_value_snapshots WHERE snapshot_time=%s ORDER BY rank_no NULLS LAST LIMIT 100""",(trade_time,))
                     for x in cur.fetchall():
-                        trade_map[x[0]] = x
+                        trade_map[x[0]] = {
+                            "rank": x[1], "trade_value": x[2], "change_rate": x[3],
+                            "market_cap": x[4], "sector": x[5], "theme": x[6]
+                        }
+
+            chart_map = {}
+            if table_exists(cur, "chart_states"):
+                try:
+                    cur.execute("""SELECT DISTINCT ON (stock_code) stock_code,state
+                                   FROM chart_states ORDER BY stock_code,snapshot_time DESC""")
+                    chart_map = {x[0]:x[1] for x in cur.fetchall()}
+                except Exception:
+                    chart_map = {}
 
             rows = []
             for r in ranks:
                 code,name,rank_no,rank_change,chg,cap,sector,theme = r
-                tv = trade_map.get(code)
-                trade_value = tv[2] if tv else None
-                cap2 = cap if cap is not None else (tv[4] if tv else None)
-                sector2 = sector or (tv[5] if tv else None)
-                theme2 = theme or (tv[6] if tv else None)
+                tv = trade_map.get(code) or {}
+                trade_value = tv.get("trade_value")
+                cap2 = cap if cap is not None else tv.get("market_cap")
+                sector2 = sector or tv.get("sector")
+                theme2 = theme or tv.get("theme")
                 ratio = None
                 try:
                     if trade_value is not None and cap2 and float(cap2) > 0:
@@ -182,20 +335,20 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 cat = catalyst_for_stock(messages, code, name)
                 if not theme2:
                     theme2 = cat["theme"]
-                chart_state = "대기"
-                if table_exists(cur, "chart_states"):
-                    try:
-                        cur.execute("SELECT state FROM chart_states WHERE stock_code=%s ORDER BY snapshot_time DESC LIMIT 1",(code,))
-                        rr=cur.fetchone()
-                        if rr: chart_state=rr[0]
-                    except Exception:
-                        c.rollback()
-                rows.append({
+                flow = stock_flow_state(rank_no, rank_change, tv.get("rank"), cat)
+                row = {
                     "rank": rank_no, "rank_change": rank_change, "code": code, "name": name,
-                    "change_rate": chg, "trade_value_krw": trade_value, "market_cap_krw": cap2,
-                    "trade_to_cap_pct": ratio, "official_sector": sector2, "market_theme": theme2,
-                    "catalyst": cat, "chart_state": chart_state
-                })
+                    "change_rate": chg, "trade_rank": tv.get("rank"), "trade_value_krw": trade_value,
+                    "market_cap_krw": cap2, "trade_to_cap_pct": ratio,
+                    "official_sector": sector2, "market_theme": theme2,
+                    "catalyst": cat, "flow_state": flow,
+                    "chart_state": chart_map.get(code, "대기")
+                }
+                row["analysis"] = stock_analysis(row)
+                rows.append(row)
+
+            sector_groups = build_sector_groups(rows)
+            global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             sectors = []
             if table_exists(cur, "market_sector_snapshots"):
@@ -207,11 +360,17 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                                    ORDER BY trade_value_krw DESC NULLS LAST LIMIT 10""",(st,))
                     sectors=[{"name":x[0],"change_rate":x[1],"trade_value_krw":x[2],"rising":x[3],"falling":x[4]} for x in cur.fetchall()]
 
-            # recent telegram
+            # recent telegram: full text is preserved in the API/UI
             recent_telegram=[]
-            for m in messages[:20]:
+            for m in messages[:40]:
                 txt=re.sub(r"\s+"," ",m["text"] or "").strip()
-                recent_telegram.append({"time":iso(m["message_date"] or m["collected_at"]),"channel":m["channel_name"],"text":txt[:180]})
+                recent_telegram.append({
+                    "time":iso(m["message_date"] or m["collected_at"]),
+                    "channel":m["channel_name"],
+                    "text":txt[:6000],
+                    "message_url":m.get("message_url"),
+                    "links":extract_links(m["text"] or "")
+                })
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -221,6 +380,12 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "rank_time": iso(rank_time),
         "trade_time": iso(trade_time),
         "rows": rows,
+        "sector_rankings": sector_groups,
+        "analysis": {
+            "mode": "RULE_BASED",
+            "lines": global_analysis,
+            "note": "실시간 조회순위·거래대금·Telegram 직접매칭을 조합한 규칙 기반 해석"
+        },
         "sectors": sectors,
         "telegram_recent": recent_telegram,
     }
@@ -230,30 +395,49 @@ DASHBOARD_HTML = r"""<!doctype html>
 <title>Market Radar</title>
 <style>
 :root{--bg:#0b1020;--card:#131a2d;--line:#27324d;--txt:#eef2ff;--muted:#91a0bf;--good:#42d392;--bad:#ff6b7d;--warn:#f7c948;--accent:#7c9cff}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-.wrap{max-width:1500px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:16px;align-items:end;margin-bottom:16px}
-h1{font-size:26px;margin:0}.sub{color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}.label{color:var(--muted);font-size:12px}.big{font-size:20px;font-weight:700;margin-top:5px}
-.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-top:14px;overflow:hidden}.panel h2{font-size:15px;margin:0;padding:14px;border-bottom:1px solid var(--line)}
-table{width:100%;border-collapse:collapse}th,td{padding:10px 9px;border-bottom:1px solid #202942;text-align:right;white-space:nowrap}th{color:var(--muted);font-weight:600;font-size:12px}th:nth-child(2),td:nth-child(2),th:nth-child(7),td:nth-child(7),th:nth-child(8),td:nth-child(8),th:nth-child(9),td:nth-child(9),th:nth-child(10),td:nth-child(10){text-align:left}
-.up{color:var(--good)}.dn{color:var(--bad)}.pill{display:inline-block;padding:3px 7px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:#cbd5e1}
-.wait{color:var(--warn)}.tele{padding:10px 14px;border-bottom:1px solid #202942}.tele b{font-size:12px}.tele p{margin:3px 0 0;color:#cbd5e1}.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media(max-width:900px){.grid{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.wrap{padding:12px}.panel{overflow:auto}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1720px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;gap:16px;align-items:end;margin-bottom:15px}
+h1{font-size:26px;margin:0}.sub,.muted{color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.card,.panel{background:var(--card);border:1px solid var(--line);border-radius:14px}.card{padding:14px}.label{color:var(--muted);font-size:12px}.big{font-size:19px;font-weight:750;margin-top:5px}
+.panel{margin-top:14px;overflow:hidden}.panel h2{font-size:15px;margin:0;padding:13px 14px;border-bottom:1px solid var(--line)}.pad{padding:13px 14px}
+.analysis-line{padding:7px 0;border-bottom:1px solid #202942}.analysis-line:last-child{border:0}
+table{width:100%;border-collapse:collapse}th,td{padding:9px 8px;border-bottom:1px solid #202942;text-align:right;vertical-align:top}th{color:var(--muted);font-size:12px;position:sticky;top:0;background:var(--card);z-index:2}
+.left{text-align:left}.up{color:var(--good)}.dn{color:var(--bad)}.wait{color:var(--warn)}
+.pill{display:inline-block;padding:3px 7px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:#cbd5e1;margin:1px 3px 1px 0}
+.wrapcell{white-space:normal;min-width:260px;max-width:560px;text-align:left}.stockcell{min-width:130px;text-align:left}.sectorcell{min-width:130px;text-align:left}
+details{white-space:normal}summary{cursor:pointer;color:#dbe4ff}.item{padding:8px 0;border-top:1px solid #202942}.item p{margin:3px 0;color:#d2daec}.item a{color:#9eb4ff;text-decoration:none;margin-right:8px}
+.two{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}.scroll{overflow:auto;max-height:650px}
+.sector-stock{display:inline-block;margin:2px 5px 2px 0;padding:2px 6px;border:1px solid var(--line);border-radius:8px;font-size:11px}
+.note{font-size:12px;color:var(--muted);padding-top:7px}
+@media(max-width:1000px){.grid{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.wrap{padding:10px}.panel{overflow:auto}}
 </style></head>
 <body><div class="wrap">
-<div class="top"><div><h1>MARKET RADAR</h1><div class="sub">장세 → 섹터 → 관심 → 돈 → 재료 → 차트</div></div><div class="sub" id="stamp">연결 중…</div></div>
+<div class="top"><div><h1>MARKET RADAR</h1><div class="sub">시장 → 섹터 → 조회관심 → 돈 → 재료/뉴스 → 차트</div></div><div class="sub" id="stamp">연결 중…</div></div>
+
 <div class="grid">
 <div class="card"><div class="label">오늘 시장</div><div class="big" id="regime">대기</div></div>
 <div class="card"><div class="label">Kiwoom Feed</div><div class="big" id="kiwoom">대기</div></div>
 <div class="card"><div class="label">Telegram</div><div class="big" id="telegram">대기</div></div>
 <div class="card"><div class="label">조회 Top20 교체율</div><div class="big" id="turnover">-</div></div>
 </div>
-<div class="panel"><h2>실시간 종목조회 레이더</h2><table><thead><tr>
-<th>순위</th><th>종목</th><th>등락률</th><th>거래대금</th><th>시총</th><th>시총대비</th><th>섹터</th><th>테마</th><th>재료</th><th>차트</th>
+
+<div class="panel"><h2>RADAR 분석 <span class="muted">· 규칙 기반</span></h2><div class="pad" id="analysis"></div></div>
+
+<div class="panel"><h2>실시간 조회상위 · 섹터별 집중 순위</h2>
+<div class="scroll"><table><thead><tr><th>섹터순위</th><th class="left">섹터</th><th>조회상위 종목수</th><th>평균 조회순위</th><th>평균 등락</th><th>합산 거래대금</th><th class="left">상위 종목</th></tr></thead><tbody id="sectorRanks"></tbody></table></div>
+<div class="pad note">※ 이 순위는 공식 업종지수 순위가 아니라, 실시간 종목조회 상위권에 어떤 섹터가 얼마나 몰렸는지를 집계한 ‘조회관심 집중도’입니다.</div>
+</div>
+
+<div class="panel"><h2>실시간 종목조회 레이더</h2><div class="scroll"><table><thead><tr>
+<th>조회순위</th><th class="left">종목</th><th>등락률</th><th>거래대금순위</th><th>거래대금</th><th>시총대비*</th>
+<th class="left">섹터</th><th class="left">흐름</th><th class="left">재료·기사</th><th class="left">RADAR 해석</th><th class="left">차트</th>
 </tr></thead><tbody id="tbody"></tbody></table></div>
+<div class="pad note">* 시총대비 거래대금은 Kiwoom 원시 단위 첫 실전장 검증 전까지 잠정값으로 취급합니다.</div>
+</div>
+
 <div class="two">
-<div class="panel"><h2>주도 섹터</h2><div id="sectors"></div></div>
-<div class="panel"><h2>Telegram 최신</h2><div id="tels"></div></div>
+<div class="panel"><h2>공식 업종 데이터</h2><div id="sectors"></div></div>
+<div class="panel"><h2>Telegram 최신 · 원문 보존</h2><div class="scroll" id="tels"></div></div>
 </div>
 </div>
 <script>
@@ -262,6 +446,18 @@ if(location.hash){localStorage.setItem("marketRadarToken",token);history.replace
 const fmt=(v)=>v==null?"-":Number(v).toLocaleString("ko-KR",{maximumFractionDigits:1});
 const pct=(v)=>v==null?"-":(Number(v)*100).toFixed(1)+"%";
 const cls=(v)=>Number(v)>0?"up":Number(v)<0?"dn":"";
+const esc=(v)=>String(v??"").replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]));
+function linkHtml(u,label){if(!u)return"";return '<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(label||"링크")+'</a>';}
+function renderCatalyst(c){
+ if(!c||c.status==="NO_MATCH") return '<span class="pill wait">재료 미확인</span><div class="muted">'+esc(c?.note||"최근 24시간 직접매칭 없음")+'</div>';
+ let head='<span class="pill">'+esc(c.status)+'</span><span class="pill">'+esc(c.channels)+'ch</span>';
+ let items=(c.items||[]).map(function(it){
+   let links=(it.links||[]).map(function(u,i){return linkHtml(u,"기사/링크 "+(i+1));}).join("");
+   if(it.telegram_url) links+=linkHtml(it.telegram_url,"Telegram 원문");
+   return '<div class="item"><b>'+esc(it.channel||"")+' · '+esc(it.time?new Date(it.time).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):"")+'</b><p>'+esc(it.text||"")+'</p><div>'+links+'</div></div>';
+ }).join("");
+ return head+'<details><summary>'+esc(c.summary||"관련 재료 보기")+'</summary>'+items+'</details>';
+}
 async function load(){
  if(!token){document.getElementById("regime").innerHTML='<span class="wait">접속키 필요</span>';return;}
  try{
@@ -270,23 +466,44 @@ async function load(){
   const d=await r.json();
   document.getElementById("stamp").textContent=new Date(d.generated_at).toLocaleString("ko-KR");
   document.getElementById("regime").textContent=d.regime.stable_label||d.regime.candidate_label||d.regime.status;
-  document.getElementById("kiwoom").textContent=d.system.kiwoom.status;
+  document.getElementById("kiwoom").textContent=d.system.kiwoom.status+(d.system.kiwoom.note?" · "+d.system.kiwoom.note:"");
   document.getElementById("telegram").textContent=(d.system.telegram.count_24h||0).toLocaleString()+"건 / 24h";
   document.getElementById("turnover").textContent=d.regime_metrics?.rank_turnover_5m==null?"-":pct(d.regime_metrics.rank_turnover_5m);
+
+  document.getElementById("analysis").innerHTML=(d.analysis?.lines||[]).map(function(x){return '<div class="analysis-line">'+esc(x)+'</div>';}).join("")||'<div class="wait">분석 데이터 대기</div>';
+
+  const sr=d.sector_rankings||[];
+  document.getElementById("sectorRanks").innerHTML=sr.length?sr.map(function(g){
+    let stocks=(g.stocks||[]).map(function(x){return '<span class="sector-stock">#'+esc(x.rank??"-")+' '+esc(x.name||x.code)+' '+(x.change_rate==null?"":esc(fmt(x.change_rate))+"%")+'</span>';}).join("");
+    return '<tr><td>'+esc(g.sector_rank)+'</td><td class="left"><b>'+esc(g.name)+'</b></td><td>'+esc(g.count)+'</td><td>'+esc(g.avg_rank==null?"-":g.avg_rank.toFixed(1))+'</td><td class="'+cls(g.avg_change_rate)+'">'+esc(g.avg_change_rate==null?"-":fmt(g.avg_change_rate)+"%")+'</td><td>'+esc(g.trade_value_krw?fmt(g.trade_value_krw/1e8)+"억":"-")+'</td><td class="left">'+stocks+'</td></tr>';
+  }).join(""):'<tr><td colspan="7" class="wait">실시간 조회순위 데이터 대기 중</td></tr>';
+
   const rows=d.rows||[];
-  document.getElementById("tbody").innerHTML=rows.length?rows.map(x=>`<tr>
-   <td>${x.rank??"-"} <span class="${cls(x.rank_change)}">${x.rank_change==null?"":(x.rank_change>0?"↑":"↓")+Math.abs(x.rank_change)}</span></td>
-   <td><b>${x.name||x.code}</b><div class="label">${x.code}</div></td>
-   <td class="${cls(x.change_rate)}">${x.change_rate==null?"-":fmt(x.change_rate)+"%"}</td>
-   <td>${x.trade_value_krw==null?"-":fmt(x.trade_value_krw/1e8)+"억"}</td>
-   <td>${x.market_cap_krw==null?"-":fmt(x.market_cap_krw/1e8)+"억"}</td>
-   <td>${x.trade_to_cap_pct==null?"-":x.trade_to_cap_pct.toFixed(1)+"%"}</td>
-   <td>${x.official_sector||"-"}</td><td>${x.market_theme||"-"}</td>
-   <td><span class="pill">${x.catalyst?.status||"-"}</span> ${x.catalyst?.text||""}</td>
-   <td>${x.chart_state||"대기"}</td>
-  </tr>`).join(""):'<tr><td colspan="10" class="wait">키움 시장 데이터 연결 대기 중</td></tr>';
-  document.getElementById("sectors").innerHTML=(d.sectors||[]).map(x=>`<div class="tele"><b>${x.name}</b> <span class="${cls(x.change_rate)}">${x.change_rate==null?"":fmt(x.change_rate)+"%"}</span><p>거래대금 ${x.trade_value_krw==null?"-":fmt(x.trade_value_krw/1e8)+"억"} · 상승 ${x.rising??"-"} / 하락 ${x.falling??"-"}</p></div>`).join("")||'<div class="tele wait">업종 데이터 대기 중</div>';
-  document.getElementById("tels").innerHTML=(d.telegram_recent||[]).map(x=>`<div class="tele"><b>${new Date(x.time).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})} · ${x.channel}</b><p>${x.text}</p></div>`).join("");
+  document.getElementById("tbody").innerHTML=rows.length?rows.map(function(x){
+   let arrow=x.rank_change==null?"":(x.rank_change>0?"↑":x.rank_change<0?"↓":"")+Math.abs(x.rank_change||0);
+   return '<tr>'+
+   '<td>'+esc(x.rank??"-")+' <span class="'+cls(x.rank_change)+'">'+esc(arrow)+'</span></td>'+
+   '<td class="stockcell"><b>'+esc(x.name||x.code)+'</b><div class="label">'+esc(x.code)+'</div></td>'+
+   '<td class="'+cls(x.change_rate)+'">'+esc(x.change_rate==null?"-":fmt(x.change_rate)+"%")+'</td>'+
+   '<td>'+esc(x.trade_rank??"-")+'</td>'+
+   '<td>'+esc(x.trade_value_krw==null?"-":fmt(x.trade_value_krw/1e8)+"억")+'</td>'+
+   '<td>'+esc(x.trade_to_cap_pct==null?"-":Number(x.trade_to_cap_pct).toFixed(1)+"%")+'</td>'+
+   '<td class="sectorcell">'+esc(x.official_sector||x.market_theme||"미분류")+'</td>'+
+   '<td class="wrapcell"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td>'+
+   '<td class="wrapcell">'+renderCatalyst(x.catalyst)+'</td>'+
+   '<td class="wrapcell">'+esc(x.analysis||"")+'</td>'+
+   '<td class="left">'+esc(x.chart_state||"대기")+'</td></tr>';
+  }).join(""):'<tr><td colspan="11" class="wait">키움 실시간 종목조회 데이터 대기 중</td></tr>';
+
+  document.getElementById("sectors").innerHTML=(d.sectors||[]).map(function(x){
+    return '<div class="item"><b>'+esc(x.name)+'</b> <span class="'+cls(x.change_rate)+'">'+esc(x.change_rate==null?"":fmt(x.change_rate)+"%")+'</span><p>거래대금 '+esc(x.trade_value_krw==null?"-":fmt(x.trade_value_krw/1e8)+"억")+' · 상승 '+esc(x.rising??"-")+' / 하락 '+esc(x.falling??"-")+'</p></div>';
+  }).join("")||'<div class="pad wait">업종 데이터 대기 중</div>';
+
+  document.getElementById("tels").innerHTML=(d.telegram_recent||[]).map(function(x){
+    let links=(x.links||[]).map(function(u,i){return linkHtml(u,"기사/링크 "+(i+1));}).join("");
+    if(x.message_url)links+=linkHtml(x.message_url,"Telegram 원문");
+    return '<div class="item pad"><b>'+esc(x.time?new Date(x.time).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):"")+' · '+esc(x.channel)+'</b><details><summary>'+esc((x.text||"").slice(0,220))+(x.text&&x.text.length>220?"…":"")+'</summary><p>'+esc(x.text||"")+'</p><div>'+links+'</div></details></div>';
+  }).join("");
  }catch(e){document.getElementById("kiwoom").textContent="연결 오류";console.error(e);}
 }
 load();setInterval(load,10000);
