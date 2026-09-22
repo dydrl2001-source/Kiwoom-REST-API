@@ -31,7 +31,7 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .material-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.material-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}
 .material-top{display:flex;justify-content:space-between;gap:6px}.material-card h3{font-size:14px;margin:0}.material-summary{font-weight:750;margin:8px 0 5px;line-height:1.5}.material-why{font-size:11px;color:#516078;background:#f6f8fb;padding:7px;border-radius:7px}
 details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evidence{border-top:1px solid #edf1f6;margin-top:7px;padding-top:7px;font-size:11px}.evidence p{margin:4px 0}.links{display:flex;gap:7px;flex-wrap:wrap}
-.mimosa-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.m-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.m-head{display:flex;justify-content:space-between}.m-state{font-size:13px;font-weight:900;margin-top:6px}.score{font-weight:900}.reason{font-size:10px;color:var(--muted);margin-top:5px}
+.mimosa-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.m-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.m-head{display:flex;justify-content:space-between}.m-state{font-size:13px;font-weight:900;margin-top:6px}.score{font-weight:900}.reason{font-size:10px;color:var(--muted);margin-top:5px}.fb{display:flex;gap:5px;margin-top:8px}.fb button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 7px;font-size:10px;color:#5d6b7f;cursor:pointer}.fb button:hover{background:#f3f6fa}.fb .sent{background:#eaf6f1;color:#187a59}
 .bottom{display:none}
 @media(max-width:1100px){.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
 @media(max-width:700px){
@@ -123,6 +123,16 @@ function setView(name){
 }
 document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>setView(b.dataset.view));
 
+async function sendFeedback(category,stock,predicted,verdict,btn){
+ try{
+  const r=await fetch("/api/feedback",{method:"POST",headers:{"content-type":"application/json","x-dashboard-token":token},
+    body:JSON.stringify({category:category,stock_code:stock,predicted_state:predicted,verdict:verdict})});
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  if(btn){btn.classList.add("sent");btn.textContent="저장됨";}
+ }catch(e){if(btn)btn.textContent="실패";console.error(e);}
+}
+
+
 function digest(x){return x?.material_digest||x?.digest||{}}
 function sectorCards(list,limit=8){
  return (list||[]).slice(0,limit).map(g=>{
@@ -160,13 +170,13 @@ function evidence(c){
 function materialCards(list){
  return (list||[]).slice(0,30).map(x=>{
    const d=x.digest||{},c=x.catalyst||{};
-   return '<article class="material-card"><div class="material-top"><h3>'+esc(x.name||x.code)+'</h3><span class="'+klass(x.change_rate)+'"><b>'+esc(rate(x.change_rate))+'</b></span></div><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+' · '+esc(x.sector||"미분류")+'</div><div class="material-summary">'+esc(d.summary||"직접 재료 미확인")+'</div><div class="legend"><span class="pill">'+esc(d.assessment||"미확인")+'</span><span class="pill">'+esc(x.flow_state||"관찰")+'</span></div><div class="material-why">'+esc(d.interpretation||"추가 확인 필요")+'<div class="sub" style="margin-top:4px">'+esc(d.quality_note||"")+'</div></div><details><summary>근거 원문·기사 보기</summary>'+evidence(c)+'</details></article>';
+   return '<article class="material-card"><div class="material-top"><h3>'+esc(x.name||x.code)+'</h3><span class="'+klass(x.change_rate)+'"><b>'+esc(rate(x.change_rate))+'</b></span></div><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+' · '+esc(x.sector||"미분류")+'</div><div class="material-summary">'+esc(d.summary||"직접 재료 미확인")+'</div><div class="legend"><span class="pill">'+esc(d.assessment||"미확인")+'</span><span class="pill">'+esc(d.newness||"")+'</span><span class="pill">'+esc(x.flow_state||"관찰")+'</span></div><div class="material-why"><b>'+esc(d.market_response||"")+'</b><div style="margin-top:4px">'+esc(d.synthesis||d.interpretation||"추가 확인 필요")+'</div><div class="sub" style="margin-top:4px">'+esc(d.quality_note||"")+'</div></div><details><summary>근거 원문·기사 보기</summary>'+evidence(c)+'</details><div class="fb"><button onclick="sendFeedback(\'material\',\''+esc(x.code)+'\',\''+esc(d.assessment||"")+'\',\'correct\',this)">재료 맞음</button><button onclick="sendFeedback(\'material\',\''+esc(x.code)+'\',\''+esc(d.assessment||"")+'\',\'wrong\',this)">재료 아님</button></div></article>';
  }).join("")||'<div class="panel pad muted">재료 데이터 대기 중</div>';
 }
 function mimosaCards(list){
  return (list||[]).slice(0,30).map(x=>{
    const reasons=(x.reasons||[]).map(r=>'<span class="pill">'+esc(r)+'</span>').join("");
-   return '<div class="m-card"><div class="m-head"><div><b>'+esc(x.name||x.code)+'</b><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+'</div></div><div class="score">'+esc(Math.round(Number(x.score||0)))+'</div></div><div class="m-state">'+esc(x.state_ko||"차트 데이터 대기")+'</div><div class="sub">'+esc(x.minute_trend||"분봉 미확인")+' · '+esc(x.daily_context||"일봉 미확인")+'</div><div class="reason">'+reasons+'</div></div>';
+   return '<div class="m-card"><div class="m-head"><div><b>'+esc(x.name||x.code)+'</b><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+'</div></div><div class="score">'+esc(Math.round(Number(x.score||0)))+'</div></div><div class="m-state">'+esc(x.state_ko||"차트 데이터 대기")+'</div><div class="sub">'+esc(x.minute_trend||"분봉 미확인")+' · '+esc(x.daily_context||"일봉 미확인")+'</div><div class="reason">'+reasons+'</div><div class="fb"><button onclick="sendFeedback(\'mimosa\',\''+esc(x.code)+'\',\''+esc(x.state||x.state_ko||"")+'\',\'correct\',this)">판독 맞음</button><button onclick="sendFeedback(\'mimosa\',\''+esc(x.code)+'\',\''+esc(x.state||x.state_ko||"")+'\',\'wrong\',this)">판독 아님</button></div></div>';
  }).join("")||'<div class="panel pad muted">미모사 차트 데이터 대기 중</div>';
 }
 function render(d){
