@@ -96,6 +96,19 @@ services:
       chart-feed:
         condition: service_started
 
+  index-chart-feed:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/index_chart_feed.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   telegram-collector:
     build:
       context: ../..
