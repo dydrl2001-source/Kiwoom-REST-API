@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: market_radar
+      POSTGRES_USER: market
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U market -d market_radar"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  radar-api:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/radar_api.py
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  kiwoom-feed:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/kiwoom_feed.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  market-regime:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/market_regime_engine.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  telegram-collector:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+      TELEGRAM_SESSION_PATH: /data/marketcollector
+    command: python /app/telegram_collector.py
+    volumes:
+      - ./data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  telegram-login:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    profiles: ["tools"]
+    env_file: .env
+    environment:
+      TELEGRAM_SESSION_PATH: /data/marketcollector
+    command: python /app/telegram_login.py
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./data:/data
+
+volumes:
+  postgres_data:
