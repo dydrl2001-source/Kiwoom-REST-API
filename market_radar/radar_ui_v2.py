@@ -31,13 +31,13 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .material-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.material-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}
 .material-top{display:flex;justify-content:space-between;gap:6px}.material-card h3{font-size:14px;margin:0}.material-summary{font-weight:750;margin:8px 0 5px;line-height:1.5}.material-why{font-size:11px;color:#516078;background:#f6f8fb;padding:7px;border-radius:7px}
 details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evidence{border-top:1px solid #edf1f6;margin-top:7px;padding-top:7px;font-size:11px}.evidence p{margin:4px 0}.links{display:flex;gap:7px;flex-wrap:wrap}
-.mimosa-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.m-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.m-head{display:flex;justify-content:space-between}.m-state{font-size:13px;font-weight:900;margin-top:6px}.score{font-weight:900}.reason{font-size:10px;color:var(--muted);margin-top:5px}.fb{display:flex;gap:5px;margin-top:8px}.fb button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 7px;font-size:10px;color:#5d6b7f;cursor:pointer}.fb button:hover{background:#f3f6fa}.fb .sent{background:#eaf6f1;color:#187a59}
+.mimosa-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.index-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.chart-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.chart-title{display:flex;justify-content:space-between;align-items:end;margin-bottom:6px}.chart-title b{font-size:14px}.svgchart{width:100%;height:210px;display:block}.strategy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.strategy-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.strategy-card h3{font-size:13px;margin:0}.strategy-score{font-weight:900;font-size:16px}.strategy-note{font-size:10px;color:var(--muted);margin-top:6px}.m-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.m-head{display:flex;justify-content:space-between}.m-state{font-size:13px;font-weight:900;margin-top:6px}.score{font-weight:900}.reason{font-size:10px;color:var(--muted);margin-top:5px}.fb{display:flex;gap:5px;margin-top:8px}.fb button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 7px;font-size:10px;color:#5d6b7f;cursor:pointer}.fb button:hover{background:#f3f6fa}.fb .sent{background:#eaf6f1;color:#187a59}
 .bottom{display:none}
-@media(max-width:1100px){.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
+@media(max-width:1100px){.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
 @media(max-width:700px){
  .app{padding:10px 8px 82px}.head{margin-bottom:6px}.brand{font-size:20px}.statusbar{grid-template-columns:1fr 1fr;gap:6px}.stat{min-height:61px;padding:8px}
  .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.sector-grid{grid-template-columns:1fr 1fr;gap:6px}.stock-list{grid-template-columns:1fr}.stock-mini{border-right:0}
- .material-grid,.mimosa-grid{grid-template-columns:1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
+ .material-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
  .bottom button{border:0;background:transparent;color:#78869b;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px}.bottom button.active{color:#1c2b45;font-weight:900}.bottom b{font-size:16px;line-height:1}
 }
 </style></head>
@@ -54,6 +54,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 
 <div class="tabs" id="tabs">
  <button class="tab active" data-view="home">홈</button>
+ <button class="tab" data-view="index">지수</button>
  <button class="tab" data-view="query">조회순위</button>
  <button class="tab" data-view="sector">섹터</button>
  <button class="tab" data-view="trade">거래대금</button>
@@ -71,6 +72,17 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div class="sector-grid" id="homeSectors"></div>
  <div class="section-title"><h2>급부상 종목</h2><span>조회 + 거래대금 + 재료</span></div>
  <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th>조회</th><th class="left">종목</th><th>등락</th><th>대금순위</th><th>거래대금</th><th class="left">섹터</th><th class="left">흐름</th><th class="left">재료 요약</th><th class="left">미모사</th></tr></thead><tbody id="homeStocks"></tbody></table></div></div>
+</section>
+
+<section class="view" id="view-index">
+ <div class="section-title"><h2>KOSPI · KOSDAQ 지수차트</h2><span>Kiwoom ka20005 분봉 / ka20006 일봉</span></div>
+ <div class="index-grid">
+  <div class="chart-card"><div class="chart-title"><div><b>KOSPI · 5분</b><div class="sub">장중 흐름</div></div><div id="kospiIntraLast"></div></div><div id="kospiIntra"></div></div>
+  <div class="chart-card"><div class="chart-title"><div><b>KOSDAQ · 5분</b><div class="sub">장중 흐름</div></div><div id="kosdaqIntraLast"></div></div><div id="kosdaqIntra"></div></div>
+  <div class="chart-card"><div class="chart-title"><div><b>KOSPI · 일봉</b><div class="sub">최근 120거래일</div></div><div id="kospiDailyLast"></div></div><div id="kospiDaily"></div></div>
+  <div class="chart-card"><div class="chart-title"><div><b>KOSDAQ · 일봉</b><div class="sub">최근 120거래일</div></div><div id="kosdaqDailyLast"></div></div><div id="kosdaqDaily"></div></div>
+ </div>
+ <div class="panel pad" style="margin-top:8px"><b>지수 해석</b><div class="sub" style="margin-top:5px">지수 방향과 조회집중·거래대금 집중을 함께 봅니다. 지수 상승만으로 주도주 장세로 판단하지 않고, 대형주 집중인지 수급 확산인지 분리합니다.</div></div>
 </section>
 
 <section class="view" id="view-query">
@@ -98,14 +110,27 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 </section>
 
 <section class="view" id="view-mimosa">
- <div class="section-title"><h2>미모사 차트 상태</h2><span>강의 원칙을 기반으로 한 내부 상태 분류</span></div>
- <div class="panel pad" style="margin-bottom:8px"><b>핵심 기준</b><div class="legend" style="margin-top:7px"><span class="pill">M 수렴</span><span class="pill">M 수렴 후 돌파 시도</span><span class="pill">전고점 접근</span><span class="pill">돌파 후 지지</span><span class="pill">분봉 추세 유지</span><span class="pill">분봉 추세 훼손</span></div><div class="sub" style="margin-top:7px">미모사 2강의 M 수렴·급등 초입 관점과 5강 피드백의 ‘거래대금·신고가·분봉 추세 유지’ 원칙을 상태 분류로 옮긴 것입니다.</div></div>
+ <div class="section-title"><h2>미모사 · 기본 차트 상태</h2><span>M수렴 · 전고 · 추세 · 돌파</span></div>
+ <div class="panel pad" style="margin-bottom:8px"><b>기본 기준</b><div class="legend" style="margin-top:7px"><span class="pill">M 수렴</span><span class="pill">M 수렴 후 돌파</span><span class="pill">전고점 접근</span><span class="pill">돌파 후 지지</span><span class="pill">분봉 추세 유지</span><span class="pill">추세 훼손</span></div></div>
  <div class="mimosa-grid" id="mimosaCards"></div>
+
+ <div class="section-title"><h2>종가베팅 레이더</h2><span>NXT 당일 주도주 · 거래대금+신고가 · KRX 연속상승</span></div>
+ <div class="panel pad" style="margin-bottom:8px"><div class="sub">5강 강사 피드백을 중심으로 분봉 추세 유지, 거래대금, 신고가/연속상승을 분리해 표시합니다. 시스템의 수치 임계값은 검증용 운영값입니다.</div></div>
+ <div class="strategy-grid" id="closeBetCards"></div>
+
+ <div class="section-title"><h2>과대낙폭 레이더</h2><span>최근 주도주 · 중기 고점 대비 하락 · 관심 유지</span></div>
+ <div class="panel pad" style="margin-bottom:8px"><div class="sub">최근 주도주가 고점 대비 크게 밀린 뒤에도 조회·거래대금 관심이 남아 있는지를 감시합니다. 25~45% 낙폭 등 수치는 운영 v1이며 즉시 진입 신호가 아닙니다.</div></div>
+ <div class="strategy-grid" id="oversoldCards"></div>
+
+ <div class="section-title"><h2>낙주 레이더</h2><span>당일 강세주가 장중 급락하는 구조</span></div>
+ <div class="panel pad" style="margin-bottom:8px"><div class="sub">과대낙폭과 분리합니다. 당일 거래대금·조회 관심이 유지된 강세주가 고점 대비 급락했는지, 최근 분봉에서 매도 속도가 둔화되는지를 감시합니다.</div></div>
+ <div class="strategy-grid" id="fallingCards"></div>
+</section>
 </section>
 </div>
 
 <div class="bottom" id="bottom">
- <button class="active" data-view="home"><b>⌂</b>홈</button><button data-view="query"><b>⌕</b>조회</button><button data-view="sector"><b>▦</b>섹터</button><button data-view="trade"><b>₩</b>대금</button><button data-view="material"><b>◆</b>재료</button><button data-view="mimosa"><b>M</b>미모사</button>
+ <button class="active" data-view="home"><b>⌂</b>홈</button><button data-view="index"><b>⌁</b>지수</button><button data-view="query"><b>⌕</b>조회</button><button data-view="sector"><b>▦</b>섹터</button><button data-view="trade"><b>₩</b>대금</button><button data-view="material"><b>◆</b>재료</button><button data-view="mimosa"><b>M</b>미모사</button>
 </div>
 
 <script>
@@ -188,6 +213,43 @@ function renderEtfRows(rows){
  ).join("")||'<tr><td colspan="5" class="muted">ETF/ETN 데이터 없음</td></tr>';
 }
 
+
+function sparkChart(rows,key,labelMode){
+ const pts=(rows||[]).filter(x=>x[key]!=null);
+ if(pts.length<2)return '<div class="muted" style="padding:70px 10px;text-align:center">차트 데이터 대기</div>';
+ const vals=pts.map(x=>Number(x[key])); const min=Math.min(...vals),max=Math.max(...vals),span=(max-min)||1;
+ const W=600,H=210,P=18;
+ const xy=vals.map((v,i)=>[(P+(W-2*P)*i/(vals.length-1)),(P+(H-2*P)*(1-(v-min)/span))]);
+ const path=xy.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+ const first=vals[0],last=vals[vals.length-1],chg=first?((last/first-1)*100):0;
+ return '<svg class="svgchart" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">'+
+   '<line x1="'+P+'" y1="'+P+'" x2="'+P+'" y2="'+(H-P)+'" stroke="#dce3ee"/>'+
+   '<line x1="'+P+'" y1="'+(H-P)+'" x2="'+(W-P)+'" y2="'+(H-P)+'" stroke="#dce3ee"/>'+
+   '<path d="'+path+'" fill="none" stroke="#345c9c" stroke-width="2.2" vector-effect="non-scaling-stroke"/>'+
+   '<text x="'+(P+3)+'" y="'+(P+11)+'" font-size="10" fill="#6f7c90">'+max.toFixed(2)+'</text>'+
+   '<text x="'+(P+3)+'" y="'+(H-P-5)+'" font-size="10" fill="#6f7c90">'+min.toFixed(2)+'</text>'+
+   '<text x="'+(W-P-90)+'" y="'+(P+11)+'" font-size="11" fill="'+(chg>=0?'#e25555':'#4577d4')+'">'+(chg>=0?'+':'')+chg.toFixed(2)+'%</text>'+
+   '</svg>';
+}
+function lastValue(rows,key){
+ const p=(rows||[]).filter(x=>x[key]!=null); if(!p.length)return "-";
+ const v=Number(p[p.length-1][key]); const first=Number(p[0][key]); const chg=first?((v/first-1)*100):0;
+ return '<b>'+fmt(v,2)+'</b> <span class="'+klass(chg)+'">'+(chg>=0?'+':'')+chg.toFixed(2)+'%</span>';
+}
+function strategyCards(list,kind){
+ const rows=(list||[]).filter(x=>!(x.state||"").endsWith("_NO")).slice(0,18);
+ if(!rows.length)return '<div class="panel pad muted">현재 조건에 가까운 종목이 없습니다.</div>';
+ return rows.map(x=>{
+   const rs=(x.reasons||[]).map(r=>'<span class="pill">'+esc(r)+'</span>').join("");
+   const m=x.metrics||{};
+   let metric="";
+   if(kind==="close")metric='대금 #'+esc(m.trade_rank??"-")+' · '+esc(m.nxt_enabled?"NXT 가능":"KRX형")+(m.close_location!=null?' · 종가위치 '+(Number(m.close_location)*100).toFixed(0)+'%':'');
+   if(kind==="oversold")metric='고점대비 '+esc(m.drawdown_pct==null?"-":Number(m.drawdown_pct).toFixed(1)+"%")+' · 조회 #'+esc(m.query_rank??"-")+' · 대금 #'+esc(m.trade_rank??"-");
+   if(kind==="falling")metric='당일고점대비 '+esc(m.day_drawdown_pct==null?"-":Number(m.day_drawdown_pct).toFixed(1)+"%")+' · 선행상승 '+esc(m.prior_run_pct==null?"-":Number(m.prior_run_pct).toFixed(1)+"%");
+   return '<article class="strategy-card"><div class="material-top"><h3>'+esc(x.name||x.code)+'</h3><span class="strategy-score">'+Math.round(Number(x.score||0))+'</span></div><div class="sub">조회 #'+esc(x.query_rank??"-")+' · 대금 #'+esc(x.trade_rank??"-")+' · '+esc(x.sector||"미분류")+'</div><div class="m-state">'+esc(x.state_ko||x.state)+'</div><div class="sub" style="margin-top:3px">'+metric+'</div><div class="reason">'+rs+'</div><div class="strategy-note">'+esc(x.source_note||"")+'</div><div class="fb"><button onclick="sendFeedback(\\'mimosa\\',\\''+esc(x.code)+'\\',\\''+esc(x.state||"")+'\\',\\'correct\\',this)">판독 맞음</button><button onclick="sendFeedback(\\'mimosa\\',\\''+esc(x.code)+'\\',\\''+esc(x.state||"")+'\\',\\'wrong\\',this)">판독 아님</button></div></article>';
+ }).join("");
+}
+
 function render(d){
  DATA=d;
  document.getElementById("stamp").textContent=new Date(d.generated_at).toLocaleString("ko-KR");
@@ -222,6 +284,20 @@ function render(d){
  document.getElementById("officialSectors").innerHTML=(d.sectors||[]).map(x=>'<tr><td class="left"><b>'+esc(x.name)+'</b></td><td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td><td>'+esc(money(x.trade_value_krw))+'</td><td>'+esc(x.rising??"-")+'</td><td>'+esc(x.falling??"-")+'</td></tr>').join("");
  document.getElementById("materials").innerHTML=materialCards(d.materials);
  document.getElementById("mimosaCards").innerHTML=mimosaCards(d.mimosa_rows);
+ const ix=d.index_charts||{};
+ const kp=ix.KOSPI||{}, kq=ix.KOSDAQ||{};
+ document.getElementById("kospiIntra").innerHTML=sparkChart(kp.intraday,"close","time");
+ document.getElementById("kosdaqIntra").innerHTML=sparkChart(kq.intraday,"close","time");
+ document.getElementById("kospiDaily").innerHTML=sparkChart(kp.daily,"close","date");
+ document.getElementById("kosdaqDaily").innerHTML=sparkChart(kq.daily,"close","date");
+ document.getElementById("kospiIntraLast").innerHTML=lastValue(kp.intraday,"close");
+ document.getElementById("kosdaqIntraLast").innerHTML=lastValue(kq.intraday,"close");
+ document.getElementById("kospiDailyLast").innerHTML=lastValue(kp.daily,"close");
+ document.getElementById("kosdaqDailyLast").innerHTML=lastValue(kq.daily,"close");
+ const msig=d.mimosa_strategies||{};
+ document.getElementById("closeBetCards").innerHTML=strategyCards(msig.CLOSE_BET,"close");
+ document.getElementById("oversoldCards").innerHTML=strategyCards(msig.OVERSOLD,"oversold");
+ document.getElementById("fallingCards").innerHTML=strategyCards(msig.FALLING_STOCK,"falling");
 }
 async function load(){
  if(!token){document.getElementById("regime").textContent="접속키 필요";return;}
