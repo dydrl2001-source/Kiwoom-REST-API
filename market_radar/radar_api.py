@@ -4,10 +4,14 @@ from typing import Optional
 import psycopg
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+try:
+    from radar_ui_v2 import DASHBOARD_HTML_V2
+except Exception:
+    DASHBOARD_HTML_V2 = None
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.3.1")
+app = FastAPI(title="Market Radar", version="0.4.0")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "하이닉스", "삼성전자", "패키징", "테스트", "퀄"],
@@ -219,6 +223,59 @@ def build_global_analysis(regime, metrics, rows, sector_groups):
     lines.append("이 패널은 현재 규칙 기반 Radar 해석입니다. ChatGPT 모델의 별도 LLM 분석은 아직 대시보드에 직접 연결하지 않았습니다.")
     return lines
 
+def clean_material_text(text):
+    t=re.sub(r"https?://\S+"," ",text or "")
+    t=re.sub(r"\[[^\]]{0,40}\]"," ",t)
+    t=re.sub(r"\s+"," ",t).strip(" -|·")
+    return t
+
+def material_digest(cat, flow_state, stock_name=None):
+    news=cat.get("external_news") or []
+    items=cat.get("items") or []
+    summary=None
+    source_kind="미확인"
+    if news:
+        summary=clean_material_text(news[0].get("title"))
+        source_kind="뉴스"
+    if not summary and items:
+        summary=clean_material_text(items[0].get("text"))
+        source_kind="Telegram"
+    if summary:
+        parts=re.split(r"(?<=[.!?。])\s+| - ",summary)
+        summary=(parts[0] if parts else summary)[:220]
+    status=cat.get("status") or "NO_MATCH"
+    if status=="SPREADING":
+        assessment="복수 채널 확산"
+    elif status=="MULTI_CHANNEL":
+        assessment="복수 채널 확인"
+    elif status=="NEW_MENTION":
+        assessment="신규 언급"
+    elif status=="NEWS_ONLY":
+        assessment="외부 뉴스 확인"
+    elif status=="SINGLE_OR_REPEAT":
+        assessment="단일·반복 가능성"
+    else:
+        assessment="직접 재료 미확인"
+    if flow_state=="돈 선행 / 재료 미확인":
+        interpretation="거래대금은 강하지만 직접 연결되는 재료는 아직 확인되지 않음"
+    elif flow_state=="재료↔돈 동행":
+        interpretation="재료와 거래대금이 함께 확인되는 상태"
+    elif flow_state=="재료 확인 / 돈 미약":
+        interpretation="재료는 확인되지만 거래대금 상위권 동행은 약함"
+    else:
+        interpretation=flow_state or "관찰"
+    return {
+        "summary": summary or f"{stock_name or '종목'} 관련 직접 재료 미확인",
+        "assessment": assessment,
+        "interpretation": interpretation,
+        "source_kind": source_kind,
+        "channels": cat.get("channels") or 0,
+        "first_seen": cat.get("first_seen"),
+        "last_seen": cat.get("last_seen"),
+        "news_count": len(news),
+        "telegram_count": len(items),
+    }
+
 @app.get("/health")
 def health():
     try:
@@ -255,6 +312,18 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 r = cur.fetchone()
                 if r:
                     newsfeed = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
+
+            chartfeed = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
+            if table_exists(cur, "chart_feed_status"):
+                cur.execute("SELECT status,last_success_at,note FROM chart_feed_status WHERE id=1")
+                r=cur.fetchone()
+                if r: chartfeed={"status":r[0],"last_success":iso(r[1]),"note":r[2]}
+
+            mimosa = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
+            if table_exists(cur, "mimosa_status"):
+                cur.execute("SELECT status,last_success_at,note FROM mimosa_status WHERE id=1")
+                r=cur.fetchone()
+                if r: mimosa={"status":r[0],"last_success":iso(r[1]),"note":r[2]}
 
             regime = {"status": "WAITING_FOR_MARKET_DATA", "stable_label": None, "candidate_label": None, "confidence": None}
             if table_exists(cur, "market_regime_status"):
@@ -308,20 +377,26 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 cur.execute("SELECT MAX(snapshot_time) FROM market_trade_value_snapshots")
                 trade_time = cur.fetchone()[0]
                 if trade_time:
-                    cur.execute("""SELECT stock_code,rank_no,trade_value_krw,change_rate,market_cap_krw,official_sector,market_theme
+                    cur.execute("""SELECT stock_code,stock_name,rank_no,trade_value_krw,change_rate,market_cap_krw,official_sector,market_theme,current_price_krw
                                    FROM market_trade_value_snapshots WHERE snapshot_time=%s ORDER BY rank_no NULLS LAST LIMIT 100""",(trade_time,))
                     for x in cur.fetchall():
                         trade_map[x[0]] = {
-                            "rank": x[1], "trade_value": x[2], "change_rate": x[3],
-                            "market_cap": x[4], "sector": x[5], "theme": x[6]
+                            "name": x[1], "rank": x[2], "trade_value": x[3], "change_rate": x[4],
+                            "market_cap": x[5], "sector": x[6], "theme": x[7], "current_price": x[8]
                         }
 
             chart_map = {}
             if table_exists(cur, "chart_states"):
                 try:
-                    cur.execute("""SELECT DISTINCT ON (stock_code) stock_code,state
+                    cur.execute("""SELECT DISTINCT ON (stock_code) stock_code,state,state_ko,score,current_price,prior_high,
+                                          minute_trend,daily_context,m_contraction,breakout,reasons,snapshot_time
                                    FROM chart_states ORDER BY stock_code,snapshot_time DESC""")
-                    chart_map = {x[0]:x[1] for x in cur.fetchall()}
+                    for x in cur.fetchall():
+                        chart_map[x[0]]={
+                            "state":x[1],"state_ko":x[2],"score":x[3],"current_price":x[4],"prior_high":x[5],
+                            "minute_trend":x[6],"daily_context":x[7],"m_contraction":x[8],"breakout":x[9],
+                            "reasons":x[10] or [],"snapshot_time":iso(x[11])
+                        }
                 except Exception:
                     chart_map = {}
 
@@ -367,13 +442,68 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "market_cap_krw": cap2, "trade_to_cap_pct": ratio,
                     "official_sector": sector2, "market_theme": theme2,
                     "catalyst": cat, "flow_state": flow,
-                    "chart_state": chart_map.get(code, "대기")
+                    "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
+                    "mimosa": chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0}
                 }
                 row["analysis"] = stock_analysis(row)
+                row["material_digest"] = material_digest(cat,flow,name)
                 rows.append(row)
 
             sector_groups = build_sector_groups(rows)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
+
+            query_by_code={x["code"]:x for x in rows}
+            trade_rows=[]
+            for code,tv in sorted(trade_map.items(),key=lambda kv:(kv[1].get("rank") is None,kv[1].get("rank") or 999))[:30]:
+                if code in query_by_code:
+                    x=dict(query_by_code[code])
+                    x["trade_rank"]=tv.get("rank")
+                    trade_rows.append(x)
+                    continue
+                name=tv.get("name") or code
+                cat=catalyst_for_stock(messages,code,name)
+                cat["external_news"]=news_map.get(code,[])
+                if cat["status"]=="NO_MATCH" and cat["external_news"]:
+                    cat["status"]="NEWS_ONLY";cat["note"]="Telegram 직접매칭 없음 · 외부 뉴스 fallback"
+                cap=tv.get("market_cap"); value=tv.get("trade_value")
+                ratio=(float(value)/float(cap)*100) if value is not None and cap and float(cap)>0 else None
+                theme=tv.get("theme") or cat.get("theme")
+                flow=stock_flow_state(None,None,tv.get("rank"),cat)
+                x={"rank":None,"rank_change":None,"code":code,"name":name,"change_rate":tv.get("change_rate"),
+                   "trade_rank":tv.get("rank"),"trade_value_krw":value,"market_cap_krw":cap,"trade_to_cap_pct":ratio,
+                   "official_sector":tv.get("sector"),"market_theme":theme,"catalyst":cat,"flow_state":flow,
+                   "chart_state":(chart_map.get(code) or {}).get("state_ko","대기"),
+                   "mimosa":chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0}}
+                x["analysis"]=stock_analysis(x)
+                x["material_digest"]=material_digest(cat,flow,name)
+                trade_rows.append(x)
+
+            material_seen=set(); material_rows=[]
+            for x in rows+trade_rows:
+                if x["code"] in material_seen: continue
+                material_seen.add(x["code"])
+                material_rows.append({
+                    "code":x["code"],"name":x["name"],"change_rate":x.get("change_rate"),
+                    "query_rank":x.get("rank"),"trade_rank":x.get("trade_rank"),
+                    "sector":x.get("official_sector") or x.get("market_theme") or "미분류",
+                    "flow_state":x.get("flow_state"),"digest":x.get("material_digest"),
+                    "catalyst":x.get("catalyst")
+                })
+            material_rows.sort(key=lambda x:(
+                x["digest"]["assessment"]=="직접 재료 미확인",
+                x["trade_rank"] is None,x["trade_rank"] or 999,x["query_rank"] is None,x["query_rank"] or 999
+            ))
+
+            mimosa_rows=[]
+            for x in rows:
+                m=x.get("mimosa") or {}
+                mimosa_rows.append({
+                    "code":x["code"],"name":x["name"],"change_rate":x.get("change_rate"),
+                    "query_rank":x.get("rank"),"trade_rank":x.get("trade_rank"),
+                    "sector":x.get("official_sector") or x.get("market_theme") or "미분류",
+                    **m
+                })
+            mimosa_rows.sort(key=lambda x:(-(float(x.get("score") or 0)),x.get("query_rank") or 999))
 
             sectors = []
             if table_exists(cur, "market_sector_snapshots"):
@@ -399,13 +529,17 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed},
+        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "chartfeed": chartfeed, "mimosa": mimosa},
         "regime": regime,
         "regime_metrics": regime_metrics,
         "rank_time": iso(rank_time),
         "trade_time": iso(trade_time),
         "rows": rows,
+        "query_ranking": rows,
+        "trade_ranking": trade_rows,
         "sector_rankings": sector_groups,
+        "materials": material_rows,
+        "mimosa_rows": mimosa_rows,
         "analysis": {
             "mode": "RULE_BASED",
             "lines": global_analysis,
@@ -542,7 +676,7 @@ load();setInterval(load,10000);
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    return HTMLResponse(DASHBOARD_HTML)
+    return HTMLResponse(DASHBOARD_HTML_V2 or DASHBOARD_HTML)
 
 if __name__ == "__main__":
     import uvicorn
