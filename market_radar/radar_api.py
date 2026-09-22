@@ -15,6 +15,7 @@ app = FastAPI(title="Market Radar", version="0.4.0")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "하이닉스", "삼성전자", "패키징", "테스트", "퀄"],
+    "PCB/반도체기판": ["PCB", "기판", "FC-BGA", "CCL", "회로", "패키지기판"],
     "2차전지/배터리": ["2차전지", "배터리", "양극재", "음극재", "전고체"],
     "전력/변압기/케이블": ["전력", "변압기", "케이블", "데이터센터 전력"],
     "원전/SMR": ["원전", "SMR", "핵발전", "원자력"],
@@ -23,6 +24,8 @@ THEME_KEYWORDS = {
     "바이오/제약": ["바이오", "제약", "임상", "FDA"],
     "로봇": ["로봇", "휴머노이드", "자동화"],
     "자동차/EV": ["자동차", "전기차", "EV", "자율주행"],
+    "AI/데이터센터": ["AI 데이터센터", "데이터센터", "AI 팩토리", "NPU", "GPU", "AI 서버"],
+    "항공/여행": ["항공", "대한항공", "여객", "여행", "공항"],
     "정유/유가": ["정유", "유가", "WTI", "브렌트", "석유"],
     "화장품": ["화장품", "뷰티"],
     "금융": ["은행", "금융", "증권", "보험"],
@@ -139,7 +142,7 @@ def catalyst_for_stock(messages, code, name):
 def build_sector_groups(rows):
     groups = {}
     for x in rows:
-        sector = x.get("official_sector") or x.get("market_theme") or "미분류"
+        sector = x.get("market_theme") or x.get("official_sector") or "미분류"
         g = groups.setdefault(sector, {
             "name": sector, "count": 0, "query_score": 0.0, "rank_sum": 0.0,
             "change_sum": 0.0, "change_n": 0, "positive": 0,
@@ -176,7 +179,7 @@ def build_sector_groups(rows):
     return out
 
 def stock_flow_state(rank_no, rank_change, trade_rank, catalyst):
-    material = catalyst.get("status") not in (None, "NO_MATCH")
+    material = int(catalyst.get("material_strength") or 0) >= 2
     money = trade_rank is not None and int(trade_rank) <= 20
     interest = (rank_no is not None and int(rank_no) <= 10) or (rank_change is not None and int(rank_change) >= 5)
     if material and money:
@@ -197,10 +200,15 @@ def stock_analysis(row):
         bits.append("조회순위 급상승")
     if row.get("trade_rank") is not None and row["trade_rank"] <= 20:
         bits.append("거래대금 상위권")
-    if row.get("catalyst", {}).get("status") == "SPREADING":
-        bits.append("여러 채널 확산")
-    elif row.get("catalyst", {}).get("status") == "NO_MATCH":
-        bits.append("재료 직접 매칭 없음")
+    strength=int(row.get("catalyst", {}).get("material_strength") or 0)
+    if strength >= 3:
+        bits.append("직접 재료 후보")
+    elif strength == 2:
+        bits.append("테마형 재료")
+    elif strength == 1:
+        bits.append("언급은 있으나 인과 약함")
+    else:
+        bits.append("직접 재료 미확인")
     return " · ".join(bits) if bits else "추가 확인 필요"
 
 def build_global_analysis(regime, metrics, rows, sector_groups):
@@ -215,9 +223,9 @@ def build_global_analysis(regime, metrics, rows, sector_groups):
         g = sector_groups[0]
         names = ", ".join([x.get("name") or x.get("code") or "" for x in g["stocks"][:4]])
         lines.append(f"조회상위 집중 섹터: {g['name']} · {g['count']}종목 · 대표 {names}")
-    material_n = sum(1 for x in rows if x.get("catalyst", {}).get("status") != "NO_MATCH")
+    material_n = sum(1 for x in rows if int(x.get("catalyst", {}).get("material_strength") or 0) >= 2)
     money_no_material = sum(1 for x in rows if x.get("flow_state") == "돈 선행 / 재료 미확인")
-    lines.append(f"재료 직접 매칭: {material_n}/{len(rows)}종목. 거래대금이 먼저 잡혔지만 재료를 못 찾은 종목은 {money_no_material}개입니다.")
+    lines.append(f"가격 설명력이 있는 재료 후보: {material_n}/{len(rows)}종목. 거래대금이 먼저 잡혔지만 직접 재료를 못 찾은 종목은 {money_no_material}개입니다.")
     if metrics and metrics.get("rank_turnover_5m") is not None:
         lines.append(f"조회 Top20 5분 교체율: {float(metrics['rank_turnover_5m'])*100:.1f}%. 높을수록 관심이 빠르게 순환하는 장으로 해석합니다.")
     lines.append("이 패널은 현재 규칙 기반 Radar 해석입니다. ChatGPT 모델의 별도 LLM 분석은 아직 대시보드에 직접 연결하지 않았습니다.")
@@ -229,12 +237,71 @@ def clean_material_text(text):
     t=re.sub(r"\s+"," ",t).strip(" -|·")
     return t
 
+NOISE_PATTERNS = [
+    "상한가 및 상승종목","상승종목","급등주","오늘의 종목","관심종목","공략법","매매전략",
+    "장마감","마감시황","종목추천","추천주","vs ","수익률","급등일보","유튜브","youtube"
+]
+DIRECT_PATTERNS = [
+    "공시","공급계약","수주","계약 체결","mou","승인","허가","fda","임상","특허","양산",
+    "기술 확보","개발 완료","납품","공급","실적","영업이익","매출","증설","투자 결정",
+    "선정","인수","합병","지분","자사주","배당","신제품","출시","인증","독점"
+]
+SECTOR_PATTERNS = [
+    "업황","훈풍","수혜","정책","법안","관세","반도체","hbm","원전","smr","로봇",
+    "전력","변압기","케이블","방산","조선","lng","2차전지","배터리","데이터센터","ai"
+]
+
+def evidence_strength(text):
+    t=(text or "").lower()
+    if not t:
+        return 0,"NONE"
+    if any(p.lower() in t for p in NOISE_PATTERNS):
+        return 0,"NOISE"
+    if any(p.lower() in t for p in DIRECT_PATTERNS):
+        return 3,"DIRECT"
+    if any(p.lower() in t for p in SECTOR_PATTERNS):
+        return 2,"SECTOR"
+    return 1,"MENTION"
+
+def enrich_catalyst(cat, stock_name=None):
+    candidates=[]
+    for n in cat.get("external_news") or []:
+        txt=n.get("title") or ""
+        score,kind=evidence_strength(txt)
+        candidates.append((score,kind,"뉴스",txt,n))
+    for it in cat.get("items") or []:
+        txt=it.get("text") or ""
+        score,kind=evidence_strength(txt)
+        candidates.append((score,kind,"Telegram",txt,it))
+    candidates.sort(key=lambda x:x[0],reverse=True)
+    best=candidates[0] if candidates else (0,"NONE","미확인","",None)
+    combined=" ".join(x[3] for x in candidates[:8])
+    inferred=infer_theme(combined)
+    if inferred:
+        cat["theme"]=inferred
+    cat["material_strength"]=best[0]
+    cat["material_class"]=best[1]
+    cat["best_source"]=best[2]
+    cat["best_text"]=best[3]
+    cat["best_evidence"]=best[4]
+    if best[0] == 0 and candidates:
+        cat["quality_note"]="가격 설명력이 낮은 시황·리스트·매매콘텐츠 가능성"
+    elif best[0] == 1:
+        cat["quality_note"]="종목 언급은 있으나 직접 촉발 재료로 보기엔 약함"
+    elif best[0] == 2:
+        cat["quality_note"]="업종·테마형 재료"
+    elif best[0] >= 3:
+        cat["quality_note"]="개별 종목 직접 재료 후보"
+    else:
+        cat["quality_note"]="직접 재료 미확인"
+    return cat
+
 def material_digest(cat, flow_state, stock_name=None):
     news=cat.get("external_news") or []
     items=cat.get("items") or []
-    summary=None
-    source_kind="미확인"
-    if news:
+    summary=clean_material_text(cat.get("best_text"))
+    source_kind=cat.get("best_source") or "미확인"
+    if not summary and news:
         summary=clean_material_text(news[0].get("title"))
         source_kind="뉴스"
     if not summary and items:
@@ -244,7 +311,17 @@ def material_digest(cat, flow_state, stock_name=None):
         parts=re.split(r"(?<=[.!?。])\s+| - ",summary)
         summary=(parts[0] if parts else summary)[:220]
     status=cat.get("status") or "NO_MATCH"
-    if status=="SPREADING":
+    strength=int(cat.get("material_strength") or 0)
+    mclass=cat.get("material_class") or "NONE"
+    if strength==0 and mclass=="NOISE":
+        assessment="시황·리스트성 / 직접재료 아님"
+    elif strength==1:
+        assessment="종목 언급 / 인과 약함"
+    elif strength==2:
+        assessment="테마·업종 재료"
+    elif strength>=3:
+        assessment="직접 재료 후보"
+    elif status=="SPREADING":
         assessment="복수 채널 확산"
     elif status=="MULTI_CHANNEL":
         assessment="복수 채널 확인"
@@ -274,6 +351,9 @@ def material_digest(cat, flow_state, stock_name=None):
         "last_seen": cat.get("last_seen"),
         "news_count": len(news),
         "telegram_count": len(items),
+        "material_strength": strength,
+        "material_class": mclass,
+        "quality_note": cat.get("quality_note"),
     }
 
 @app.get("/health")
@@ -433,6 +513,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 if cat["status"] == "NO_MATCH" and cat["external_news"]:
                     cat["status"] = "NEWS_ONLY"
                     cat["note"] = "Telegram 직접매칭 없음 · 외부 뉴스 fallback"
+                cat=enrich_catalyst(cat,name)
                 if not theme2:
                     theme2 = cat["theme"]
                 flow = stock_flow_state(rank_no, rank_change, tv.get("rank"), cat)
@@ -465,6 +546,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 cat["external_news"]=news_map.get(code,[])
                 if cat["status"]=="NO_MATCH" and cat["external_news"]:
                     cat["status"]="NEWS_ONLY";cat["note"]="Telegram 직접매칭 없음 · 외부 뉴스 fallback"
+                cat=enrich_catalyst(cat,name)
                 cap=tv.get("market_cap"); value=tv.get("trade_value")
                 ratio=(float(value)/float(cap)*100) if value is not None and cap and float(cap)>0 else None
                 theme=tv.get("theme") or cat.get("theme")
@@ -505,6 +587,16 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 })
             mimosa_rows.sort(key=lambda x:(-(float(x.get("score") or 0)),x.get("query_rank") or 999))
 
+            material_stats={
+                "direct":sum(1 for x in material_rows if int((x.get("digest") or {}).get("material_strength") or 0)>=3),
+                "sector":sum(1 for x in material_rows if int((x.get("digest") or {}).get("material_strength") or 0)==2),
+                "weak":sum(1 for x in material_rows if int((x.get("digest") or {}).get("material_strength") or 0)<=1),
+                "spreading":sum(1 for x in material_rows if (x.get("catalyst") or {}).get("channels",0)>=3),
+            }
+            latest_market=max([x for x in (rank_time,trade_time) if x],default=None)
+            market_age_sec=int((datetime.now(timezone.utc)-latest_market).total_seconds()) if latest_market else None
+            market_snapshot={"time":iso(latest_market),"age_sec":market_age_sec,"stale":bool(market_age_sec is None or market_age_sec>180)}
+
             sectors = []
             if table_exists(cur, "market_sector_snapshots"):
                 cur.execute("SELECT MAX(snapshot_time) FROM market_sector_snapshots")
@@ -539,6 +631,8 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "trade_ranking": trade_rows,
         "sector_rankings": sector_groups,
         "materials": material_rows,
+        "material_stats": material_stats,
+        "market_snapshot": market_snapshot,
         "mimosa_rows": mimosa_rows,
         "analysis": {
             "mode": "RULE_BASED",
