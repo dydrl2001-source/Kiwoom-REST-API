@@ -12,7 +12,7 @@ except Exception:
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.5.0")
+app = FastAPI(title="Market Radar", version="0.5.1")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "패키징", "테스트", "파운드리", "D램", "DRAM", "낸드"],
@@ -540,6 +540,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 if r:
                     newsfeed = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
 
+            research = {"status":"NOT_CONFIGURED","last_success":None,"note":None}
+            if table_exists(cur, "research_engine_status"):
+                cur.execute("SELECT status,last_success_at,note FROM research_engine_status WHERE id=1")
+                r=cur.fetchone()
+                if r:
+                    research={"status":r[0],"last_success":iso(r[1]),"note":r[2]}
+
             chartfeed = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
             if table_exists(cur, "chart_feed_status"):
                 cur.execute("SELECT status,last_success_at,note FROM chart_feed_status WHERE id=1")
@@ -838,6 +845,21 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         daily=[{"date":x[0].isoformat(),"open":x[1],"high":x[2],"low":x[3],"close":x[4],"volume":x[5],"trade_value":x[6]} for x in rr]
                     index_charts[idx_name]={"code":idx_code,"intraday":intraday,"daily":daily}
 
+            research_rows=[]
+            if table_exists(cur,"research_jobs") and table_exists(cur,"research_results"):
+                cur.execute("""SELECT j.id,j.created_at,j.stock_code,j.stock_name,j.priority,j.trigger_types,
+                                      j.status,r.mode,r.headline,r.summary,r.evidence,r.deep_research_needed
+                               FROM research_jobs j
+                               JOIN research_results r ON r.job_id=j.id
+                               WHERE j.created_at>now()-interval '24 hours'
+                               ORDER BY j.priority DESC,j.created_at DESC
+                               LIMIT 40""")
+                research_rows=[{
+                    "id":x[0],"created_at":iso(x[1]),"code":x[2],"name":x[3],"priority":x[4],
+                    "triggers":x[5] or [],"status":x[6],"mode":x[7],"headline":x[8],"summary":x[9],
+                    "evidence":x[10] or [],"deep_research_needed":bool(x[11])
+                } for x in cur.fetchall()]
+
             # recent telegram: full text is preserved in the API/UI
             recent_telegram=[]
             for m in messages[:40]:
@@ -852,7 +874,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "chartfeed": chartfeed, "mimosa": mimosa},
+        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research},
         "regime": regime,
         "regime_metrics": regime_metrics,
         "rank_time": iso(rank_time),
@@ -868,6 +890,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "mimosa_rows": mimosa_rows,
         "mimosa_strategies": strategy_lists,
         "index_charts": index_charts,
+        "research_rows": research_rows,
         "analysis": {
             "mode": "RULE_BASED",
             "lines": global_analysis,
