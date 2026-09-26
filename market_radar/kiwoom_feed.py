@@ -239,7 +239,7 @@ def one_cycle():
                            change_rate,market_cap_krw,official_sector,market_theme,current_price_krw)
                            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s) ON CONFLICT DO NOTHING""",
                         (snap,code,r.get("stk_nm") or d.get("name") or m.get("name"),int(n(r.get("now_rank")) or 0) or None,
-                         norm_tv(r.get("trde_prica")) or d.get("trade_value"),n(r.get("flu_rt")) or d.get("change"),
+                         d.get("trade_value") if d.get("trade_value") is not None else norm_tv(r.get("trde_prica")),n(r.get("flu_rt")) or d.get("change"),
                          d.get("market_cap"),m.get("sector"),n(r.get("cur_prc")) or d.get("price")))
 
         # sectors + main indices
