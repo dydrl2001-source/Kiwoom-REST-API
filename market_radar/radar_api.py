@@ -12,7 +12,7 @@ except Exception:
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.5.1")
+app = FastAPI(title="Market Radar", version="0.6.0")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "패키징", "테스트", "파운드리", "D램", "DRAM", "낸드"],
@@ -316,6 +316,9 @@ def evidence_strength(text):
 
 def enrich_catalyst(cat, stock_name=None):
     candidates=[]
+    for d in cat.get("dart") or []:
+        txt=d.get("report_nm") or ""
+        candidates.append((4,"DART","DART",txt,d))
     for n in cat.get("external_news") or []:
         txt=n.get("title") or ""
         score,kind=evidence_strength(txt)
@@ -334,7 +337,9 @@ def enrich_catalyst(cat, stock_name=None):
     cat["best_source"]=best[2]
     cat["best_text"]=best[3]
     cat["best_evidence"]=best[4]
-    if best[0] == 0 and candidates:
+    if best[1] == "DART":
+        cat["quality_note"]="DART 공식 공시"
+    elif best[0] == 0 and candidates:
         cat["quality_note"]="가격 설명력이 낮은 시황·리스트·매매콘텐츠 가능성"
     elif best[0] == 1:
         cat["quality_note"]="종목 언급은 있으나 직접 촉발 재료로 보기엔 약함"
@@ -349,6 +354,7 @@ def enrich_catalyst(cat, stock_name=None):
 def material_digest(cat, flow_state, stock_name=None):
     news=cat.get("external_news") or []
     items=cat.get("items") or []
+    dart=cat.get("dart") or []
     summary=clean_material_text(cat.get("best_text"))
     source_kind=cat.get("best_source") or "미확인"
     if not summary and news:
@@ -401,6 +407,7 @@ def material_digest(cat, flow_state, stock_name=None):
         "last_seen": cat.get("last_seen"),
         "news_count": len(news),
         "telegram_count": len(items),
+        "dart_count": len(dart),
         "material_strength": strength,
         "material_class": mclass,
         "quality_note": cat.get("quality_note"),
@@ -540,6 +547,12 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 if r:
                     newsfeed = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
 
+            dartfeed = {"status":"NOT_CONFIGURED","last_success":None,"note":None}
+            if table_exists(cur,"dart_feed_status"):
+                cur.execute("SELECT status,last_success_at,note FROM dart_feed_status WHERE id=1")
+                r=cur.fetchone()
+                if r: dartfeed={"status":r[0],"last_success":iso(r[1]),"note":r[2]}
+
             research = {"status":"NOT_CONFIGURED","last_success":None,"note":None}
             if table_exists(cur, "research_engine_status"):
                 cur.execute("SELECT status,last_success_at,note FROM research_engine_status WHERE id=1")
@@ -664,6 +677,19 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                             "published_at": iso(x[4]), "link": x[5]
                         })
 
+            dart_map={}
+            if table_exists(cur,"dart_disclosures"):
+                cur.execute("""SELECT stock_code,rcept_no,report_nm,category,rcept_dt,disclosure_url,flr_nm
+                               FROM dart_disclosures
+                               WHERE stock_code IS NOT NULL AND stock_code<>'' AND rcept_dt>=current_date-interval '3 days'
+                               ORDER BY stock_code,rcept_dt DESC,rcept_no DESC""")
+                for x in cur.fetchall():
+                    arr=dart_map.setdefault(x[0],[])
+                    if len(arr)<8:
+                        arr.append({"rcept_no":x[1],"report_nm":x[2],"category":x[3],
+                                    "rcept_dt":x[4].isoformat() if x[4] else None,
+                                    "link":x[5],"filer":x[6]})
+
             rows = []
             for r in ranks:
                 code,name,rank_no,rank_change,chg,cap,sector,theme = r
@@ -680,9 +706,10 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     ratio = None
                 cat = catalyst_for_stock(messages, code, name)
                 cat["external_news"] = news_map.get(code, [])
-                if cat["status"] == "NO_MATCH" and cat["external_news"]:
+                cat["dart"] = dart_map.get(code, [])
+                if cat["status"] == "NO_MATCH" and (cat["external_news"] or cat["dart"]):
                     cat["status"] = "NEWS_ONLY"
-                    cat["note"] = "Telegram 직접매칭 없음 · 외부 뉴스 fallback"
+                    cat["note"] = "Telegram 직접매칭 없음 · 외부뉴스/공시 fallback"
                 cat=enrich_catalyst(cat,name)
                 theme2 = choose_market_theme(name, sector2, cat)
                 flow = stock_flow_state(rank_no, rank_change, tv.get("rank"), cat)
@@ -721,8 +748,9 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 name=tv.get("name") or code
                 cat=catalyst_for_stock(messages,code,name)
                 cat["external_news"]=news_map.get(code,[])
-                if cat["status"]=="NO_MATCH" and cat["external_news"]:
-                    cat["status"]="NEWS_ONLY";cat["note"]="Telegram 직접매칭 없음 · 외부 뉴스 fallback"
+                cat["dart"]=dart_map.get(code,[])
+                if cat["status"]=="NO_MATCH" and (cat["external_news"] or cat["dart"]):
+                    cat["status"]="NEWS_ONLY";cat["note"]="Telegram 직접매칭 없음 · 외부뉴스/공시 fallback"
                 cat=enrich_catalyst(cat,name)
                 cap=tv.get("market_cap"); value=tv.get("trade_value")
                 ratio=(float(value)/float(cap)*100) if value is not None and cap and float(cap)>0 else None
@@ -874,7 +902,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research},
+        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research},
         "regime": regime,
         "regime_metrics": regime_metrics,
         "rank_time": iso(rank_time),
