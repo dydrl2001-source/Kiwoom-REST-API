@@ -1,6 +1,7 @@
 """Pure observations for Market Radar flow desk; never net capital flow.
 
-Units: official Kiwoom ka10095 trde_prica=KRW million, mac=KRW 100 million.
+Money fields are normalized by internal consistency checks against price, volume and listed shares.
+The raw Kiwoom values and chosen scales are retained so the first live session can be reconciled with HTS.
 Observation windows use actual sample receipt times; first appearances are not bursts.
 """
 from __future__ import annotations
@@ -13,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 KST = ZoneInfo('Asia/Seoul')
 SPEC = 'https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/kiwoom/_data/kiwoom_api_spec.json'
-VERSION = 'sor-money-v1'
+VERSION = 'sor-money-v2-validated'
 # Editable business segments, not assertions about today's price catalyst.
 # Initial operational registry; unknowns retain official sector, never guessed from other companies.
 SEGMENTS = {
@@ -62,6 +63,64 @@ def amount(value, multiplier=1):
     return int(n*multiplier) if n is not None and n>=0 else None
 
 
+def resolve_turnover(raw_value, volume, low, high, current):
+    """Resolve raw turnover without trusting a magnitude threshold.
+
+    Candidate scales are tested against cumulative volume × the day's price range.
+    If the response lacks enough reference fields or no candidate is plausible,
+    the normalized value is withheld rather than guessed.
+    """
+    raw=num(raw_value)
+    if raw is None or raw < 0:
+        return None,None,'TURNOVER_MISSING'
+    if raw == 0:
+        return 0,1,'OK'
+    if not volume:
+        return None,None,'TURNOVER_UNIT_UNRESOLVED'
+    prices=[abs(float(x)) for x in (low,high,current) if x is not None and float(x)!=0]
+    if not prices:
+        return None,None,'TURNOVER_UNIT_UNRESOLVED'
+    lo=min(prices)*volume
+    hi=max(prices)*volume
+    # Cumulative trade value should live near price*volume. Wide tolerance handles
+    # asynchronous response fields and auction/after-hours prints without inventing a unit.
+    lower=max(0,lo*.72-5_000_000)
+    upper=hi*1.28+5_000_000
+    midpoint=(lo+hi)/2 if hi else lo
+    candidates=[]
+    for scale in (1,1_000,10_000,1_000_000,100_000_000):
+        value=float(raw)*scale
+        if lower <= value <= upper:
+            score=abs(value-midpoint)/(midpoint or 1)
+            candidates.append((score,scale,int(value)))
+    if not candidates:
+        return None,None,'TURNOVER_REFERENCE_MISMATCH'
+    _,scale,value=min(candidates)
+    return value,scale,'OK'
+
+
+def resolve_cap(raw_value, shares, current):
+    """Resolve market-cap units by reconciling with current price × listed shares."""
+    raw=num(raw_value)
+    if raw is None or raw < 0:
+        return None,None,'CAP_MISSING'
+    if raw == 0:
+        return 0,1,'OK'
+    if not shares or current is None or float(current)==0:
+        return None,None,'CAP_UNIT_UNRESOLVED'
+    expected=abs(float(current))*shares
+    candidates=[]
+    for scale in (1,1_000,10_000,1_000_000,100_000_000):
+        value=float(raw)*scale
+        rel=abs(value/expected-1) if expected else 99
+        if rel <= .20:
+            candidates.append((rel,scale,int(value)))
+    if not candidates:
+        return None,None,'CAP_REFERENCE_MISMATCH'
+    _,scale,value=min(candidates)
+    return value,scale,'OK'
+
+
 def quote(raw, received_at, code=None):
     """Only non-secret response fields are retained. No magnitude-based unit guesses."""
     received_at=dt(received_at)
@@ -77,23 +136,20 @@ def quote(raw, received_at, code=None):
             exchange=datetime.strptime(day+clock,'%Y%m%d%H%M%S').replace(tzinfo=KST).astimezone(timezone.utc)
     except ValueError:
         trade_date=None
-    px=num(raw.get('cur_prc')); cap=amount(raw.get('mac'),100_000_000)
-    tv=amount(raw.get('trde_prica'),1_000_000); vol=amount(raw.get('trde_qty'))
+    px=num(raw.get('cur_prc')); vol=amount(raw.get('trde_qty'))
     low=num(raw.get('low_pric')); high=num(raw.get('high_pric')); shares=amount(raw.get('stkcnt'))
+    tv,tv_scale,tv_state=resolve_turnover(raw.get('trde_prica'),vol,low,high,px)
+    cap,cap_scale,cap_state=resolve_cap(raw.get('mac'),shares,px)
     flags=[]
     if not trade_date: flags.append('TRADE_DATE_MISSING')
     if exchange and exchange>received_at+timedelta(seconds=60): flags.append('EXCHANGE_CLOCK_FUTURE')
-    if vol and low is not None and high is not None and tv is not None:
-        # Million-won rounding and asynchronous quote fields can create small mismatches.
-        if not float(abs(low))*vol*.98-2_000_000 <= tv <= float(abs(high))*vol*1.02+2_000_000:
-            flags.append('TURNOVER_VOLUME_RANGE_MISMATCH')
-    if cap and shares and px:
-        theoretical=float(abs(px))*shares
-        if theoretical and abs(cap/theoretical-1)>.05: flags.append('CAP_SHARE_PRICE_MISMATCH')
+    if tv_state!='OK': flags.append(tv_state)
+    if cap_state!='OK': flags.append(cap_state)
     return {'code':code,'name':str(raw.get('stk_nm') or code)[:80],
             'received_at':received_at.isoformat(),'trade_date':trade_date.isoformat() if trade_date else None,
             'exchange_at':exchange.isoformat() if exchange else None,'venue':'SOR','source':'ka10095',
             'unit_version':VERSION,'turnover_krw':tv,'cap_krw':cap,
+            'turnover_scale':tv_scale,'cap_scale':cap_scale,
             'price_krw':float(abs(px)) if px is not None else None,
             'change_pct':float(num(raw.get('flu_rt'))) if num(raw.get('flu_rt')) is not None else None,
             'volume':vol,'raw_turnover':str(raw.get('trde_prica',''))[:40],
@@ -119,7 +175,7 @@ def delta(new,old,min_seconds=15,max_seconds=90):
         return None,'SESSION_OR_SOURCE_CHANGED',sec
     nv,ov=new.get('turnover_krw'),old.get('turnover_krw')
     if nv is None or ov is None:return None,'MISSING_VALUE',sec
-    if 'TURNOVER_VOLUME_RANGE_MISMATCH' in (new.get('quality_flags') or []):
+    if any(str(x).startswith('TURNOVER_') for x in (new.get('quality_flags') or [])):
         return None,'VALUE_CHECK_FAILED',sec
     if nv<ov:return None,'COUNTER_RESET_OR_CORRECTION',sec
     # Stale exchange time alone is not an outage (illiquid instruments may not trade).
@@ -151,7 +207,7 @@ def metrics(history, now=None):
     # Market freshness is based on exchange time, not a newly written database row.
     active=bool(fresh and exchange and 0<=(now-exchange).total_seconds()<=120)
     cap=current.get('cap_krw');ratio=None
-    if cap and current.get('turnover_krw') is not None and not any('MISMATCH' in s for s in current.get('quality_flags',[])):
+    if cap and current.get('turnover_krw') is not None and not any(str(s).startswith(('TURNOVER_','CAP_')) for s in current.get('quality_flags',[])):
         ratio=current['turnover_krw']/cap*100
     return {**current,'interval_turnover_krw':value,'interval_seconds':sec,'delta_state':state,
             'five_min_turnover_krw':fivemin,'five_min_seconds':five_seconds,
