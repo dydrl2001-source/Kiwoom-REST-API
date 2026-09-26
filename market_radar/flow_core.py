@@ -220,8 +220,13 @@ def metrics(history, now=None):
 def group_rows(rows,history_by_code,mode='catalyst'):
     """No double counting: one primary bucket per stock; deltas use common cohorts."""
     def key(r):
-        base=r['segment'];event=r.get('event_type') or '재료 분석 대기'
-        return base+' / '+event if mode=='catalyst' else base
+        event=r.get('event_type') or '재료 분석 대기'
+        if mode=='catalyst':
+            base=r.get('market_theme') or r.get('segment') or '테마 미확인'
+            return base+' / '+event
+        if mode=='theme':
+            return r.get('market_theme') or '시장테마 미확인'
+        return r.get('segment') or '세부업종 미확인'
     stock_rows=[r for r in rows if r.get('sector')!='ETF·ETN']
     comparable={}
     batches=sorted({x.get('batch_time') for h in history_by_code.values() for x in h if x.get('batch_time')})[-3:]
