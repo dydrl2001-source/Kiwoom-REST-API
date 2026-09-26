@@ -60,9 +60,9 @@ Postgres와 Telegram은 재시작하지 않고 기존 서비스 다섯 개의 �
 
 ## 테스트와 한계
 
-37개 오프라인 수식/단위/인증/오류격리/예산보존 테스트, Python·Bash·JavaScript 문법 검사, Chromium에 가상 응답을 주입한 화면 테스트를 수행했다. 화면 테스트는 금액, 카드, 검색, 인용, 캔들·거래량, 일봉 전환, Esc, 모바일 가로 넘침, 외부 요청이 없음을 확인했다.
+수식·단위·표본 편입/이탈·인증·예산보존을 확인하는 오프라인 테스트 케이스를 저장소에 추가했고, Docker 빌드가 새 Python 모듈을 py_compile 하도록 했다. flow_ui.js는 저장소 반영 전 JavaScript 파싱을 확인했다. 실제 테스트 실행과 서비스 통합 검증은 아래 Mac mini 적용 과정의 Docker build 및 진단 스크립트 결과로 확인해야 한다.
 
-실제 사용자 Mac, Postgres 쿼리, Kiwoom SOR 응답, OpenAI 유료 성공은 이 개발 환경에서 테스트하지 못했다. 사전 테스트는 실제 시세/수익성/미모사 적중률 검증이 아니다. 첫 장중 실행에서 HTS 값과 source/date/venue를 대조해야 한다.
+실제 사용자 Mac, 실제 Postgres 쿼리, Kiwoom SOR 응답, OpenAI 유료 성공은 이 개발 환경에서 아직 검증하지 못했다. 사전 테스트는 실제 시세/수익성/미모사 적중률 검증이 아니다. 첫 장중 실행에서 HTS 값과 source/date/venue를 대조해야 한다.
 
 ## 공식 근거
 
