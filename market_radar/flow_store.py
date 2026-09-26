@@ -110,12 +110,30 @@ def public_leads(cur,codes):
     return out
 
 
+def theme_memberships(cur,codes):
+    out=defaultdict(list)
+    if not codes or not exists(cur,'stock_theme_memberships'):return out
+    cur.execute("""SELECT stock_code,theme_code,theme_name,theme_change_rate,period_return,stock_count,refreshed_at
+                   FROM stock_theme_memberships
+                   WHERE stock_code=ANY(%s) AND refreshed_at>now()-interval '3 days'
+                   ORDER BY stock_code,ABS(COALESCE(theme_change_rate,0)) DESC,theme_name""",(list(codes),))
+    for r in cur.fetchall():
+        out[r['stock_code']].append({
+            'code':r['theme_code'],'name':r['theme_name'],
+            'change_pct':r['theme_change_rate'],'period_return':r['period_return'],
+            'stock_count':r['stock_count'],
+            'refreshed_at':r['refreshed_at'].isoformat() if r['refreshed_at'] else None
+        })
+    return out
+
+
 def desk_payload():
     now=datetime.now(timezone.utc)
     with db(True) as c,c.cursor() as cur:
         history,newest=latest_history(cur)
         reports=saved_reports(cur,history)
         leads=public_leads(cur,history)
+        themes=theme_memberships(cur,history)
         automation={'enabled':False,'notice':'설정 미확인'}
         try:
             from web_research_engine import Config, usage_count
@@ -128,7 +146,11 @@ def desk_payload():
     rows=[]
     for code,h in history.items():
         r=metrics(h,now);top,fine,classification=segment(code,r['name'],r.get('official_sector'))
-        r.update({'sector':top,'segment':top+' > '+fine,'classification':classification})
+        tm=themes.get(code,[])
+        primary_theme=(tm[0]['name'] if tm else None)
+        r.update({'sector':top,'segment':top+' > '+fine,'classification':classification,
+                  'themes':tm[:8],'market_theme':primary_theme,
+                  'market_group':primary_theme or top+' > '+fine})
         report=reports.get(code)
         # The report's age must never be hidden behind a current price refresh.
         fresh_report=bool(report and 0<=(now-dt(report['completed_at'])).total_seconds()<=21600)
@@ -141,13 +163,15 @@ def desk_payload():
         rows.append(r)
     rows.sort(key=lambda x:(x.get('interval_turnover_krw') is None,-(x.get('interval_turnover_krw') or 0)))
     by_catalyst,coverage=group_rows(rows,history,'catalyst')
+    by_theme,_=group_rows(rows,history,'theme')
     by_sector,_=group_rows(rows,history,'sector')
     recent=sum(r['recent_trade'] for r in rows)
     return {'generated_at':now.isoformat(),'sample_time':newest.isoformat() if newest else None,
             'refresh_target_seconds':30,'status':'RECENT_TRADES' if recent else 'NO_RECENT_TRADE_OR_WAITING',
-            'rows':rows,'catalyst_groups':by_catalyst,'sector_groups':by_sector,
+            'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
             'automation':automation,'coverage':coverage,'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '
+                     '시장테마는 Kiwoom 테마그룹 소속이며 가격 원인으로 단정하지 않습니다. '
                      '표본 진입·날짜변경·거래소범위변경은 폭증으로 계산하지 않습니다.'}
 
 
