@@ -4,7 +4,7 @@ No new brokerage permission, no orders, no credential edits.
 from datetime import datetime,timezone
 import time
 import kiwoom_feed as base
-from flow_core import amount, num
+from flow_core import quote, num
 from flow_store import schema, save_batch
 
 _original_fetch=base.fetch_all
@@ -37,10 +37,11 @@ def detail_map(_requested):
             code=code_of(r)
             raw_quotes[code]={'response':r,'received_at':received.isoformat()}
             price=num(r.get('cur_prc'));change=num(r.get('flu_rt'))
+            checked=quote(r,received,code) or {}
             out[code]={'name':r.get('stk_nm'),'price':float(abs(price)) if price is not None else None,
                        'change':float(change) if change is not None else None,
-                       'trade_value':amount(r.get('trde_prica'),1_000_000),
-                       'market_cap':amount(r.get('mac'),100_000_000)}
+                       'trade_value':checked.get('turnover_krw'),
+                       'market_cap':checked.get('cap_krw')}
         time.sleep(.25)
     return out
 
@@ -48,11 +49,13 @@ def detail_map(_requested):
 def main():
     base.fetch_all=fetch
     base.detail_map=detail_map
-    # Fixed documented source units. Historical rows are NOT rewritten.
-    base.norm_tv=lambda v:amount(v,1_000_000)
-    base.norm_cap=lambda v:amount(v,100_000_000)
+    # For stock snapshots, use the validated ka10095 SOR detail value instead of
+    # inferring units from a ranking response. Official-sector turnover remains
+    # unpopulated in the legacy table; the new flow desk aggregates validated stock data.
+    base.norm_tv=lambda v:None
+    base.norm_cap=lambda v:None
     base.schema();schema()
-    print('Flow collector: SOR details; documented money units; 30s target',flush=True)
+    print('Flow collector: SOR details; validated money scales; 30s target',flush=True)
     while True:
         started=time.monotonic()
         try:
@@ -65,6 +68,8 @@ def main():
                 save_batch(datetime.now(timezone.utc),raw_quotes,ranks,trades,base.stock_meta)
         except Exception as exc:
             # Do not print response bodies, tokens, DSNs or arbitrary provider errors.
+            try: base.set_status('ERROR','SOR/조회/거래대금 관측 오류',type(exc).__name__)
+            except Exception: pass
             print('Flow collector error:',type(exc).__name__,flush=True)
         elapsed=time.monotonic()-started
         time.sleep(max(1,30-elapsed))
