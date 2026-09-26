@@ -2,7 +2,7 @@
 # Read-only diagnostics, not another model call. No keys/report text are printed.
 set -eu
 cd "$(dirname "$0")"
-docker compose ps radar-api kiwoom-feed chart-feed web-research-worker
+docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker
 curl --fail --silent --show-error --max-time 8 http://localhost:8080/health
 printf '\n'
 docker compose exec -T radar-api python - <<'PY'
@@ -17,6 +17,8 @@ try:
     print('OBSERVED_STOCKS:',len(d.get('rows',[])))
     print('COMMON_COHORT:',d.get('coverage',{}).get('common_stocks'))
     print('MONEY_UNITS:',d.get('unit_version'))
+    print('THEME_GROUPS:',len(d.get('theme_groups',[])))
+    print('CATALYST_GROUPS:',len(d.get('catalyst_groups',[])))
     a=d.get('automation',{})
     print('AUTO_SELECTION:',a.get('automatic'))
     print('DAILY_LIMIT_UNCHANGED:',a.get('daily_limit'))
