@@ -196,6 +196,7 @@ function renderHomeStocks(rows){
 }
 function evidence(c){
  let out="";
+ (c?.dart||[]).slice(0,5).forEach(d=>{out+='<div class="evidence"><b>DART · '+esc(d.category||"공시")+'</b><p>'+esc(d.report_nm||"")+'</p><div class="links">'+(d.link?'<a href="'+esc(d.link)+'" target="_blank">공시 열기</a>':"")+'</div></div>'});
  (c?.external_news||[]).slice(0,5).forEach(n=>{out+='<div class="evidence"><b>'+esc(n.source||"뉴스")+'</b><p>'+esc(n.title||"")+'</p><div class="links"><a href="'+esc(n.link)+'" target="_blank">기사 열기</a></div></div>'});
  (c?.items||[]).slice(0,4).forEach(i=>{out+='<div class="evidence"><b>'+esc(i.channel||"Telegram")+'</b><p>'+esc(i.text||"")+'</p><div class="links">'+(i.telegram_url?'<a href="'+esc(i.telegram_url)+'" target="_blank">원문</a>':"")+'</div></div>'});
  return out;
@@ -278,7 +279,8 @@ function render(d){
  document.getElementById("kiwoomSub").textContent=(snap.time?"수집 "+new Date(snap.time).toLocaleString("ko-KR"):"")+(snap.stale?" · 지연":"")+(d.system.kiwoom.note?" · "+d.system.kiwoom.note:"");
  const ms=d.material_stats||{};
  document.getElementById("newsStatus").textContent="직접 "+(ms.direct||0)+" · 테마 "+(ms.sector||0);
- document.getElementById("newsSub").textContent="확산 "+(ms.spreading||0)+" · 약한언급 "+(ms.weak||0)+" · Telegram "+(d.system.telegram.count_24h||0).toLocaleString()+"건";
+ const ds=d.system.dartfeed||{};
+ document.getElementById("newsSub").textContent="확산 "+(ms.spreading||0)+" · 약한언급 "+(ms.weak||0)+" · DART "+(ds.status||"미연결")+" · Telegram "+(d.system.telegram.count_24h||0).toLocaleString()+"건";
  document.getElementById("turnover").textContent=d.regime_metrics?.rank_turnover_5m==null?"-":pct(d.regime_metrics.rank_turnover_5m);
  document.getElementById("mimosaStatus").textContent=d.system.mimosa?.status||"미연결";
  const re=d.system.research||{};
