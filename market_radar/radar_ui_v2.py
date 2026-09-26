@@ -4,7 +4,8 @@ DASHBOARD_HTML_V2 = r"""<!doctype html>
 <style>
 :root{
  --bg:#f4f7fb;--panel:#ffffff;--line:#dce3ee;--txt:#152033;--muted:#6f7c90;
- --red:#e25555;--blue:#4577d4;--green:#1e9c72;--amber:#d88c20;--nav:#162339;--chip:#edf2f8;
+ --red:#e35353;--blue:#3f6fd8;--green:#15966d;--amber:#d99120;--nav:#14233a;--chip:#edf2f8;
+ --purple:#7557d9;--cyan:#1693b8;--orange:#e27a2f;--mint:#2a9f88;--rose:#d85987;--indigo:#4d5bd5;
 }
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif}
 button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;margin:auto;min-height:100vh;padding:14px 14px 84px}
@@ -12,32 +13,46 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .brand{font-size:24px;font-weight:900;letter-spacing:-.04em}.brand small{font-size:10px;color:var(--muted);margin-left:5px}
 .time{font-size:11px;color:var(--muted)}
 .statusbar{display:grid;grid-template-columns:1.4fr repeat(4,1fr);gap:8px;margin-bottom:10px}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 11px;min-height:67px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 11px;min-height:67px;position:relative;overflow:hidden;box-shadow:0 4px 18px rgba(31,52,82,.035)}
+.stat:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#aab5c5}
+.stat.market:before{background:var(--purple)}.stat.kiwoom:before{background:var(--blue)}.stat.material:before{background:var(--green)}.stat.turnover:before{background:var(--amber)}.stat.mimosa:before{background:var(--cyan)}
 .stat .k{font-size:10px;color:var(--muted)}.stat .v{font-size:16px;font-weight:850;margin-top:3px}.stat .s{font-size:10px;color:var(--muted);margin-top:2px}
 .tabs{position:sticky;top:0;z-index:20;background:rgba(244,247,251,.95);backdrop-filter:blur(8px);display:flex;gap:6px;padding:6px 0 9px;overflow:auto}
 .tab{border:1px solid var(--line);background:#fff;color:var(--muted);padding:8px 13px;border-radius:999px;white-space:nowrap;font-weight:700;cursor:pointer}
-.tab.active{background:var(--nav);color:#fff;border-color:var(--nav)}
+.tab.active{background:var(--nav);color:#fff;border-color:var(--nav);box-shadow:0 4px 12px rgba(20,35,58,.14)}
+.tab[data-view="index"].active{background:var(--purple);border-color:var(--purple)}
+.tab[data-view="query"].active{background:var(--blue);border-color:var(--blue)}
+.tab[data-view="sector"].active{background:#6b5ec9;border-color:#6b5ec9}
+.tab[data-view="trade"].active{background:var(--orange);border-color:var(--orange)}
+.tab[data-view="material"].active{background:var(--green);border-color:var(--green)}
+.tab[data-view="research"].active{background:var(--indigo);border-color:var(--indigo)}
+.tab[data-view="mimosa"].active{background:var(--cyan);border-color:var(--cyan)}
 .view{display:none}.view.active{display:block}.section-title{display:flex;align-items:end;justify-content:space-between;margin:14px 2px 7px}.section-title h2{font-size:15px;margin:0}.section-title span{font-size:10px;color:var(--muted)}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}.pad{padding:12px}
 .analysis{display:grid;grid-template-columns:1.3fr .7fr;gap:8px}.analysis-main{font-size:14px}.analysis-line{padding:7px 0;border-bottom:1px solid #eef2f7}.analysis-line:last-child{border:0}
 .legend{display:flex;flex-wrap:wrap;gap:5px}.pill{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border-radius:999px;background:var(--chip);font-size:10px;color:#4d5d73}
 .good{color:var(--green)}.bad{color:var(--blue)}.hot{color:var(--red)}.warn{color:var(--amber)}.muted{color:var(--muted)}
-.sector-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.sector-card{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.sector-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.sector-card{background:#fff;border:1px solid var(--line);border-top:3px solid #7b67da;border-radius:11px;overflow:hidden;box-shadow:0 3px 14px rgba(42,53,79,.03)}
 .sector-head{display:flex;justify-content:space-between;align-items:center;padding:9px 10px;border-bottom:1px solid #edf1f6}.sector-head strong{font-size:14px}.sector-meta{font-size:10px;color:var(--muted)}
 .stock-list{display:grid;grid-template-columns:1fr 1fr}.stock-mini{padding:8px 9px;border-right:1px solid #f0f3f7;border-bottom:1px solid #f0f3f7;min-height:62px}.stock-mini:nth-child(2n){border-right:0}
 .stock-mini .name{font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stock-mini .num{display:flex;justify-content:space-between;margin-top:4px;font-size:11px}.rank-badge{font-size:9px;color:#fff;background:#7b8799;border-radius:4px;padding:1px 4px}
 .tblwrap{overflow:auto;max-height:660px}.tbl{width:100%;border-collapse:collapse;min-width:980px}.tbl th,.tbl td{padding:8px 8px;border-bottom:1px solid #edf1f6;text-align:right;vertical-align:middle;white-space:nowrap}.tbl th{position:sticky;top:0;background:#f8fafc;color:var(--muted);font-size:10px;z-index:2}.tbl .left{text-align:left}.tbl .wrap{white-space:normal;min-width:220px;text-align:left}
 .stockname{font-weight:850}.sub{font-size:10px;color:var(--muted)}
-.material-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}.priority{font-size:18px;font-weight:900}.deep{color:#9b5b00;background:#fff2dc}.material-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}
+.material-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-card{background:#fff;border:1px solid var(--line);border-left:4px solid #9aa8bb;border-radius:11px;padding:11px;box-shadow:0 3px 14px rgba(42,53,79,.03)}
+.research-card.p-high{border-left-color:var(--red)}.research-card.p-mid{border-left-color:var(--amber)}.research-card.p-low{border-left-color:var(--blue)}
+.priority{font-size:18px;font-weight:900}.deep{color:#9b5b00;background:#fff2dc}
+.deep-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.deep-card{background:#fff;border:1px solid var(--line);border-left:5px solid var(--indigo);border-radius:13px;padding:13px;box-shadow:0 6px 22px rgba(55,67,120,.06)}
+.deep-head{display:flex;justify-content:space-between;gap:10px}.confidence{display:inline-flex;align-items:center;justify-content:center;min-width:48px;height:48px;border-radius:50%;background:#eef0ff;color:var(--indigo);font-weight:900;font-size:15px}
+.deep-row{display:grid;grid-template-columns:105px 1fr;gap:8px;padding:7px 0;border-top:1px solid #edf1f6}.deep-row:first-of-type{border-top:0}.deep-key{font-size:10px;color:var(--muted);font-weight:800}.risk-pill{background:#fff0f1;color:#b43c4c}.agent-pill{background:#edf4ff;color:#365ea7}.material-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}
 .material-top{display:flex;justify-content:space-between;gap:6px}.material-card h3{font-size:14px;margin:0}.material-summary{font-weight:750;margin:8px 0 5px;line-height:1.5}.material-why{font-size:11px;color:#516078;background:#f6f8fb;padding:7px;border-radius:7px}
 details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evidence{border-top:1px solid #edf1f6;margin-top:7px;padding-top:7px;font-size:11px}.evidence p{margin:4px 0}.links{display:flex;gap:7px;flex-wrap:wrap}
 .mimosa-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.index-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.chart-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.chart-title{display:flex;justify-content:space-between;align-items:end;margin-bottom:6px}.chart-title b{font-size:14px}.svgchart{width:100%;height:210px;display:block}.strategy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.strategy-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.strategy-card h3{font-size:13px;margin:0}.strategy-score{font-weight:900;font-size:16px}.strategy-note{font-size:10px;color:var(--muted);margin-top:6px}.m-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.m-head{display:flex;justify-content:space-between}.m-state{font-size:13px;font-weight:900;margin-top:6px}.score{font-weight:900}.reason{font-size:10px;color:var(--muted);margin-top:5px}.fb{display:flex;gap:5px;margin-top:8px}.fb button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 7px;font-size:10px;color:#5d6b7f;cursor:pointer}.fb button:hover{background:#f3f6fa}.fb .sent{background:#eaf6f1;color:#187a59}
 .bottom{display:none}
-@media(max-width:1100px){.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
+@media(max-width:1100px){.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid,.deep-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
 @media(max-width:700px){
  .app{padding:10px 8px 82px}.head{margin-bottom:6px}.brand{font-size:20px}.statusbar{grid-template-columns:1fr 1fr;gap:6px}.stat{min-height:61px;padding:8px}
  .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.sector-grid{grid-template-columns:1fr 1fr;gap:6px}.stock-list{grid-template-columns:1fr}.stock-mini{border-right:0}
- .material-grid,.research-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
+ .material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
  .bottom button{border:0;background:transparent;color:#78869b;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px}.bottom button.active{color:#1c2b45;font-weight:900}.bottom b{font-size:16px;line-height:1}
 }
 </style></head>
@@ -45,11 +60,11 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 <div class="head"><div><span class="brand">MARKET RADAR <small>V2</small></span></div><div class="time" id="stamp">연결 중</div></div>
 
 <div class="statusbar">
- <div class="stat"><div class="k">오늘 장</div><div class="v" id="regime">대기</div><div class="s" id="regimeSub">시장 데이터 확인 중</div></div>
- <div class="stat"><div class="k">Kiwoom</div><div class="v" id="kiwoom">-</div><div class="s" id="kiwoomSub"></div></div>
- <div class="stat"><div class="k">재료 / 뉴스</div><div class="v" id="newsStatus">-</div><div class="s" id="newsSub"></div></div>
- <div class="stat"><div class="k">조회 Top20 교체율</div><div class="v" id="turnover">-</div><div class="s">관심 순환 속도</div></div>
- <div class="stat"><div class="k">미모사 엔진</div><div class="v" id="mimosaStatus">-</div><div class="s" id="mimosaSub"></div></div>
+ <div class="stat market"><div class="k">오늘 장</div><div class="v" id="regime">대기</div><div class="s" id="regimeSub">시장 데이터 확인 중</div></div>
+ <div class="stat kiwoom"><div class="k">Kiwoom</div><div class="v" id="kiwoom">-</div><div class="s" id="kiwoomSub"></div></div>
+ <div class="stat material"><div class="k">재료 / 뉴스</div><div class="v" id="newsStatus">-</div><div class="s" id="newsSub"></div></div>
+ <div class="stat turnover"><div class="k">조회 Top20 교체율</div><div class="v" id="turnover">-</div><div class="s">관심 순환 속도</div></div>
+ <div class="stat mimosa"><div class="k">미모사 엔진</div><div class="v" id="mimosaStatus">-</div><div class="s" id="mimosaSub"></div></div>
 </div>
 
 <div class="tabs" id="tabs">
@@ -111,8 +126,12 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 </section>
 
 <section class="view" id="view-research">
+ <div class="section-title"><h2>멀티에이전트 종합 리포트</h2><span>수급 · 공시 · 뉴스 · Telegram · 섹터 · 미모사 교차검증</span></div>
+ <div class="panel pad" style="margin-bottom:8px"><b id="deepResearchStatus">Deep Research Engine 대기</b><div class="sub" style="margin-top:5px">현재는 Mac mini 내부 데이터를 8개 분석축으로 분리해 교차검증하는 로컬 멀티에이전트 v1입니다.</div></div>
+ <div class="deep-grid" id="deepResearchCards"></div>
+
  <div class="section-title"><h2>Research Agent 큐</h2><span>조회 급등 · 거래대금 신규진입 · 돈 선행 재료미확인 자동 감지</span></div>
- <div class="panel pad" style="margin-bottom:8px"><b id="researchStatus">Research Engine 대기</b><div class="sub" style="margin-top:5px">현재 단계는 Mac mini의 로컬 데이터로 우선순위를 만들고 근거를 묶는 LOCAL_RULES 모드입니다. 외부 심층 AI 조사는 별도 브리지를 붙일 종목만 표시합니다.</div></div>
+ <div class="panel pad" style="margin-bottom:8px"><b id="researchStatus">Research Engine 대기</b><div class="sub" style="margin-top:5px">우선순위가 높은 종목만 멀티에이전트 분석으로 넘깁니다.</div></div>
  <div class="research-grid" id="researchCards"></div>
 </section>
 
@@ -263,7 +282,25 @@ function researchCards(rows){
  return (rows||[]).map(x=>{
    const triggers=(x.triggers||[]).map(t=>'<span class="pill">'+esc(t)+'</span>').join("");
    const evidence=(x.evidence||[]).slice(0,5).map(e=>'<div class="evidence"><b>'+esc(e.source||e.type||"근거")+'</b><p>'+esc(e.title||"")+'</p>'+(e.link?'<a href="'+esc(e.link)+'" target="_blank">원문</a>':"")+'</div>').join("");
-   return '<article class="research-card"><div class="material-top"><div><h3>'+esc(x.name||x.code)+'</h3><div class="sub">'+esc(x.created_at?new Date(x.created_at).toLocaleString("ko-KR"):"")+'</div></div><div class="priority">'+esc(x.priority)+'</div></div><div class="legend" style="margin-top:7px">'+triggers+(x.deep_research_needed?'<span class="pill deep">심층조사 필요</span>':'')+'</div><div class="material-summary">'+esc(x.headline||"")+'</div><div class="material-why">'+esc(x.summary||"")+'</div><details><summary>수집 근거 보기 · '+esc((x.evidence||[]).length)+'건</summary>'+evidence+'</details></article>';
+   return '<article class="research-card '+priorityClass(x.priority)+'"><div class="material-top"><div><h3>'+esc(x.name||x.code)+'</h3><div class="sub">'+esc(x.created_at?new Date(x.created_at).toLocaleString("ko-KR"):"")+'</div></div><div class="priority">'+esc(x.priority)+'</div></div><div class="legend" style="margin-top:7px">'+triggers+(x.deep_research_needed?'<span class="pill deep">심층조사 필요</span>':'')+'</div><div class="material-summary">'+esc(x.headline||"")+'</div><div class="material-why">'+esc(x.summary||"")+'</div><details><summary>수집 근거 보기 · '+esc((x.evidence||[]).length)+'건</summary>'+evidence+'</details></article>';
+ }).join("");
+}
+
+
+function priorityClass(p){p=Number(p||0);return p>=80?"p-high":p>=60?"p-mid":"p-low";}
+function deepResearchCards(rows){
+ if(!(rows||[]).length)return '<div class="panel pad muted">아직 멀티에이전트 종합 리포트가 없습니다.</div>';
+ return (rows||[]).map(x=>{
+   const ev=x.evidence_summary||{}, risks=(x.risk_flags||[]).map(r=>'<span class="pill risk-pill">'+esc(r)+'</span>').join("");
+   const agents=['수급','공시','뉴스','Telegram','섹터','미모사','시장'].map(a=>'<span class="pill agent-pill">'+a+'</span>').join("");
+   return '<article class="deep-card"><div class="deep-head"><div><div class="sub">Priority '+esc(x.priority)+' · '+esc(x.report_version||"")+'</div><h3 style="margin:3px 0 0;font-size:16px">'+esc(x.headline||x.name||x.code)+'</h3></div><div class="confidence">'+esc(Math.round(Number(x.confidence||0)))+'</div></div>'+
+   '<div class="legend" style="margin:9px 0">'+agents+risks+'</div>'+
+   '<div class="deep-row"><div class="deep-key">왜 지금?</div><div>'+esc(x.why_now||"-")+'</div></div>'+
+   '<div class="deep-row"><div class="deep-key">재료</div><div>'+esc(x.catalyst_summary||"-")+'</div></div>'+
+   '<div class="deep-row"><div class="deep-key">시장 반응</div><div>'+esc(x.market_response||"-")+'</div></div>'+
+   '<div class="deep-row"><div class="deep-key">섹터 확인</div><div>'+esc(x.sector_confirmation||"-")+'</div></div>'+
+   '<div class="deep-row"><div class="deep-key">미모사</div><div>'+esc(x.mimosa_summary||"-")+'</div></div>'+
+   '<div class="sub" style="margin-top:8px">근거 · DART '+esc(ev.dart??0)+' · 뉴스 '+esc(ev.news??0)+' · Telegram '+esc(ev.telegram??0)+' · 동종 '+esc(ev.sector_peers??0)+'</div></article>';
  }).join("");
 }
 
@@ -286,6 +323,9 @@ function render(d){
  const re=d.system.research||{};
  const rsEl=document.getElementById("researchStatus");
  if(rsEl)rsEl.textContent="Research Engine "+(re.status||"미연결")+(re.note?" · "+re.note:"");
+ const dre=d.system.deepresearch||{};
+ const drEl=document.getElementById("deepResearchStatus");
+ if(drEl)drEl.textContent="Deep Research Engine "+(dre.status||"미연결")+(dre.note?" · "+dre.note:"");
  document.getElementById("mimosaSub").textContent=d.system.chartfeed?.status?"차트 "+d.system.chartfeed.status:"";
  document.getElementById("analysis").innerHTML=(d.analysis?.lines||[]).map(x=>'<div class="analysis-line">'+esc(x)+'</div>').join("")||'<span class="muted">시장 분석 대기</span>';
  const sig=[];
@@ -305,6 +345,7 @@ function render(d){
  document.getElementById("officialSectors").innerHTML=(d.sectors||[]).map(x=>'<tr><td class="left"><b>'+esc(x.name)+'</b></td><td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td><td>'+esc(money(x.trade_value_krw))+'</td><td>'+esc(x.rising??"-")+'</td><td>'+esc(x.falling??"-")+'</td></tr>').join("");
  document.getElementById("materials").innerHTML=materialCards(d.materials);
  document.getElementById("researchCards").innerHTML=researchCards(d.research_rows);
+ document.getElementById("deepResearchCards").innerHTML=deepResearchCards(d.deep_reports);
  document.getElementById("mimosaCards").innerHTML=mimosaCards(d.mimosa_rows);
  const ix=d.index_charts||{};
  const kp=ix.KOSPI||{}, kq=ix.KOSDAQ||{};
