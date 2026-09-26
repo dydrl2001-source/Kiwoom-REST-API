@@ -265,6 +265,46 @@ def group_rows(rows,history_by_code,mode='catalyst'):
                    'meaning':'거래 집중도 변화; 순매수 자금 이동이 아님'}
 
 
+def rotation_series(rows,history_by_code,max_intervals=10):
+    """Fixed-cohort market-theme turnover-share series.
+
+    A stock must be present and have a valid cumulative-turnover delta in every
+    displayed interval. This avoids making sample entry/exit look like rotation.
+    """
+    batches=sorted({x.get('batch_time') for h in history_by_code.values() for x in h if x.get('batch_time')})
+    batches=batches[-(max_intervals+1):]
+    if len(batches)<2:return {'times':[],'series':[],'common_stocks':0}
+    rowmap={r['code']:r for r in rows if r.get('sector')!='ETF·ETN'}
+    cohort={}
+    for code,r in rowmap.items():
+        bytime={x.get('batch_time'):x for x in history_by_code.get(code,[])}
+        if any(t not in bytime for t in batches):continue
+        vals=[];ok=True
+        for a,b in zip(batches[1:],batches[:-1]):
+            v,state,_=delta(bytime[a],bytime[b])
+            if state!='OK':ok=False;break
+            vals.append(v)
+        if ok:cohort[code]=vals
+    if not cohort:return {'times':batches[1:],'series':[],'common_stocks':0}
+    totals=[sum(v[i] for v in cohort.values()) for i in range(len(batches)-1)]
+    groups={}
+    for code,vals in cohort.items():
+        r=rowmap[code];name=r.get('market_theme') or r.get('segment') or '테마 미확인'
+        arr=groups.setdefault(name,[0]*len(vals))
+        for i,v in enumerate(vals):arr[i]+=v
+    series=[]
+    for name,vals in groups.items():
+        shares=[(v/totals[i]*100 if totals[i]>0 else None) for i,v in enumerate(vals)]
+        valid=[x for x in shares if x is not None]
+        series.append({'name':name,'turnover':vals,'share_pct':shares,
+                       'current_share_pct':shares[-1] if shares else None,
+                       'change_pp':(valid[-1]-valid[0]) if len(valid)>=2 else None,
+                       'current_turnover_krw':vals[-1] if vals else None})
+    series.sort(key=lambda x:-(x.get('current_turnover_krw') or 0))
+    return {'times':batches[1:],'series':series,'common_stocks':len(cohort),
+            'meaning':'고정 공통표본의 구간 거래대금 비중 변화; 순매수 자금이동이 아님'}
+
+
 def report_sections(report):
     """Slice report sections without destroying citation offsets. No new AI calls."""
     if not isinstance(report,dict) or not report.get('citations'):return {}
