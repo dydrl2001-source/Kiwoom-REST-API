@@ -8,6 +8,8 @@ from flow_core import quote, num
 from flow_store import schema, save_batch
 
 _original_fetch=base.fetch_all
+_original_norm_tv=base.norm_tv
+_original_norm_cap=base.norm_cap
 current_rank=[]
 current_trade=[]
 raw_quotes={}
@@ -49,11 +51,11 @@ def detail_map(_requested):
 def main():
     base.fetch_all=fetch
     base.detail_map=detail_map
-    # For stock snapshots, use the validated ka10095 SOR detail value instead of
-    # inferring units from a ranking response. Official-sector turnover remains
-    # unpopulated in the legacy table; the new flow desk aggregates validated stock data.
-    base.norm_tv=lambda v:None
-    base.norm_cap=lambda v:None
+    # Stock snapshots now prefer the validated ka10095 SOR detail value in kiwoom_feed.
+    # Keep the legacy normalizers only as fallbacks for endpoints that do not return
+    # the detail fields needed for cross-validation (for example official-sector rows).
+    base.norm_tv=_original_norm_tv
+    base.norm_cap=_original_norm_cap
     base.schema();schema()
     print('Flow collector: SOR details; validated money scales; 30s target',flush=True)
     while True:
