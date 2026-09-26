@@ -12,7 +12,7 @@ except Exception:
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-app = FastAPI(title="Market Radar", version="0.6.0")
+app = FastAPI(title="Market Radar", version="0.6.1")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "패키징", "테스트", "파운드리", "D램", "DRAM", "낸드"],
@@ -560,6 +560,12 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 if r:
                     research={"status":r[0],"last_success":iso(r[1]),"note":r[2]}
 
+            deepresearch = {"status":"NOT_CONFIGURED","last_success":None,"note":None}
+            if table_exists(cur,"deep_research_status"):
+                cur.execute("SELECT status,last_success_at,note FROM deep_research_status WHERE id=1")
+                r=cur.fetchone()
+                if r: deepresearch={"status":r[0],"last_success":iso(r[1]),"note":r[2]}
+
             chartfeed = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
             if table_exists(cur, "chart_feed_status"):
                 cur.execute("SELECT status,last_success_at,note FROM chart_feed_status WHERE id=1")
@@ -888,6 +894,23 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "evidence":x[10] or [],"deep_research_needed":bool(x[11])
                 } for x in cur.fetchall()]
 
+            deep_reports=[]
+            if table_exists(cur,"deep_research_reports"):
+                cur.execute("""SELECT job_id,created_at,stock_code,stock_name,priority,confidence,headline,
+                                      why_now,catalyst_summary,market_response,sector_confirmation,mimosa_summary,
+                                      risk_flags,evidence_summary,agent_outputs,report_version
+                               FROM deep_research_reports
+                               WHERE created_at>now()-interval '24 hours'
+                               ORDER BY priority DESC,created_at DESC
+                               LIMIT 30""")
+                deep_reports=[{
+                    "job_id":x[0],"created_at":iso(x[1]),"code":x[2],"name":x[3],"priority":x[4],
+                    "confidence":x[5],"headline":x[6],"why_now":x[7],"catalyst_summary":x[8],
+                    "market_response":x[9],"sector_confirmation":x[10],"mimosa_summary":x[11],
+                    "risk_flags":x[12] or [],"evidence_summary":x[13] or {},
+                    "agent_outputs":x[14] or {},"report_version":x[15]
+                } for x in cur.fetchall()]
+
             # recent telegram: full text is preserved in the API/UI
             recent_telegram=[]
             for m in messages[:40]:
@@ -902,7 +925,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research},
+        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research, "deepresearch": deepresearch},
         "regime": regime,
         "regime_metrics": regime_metrics,
         "rank_time": iso(rank_time),
@@ -919,6 +942,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "mimosa_strategies": strategy_lists,
         "index_charts": index_charts,
         "research_rows": research_rows,
+        "deep_reports": deep_reports,
         "analysis": {
             "mode": "RULE_BASED",
             "lines": global_analysis,
