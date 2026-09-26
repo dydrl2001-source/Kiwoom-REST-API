@@ -103,6 +103,11 @@ def root():
     return HTMLResponse(html.replace("</body>", script + "</body>"), headers={"Cache-Control": "no-store"})
 
 
+# Optional flow UI is independent of the original dashboard's rendering code.
+from flow_routes import install as install_flow_routes
+install_flow_routes(app, authorize)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))

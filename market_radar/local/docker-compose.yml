@@ -37,7 +37,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
-    command: python /app/kiwoom_feed.py
+    command: python /app/flow_collector.py
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,7 +63,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
-    command: python /app/news_feed.py
+    command: python /app/flow_news_feed.py
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +76,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
-    command: python /app/chart_feed.py
+    command: python /app/flow_chart_feed.py
     depends_on:
       postgres:
         condition: service_healthy
@@ -158,7 +158,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
-    command: python /app/web_research_engine.py
+    command: python /app/flow_research_worker.py
     depends_on:
       postgres:
         condition: service_healthy
