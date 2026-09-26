@@ -167,11 +167,13 @@ def desk_payload():
     by_sector,_=group_rows(rows,history,'sector')
     rotation=rotation_series(rows,history,10)
     recent=sum(r['recent_trade'] for r in rows)
+    theme_mapped=sum(1 for r in rows if r.get('market_theme'))
     return {'generated_at':now.isoformat(),'sample_time':newest.isoformat() if newest else None,
             'refresh_target_seconds':30,'status':'RECENT_TRADES' if recent else 'NO_RECENT_TRADE_OR_WAITING',
             'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
             'theme_rotation':rotation,
-            'automation':automation,'coverage':coverage,'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
+            'automation':automation,'coverage':{**coverage,'theme_mapped_stocks':theme_mapped,'observed_stocks':len(rows)},
+            'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '
                      '시장테마는 Kiwoom 테마그룹 소속이며 가격 원인으로 단정하지 않습니다. '
                      '표본 진입·날짜변경·거래소범위변경은 폭증으로 계산하지 않습니다.'}
