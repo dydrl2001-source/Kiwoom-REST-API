@@ -15,18 +15,26 @@ def sample(t=0,tv=100000000,code='319660',day='2026-09-24',**kw):
  d.update(kw);return d
 
 class CoreTests(unittest.TestCase):
- def test_documented_units(self):
-  q=fc.quote({'stk_cd':'319660_AL','dt':'20260924','cntr_tm':'103000','cur_prc':'-10000','trde_prica':'100','mac':'1234'},NOW)
-  self.assertEqual(q['turnover_krw'],100_000_000);self.assertEqual(q['cap_krw'],123400000000);self.assertEqual(q['price_krw'],10000)
+ def test_validated_units(self):
+  q=fc.quote({'stk_cd':'319660_AL','dt':'20260924','cntr_tm':'103000','cur_prc':'-10000',
+              'low_pric':'9000','high_pric':'11000','trde_qty':'10000','trde_prica':'100',
+              'stkcnt':'12340000','mac':'1234'},NOW)
+  self.assertEqual(q['turnover_krw'],100_000_000);self.assertEqual(q['turnover_scale'],1_000_000)
+  self.assertEqual(q['cap_krw'],123400000000);self.assertEqual(q['cap_scale'],100_000_000)
+  self.assertEqual(q['price_krw'],10000)
  def test_no_magnitude_unit_guess(self):self.assertEqual(fc.amount('1000000000000',1000000),1000000000000000000)
  def test_nonfinite(self):
   for n in ('NaN','inf','bad',None):self.assertIsNone(fc.amount(n))
  def test_zero_not_missing(self):self.assertEqual(fc.amount('0',1000000),0)
  def test_negative_turnover_rejected(self):self.assertIsNone(fc.amount('-1',1000000))
  def test_quote_date_missing(self):self.assertIn('TRADE_DATE_MISSING',fc.quote({'stk_cd':'319660'},NOW)['quality_flags'])
- def test_volume_range_check(self):
+ def test_volume_reference_rejects_wrong_scale(self):
   q=fc.quote({'stk_cd':'319660','trde_prica':'1000','trde_qty':'10','low_pric':'10000','high_pric':'11000'},NOW)
-  self.assertIn('TURNOVER_VOLUME_RANGE_MISMATCH',q['quality_flags'])
+  self.assertIsNone(q['turnover_krw']);self.assertIn('TURNOVER_REFERENCE_MISMATCH',q['quality_flags'])
+ def test_missing_reference_never_guesses_money_scale(self):
+  q=fc.quote({'stk_cd':'319660','trde_prica':'100','mac':'1234'},NOW)
+  self.assertIsNone(q['turnover_krw']);self.assertIsNone(q['cap_krw'])
+  self.assertIn('TURNOVER_UNIT_UNRESOLVED',q['quality_flags']);self.assertIn('CAP_UNIT_UNRESOLVED',q['quality_flags'])
  def test_first_observation_not_burst(self):self.assertEqual(fc.delta(sample(),None)[1],'NO_BASELINE')
  def test_actual_interval(self):
   v,s,t=fc.delta(sample(32,130000000),sample(0,100000000));self.assertEqual((v,s,t),(30000000,'OK',32))
@@ -43,6 +51,11 @@ class CoreTests(unittest.TestCase):
  def test_sparse_baseline_no_score(self):self.assertIsNone(fc.metrics([sample(),sample(30,120000000)],NOW)['burst_multiple'])
  def test_sector_does_not_use_news_keywords(self):self.assertEqual(fc.segment('003490','대한항공','운송')[1],'항공')
  def test_unknown_is_unknown(self):self.assertEqual(fc.segment('123456','다른기업','금속')[1],'세부 분류 대기')
+ def test_market_theme_is_separate_from_business_segment(self):
+  h={'319660':[sample(0,0),sample(30,100),sample(60,200)]}
+  rows=[{**fc.metrics(h['319660'],NOW+timedelta(seconds=60)),'sector':'반도체','segment':'반도체 > 전공정 장비','market_theme':'AI 반도체','event_type':'기술·제품·양산'}]
+  groups,_=fc.group_rows(rows,h,'catalyst')
+  self.assertEqual(groups[0]['name'],'AI 반도체 / 기술·제품·양산')
  def test_common_cohort_share(self):
   h={'319660':[sample(0,0),sample(30,100),sample(60,300)],'222800':[sample(0,0,code='222800'),sample(30,100,code='222800'),sample(60,100,code='222800')]}
   rows=[{**fc.metrics(v,NOW+timedelta(seconds=60)),'sector':'반도체','segment':c} for c,v in h.items()]
