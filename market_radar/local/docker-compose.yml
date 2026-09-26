@@ -22,7 +22,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
-    command: python /app/radar_api.py
+    command: python /app/radar_web_app.py
     ports:
       - "8080:8080"
     depends_on:
@@ -149,6 +149,19 @@ services:
         condition: service_healthy
       research-engine:
         condition: service_started
+
+  web-research-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/web_research_engine.py
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   telegram-collector:
     build:
