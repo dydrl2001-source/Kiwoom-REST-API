@@ -96,6 +96,15 @@ def evidence_for(cur,code,name):
         for x in cur.fetchall():
             txt=re.sub(r"\s+"," ",x[2] or "").strip()
             out.append({"type":"telegram","title":txt[:500],"source":x[1],"time":x[0].isoformat() if x[0] else None,"link":x[3]})
+    cur.execute("SELECT to_regclass('public.dart_disclosures')")
+    if cur.fetchone()[0]:
+        cur.execute("""SELECT report_nm,category,rcept_dt,disclosure_url,flr_nm
+                       FROM dart_disclosures
+                       WHERE stock_code=%s AND rcept_dt>=current_date-interval '3 days'
+                       ORDER BY rcept_dt DESC,rcept_no DESC LIMIT 8""",(code,))
+        for x in cur.fetchall():
+            out.append({"type":"dart","title":x[0],"source":"DART · "+str(x[1] or "DISCLOSURE"),
+                        "time":x[2].isoformat() if x[2] else None,"link":x[3],"filer":x[4]})
     return out
 
 def score_one(rank,trade,evidence):
@@ -110,6 +119,8 @@ def score_one(rank,trade,evidence):
     elif tv_rank is not None and tv_rank<=20:score+=20;tr.append("거래대금 Top20")
     if chg is not None and abs(chg)>=20:score+=20;tr.append("등락폭 20%+")
     elif chg is not None and abs(chg)>=10:score+=12;tr.append("등락폭 10%+")
+    dart_count=sum(1 for x in evidence if x.get("type")=="dart")
+    if dart_count: score+=25;tr.append("DART 공시")
     if len(evidence)>=3:score+=12;tr.append("다채널/다기사")
     elif len(evidence)>=1:score+=6;tr.append("재료 후보")
     if tv_rank is not None and tv_rank<=20 and not evidence:
@@ -126,8 +137,11 @@ def synthesize(name,rank,trade,evidence,triggers,score):
     chg=rank.get("change") if rank.get("change") is not None else trade.get("change")
     headline=f"{name} · 조회 #{r if r is not None else '-'} · 대금 #{tv_rank if tv_rank is not None else '-'}"
     if chg is not None:headline+=f" · {chg:+.1f}%"
-    if tv_rank is not None and tv_rank<=20 and not evidence:
-        summary="거래대금이 먼저 강해졌지만 현재 수집 범위에서는 직접 연결되는 뉴스·Telegram 재료를 찾지 못했습니다. 심층조사 우선순위를 높입니다."
+    dart_ev=[x for x in evidence if x.get("type")=="dart"]
+    if dart_ev and tv_rank is not None and tv_rank<=20:
+        summary="최근 DART 공시와 거래대금 상위권이 함께 포착됐습니다. 공시 성격, 발표 시점, 동종주 반응을 우선 검증할 가치가 있습니다."
+    elif tv_rank is not None and tv_rank<=20 and not evidence:
+        summary="거래대금이 먼저 강해졌지만 현재 수집 범위에서는 직접 연결되는 뉴스·Telegram·공시 재료를 찾지 못했습니다. 심층조사 우선순위를 높입니다."
     elif evidence and tv_rank is not None and tv_rank<=20:
         summary="재료 후보와 거래대금 상위권이 함께 확인됩니다. 기사·Telegram의 신규성, 동일 섹터 동반 움직임, 재탕 여부를 추가 검증할 가치가 있습니다."
     elif evidence:
