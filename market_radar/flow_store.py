@@ -5,7 +5,7 @@ from datetime import datetime,timezone,timedelta
 import json
 import os
 import re
-from flow_core import quote, metrics, group_rows, segment, dt, event_from_report, report_sections, SPEC, VERSION
+from flow_core import quote, metrics, group_rows, rotation_series, segment, dt, event_from_report, report_sections, SPEC, VERSION
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS radar_flow_quotes (
@@ -165,10 +165,12 @@ def desk_payload():
     by_catalyst,coverage=group_rows(rows,history,'catalyst')
     by_theme,_=group_rows(rows,history,'theme')
     by_sector,_=group_rows(rows,history,'sector')
+    rotation=rotation_series(rows,history,10)
     recent=sum(r['recent_trade'] for r in rows)
     return {'generated_at':now.isoformat(),'sample_time':newest.isoformat() if newest else None,
             'refresh_target_seconds':30,'status':'RECENT_TRADES' if recent else 'NO_RECENT_TRADE_OR_WAITING',
             'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
+            'theme_rotation':rotation,
             'automation':automation,'coverage':coverage,'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '
                      '시장테마는 Kiwoom 테마그룹 소속이며 가격 원인으로 단정하지 않습니다. '
