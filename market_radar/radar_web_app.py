@@ -1,6 +1,7 @@
 """Add isolated, authenticated external research endpoints to the existing app."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 import secrets
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from fastapi import Header, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 import radar_api as base
 from web_research_engine import Config, ResearchError, enqueue, ensure_schema, status_payload
@@ -29,7 +31,21 @@ def prepare_storage() -> None:
         print("web research storage not ready:", type(exc).__name__, flush=True)
 
 
-app.add_event_handler("startup", prepare_storage)
+# Starlette 1.x removed app.add_event_handler(). Preserve the original app's
+# lifespan instead of calling removed startup APIs or replacing its other hooks.
+_base_lifespan = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def lifespan_with_web_research(application):
+    async with _base_lifespan(application) as state:
+        # Database initialization is blocking I/O; do not block the event loop.
+        # This only prepares local tables. It never enqueues or calls paid AI.
+        await run_in_threadpool(prepare_storage)
+        yield state
+
+
+app.router.lifespan_context = lifespan_with_web_research
 
 
 @app.get("/api/web-research")
