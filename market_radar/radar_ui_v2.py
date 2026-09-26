@@ -28,16 +28,16 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .stock-mini .name{font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stock-mini .num{display:flex;justify-content:space-between;margin-top:4px;font-size:11px}.rank-badge{font-size:9px;color:#fff;background:#7b8799;border-radius:4px;padding:1px 4px}
 .tblwrap{overflow:auto;max-height:660px}.tbl{width:100%;border-collapse:collapse;min-width:980px}.tbl th,.tbl td{padding:8px 8px;border-bottom:1px solid #edf1f6;text-align:right;vertical-align:middle;white-space:nowrap}.tbl th{position:sticky;top:0;background:#f8fafc;color:var(--muted);font-size:10px;z-index:2}.tbl .left{text-align:left}.tbl .wrap{white-space:normal;min-width:220px;text-align:left}
 .stockname{font-weight:850}.sub{font-size:10px;color:var(--muted)}
-.material-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.material-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}
+.material-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}.priority{font-size:18px;font-weight:900}.deep{color:#9b5b00;background:#fff2dc}.material-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}
 .material-top{display:flex;justify-content:space-between;gap:6px}.material-card h3{font-size:14px;margin:0}.material-summary{font-weight:750;margin:8px 0 5px;line-height:1.5}.material-why{font-size:11px;color:#516078;background:#f6f8fb;padding:7px;border-radius:7px}
 details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evidence{border-top:1px solid #edf1f6;margin-top:7px;padding-top:7px;font-size:11px}.evidence p{margin:4px 0}.links{display:flex;gap:7px;flex-wrap:wrap}
 .mimosa-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.index-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.chart-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.chart-title{display:flex;justify-content:space-between;align-items:end;margin-bottom:6px}.chart-title b{font-size:14px}.svgchart{width:100%;height:210px;display:block}.strategy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.strategy-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.strategy-card h3{font-size:13px;margin:0}.strategy-score{font-weight:900;font-size:16px}.strategy-note{font-size:10px;color:var(--muted);margin-top:6px}.m-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.m-head{display:flex;justify-content:space-between}.m-state{font-size:13px;font-weight:900;margin-top:6px}.score{font-weight:900}.reason{font-size:10px;color:var(--muted);margin-top:5px}.fb{display:flex;gap:5px;margin-top:8px}.fb button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 7px;font-size:10px;color:#5d6b7f;cursor:pointer}.fb button:hover{background:#f3f6fa}.fb .sent{background:#eaf6f1;color:#187a59}
 .bottom{display:none}
-@media(max-width:1100px){.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
+@media(max-width:1100px){.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
 @media(max-width:700px){
  .app{padding:10px 8px 82px}.head{margin-bottom:6px}.brand{font-size:20px}.statusbar{grid-template-columns:1fr 1fr;gap:6px}.stat{min-height:61px;padding:8px}
  .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.sector-grid{grid-template-columns:1fr 1fr;gap:6px}.stock-list{grid-template-columns:1fr}.stock-mini{border-right:0}
- .material-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
+ .material-grid,.research-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
  .bottom button{border:0;background:transparent;color:#78869b;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px}.bottom button.active{color:#1c2b45;font-weight:900}.bottom b{font-size:16px;line-height:1}
 }
 </style></head>
@@ -59,6 +59,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <button class="tab" data-view="sector">섹터</button>
  <button class="tab" data-view="trade">거래대금</button>
  <button class="tab" data-view="material">재료·뉴스</button>
+ <button class="tab" data-view="research">리서치</button>
  <button class="tab" data-view="mimosa">미모사</button>
 </div>
 
@@ -109,6 +110,12 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div class="material-grid" id="materials"></div>
 </section>
 
+<section class="view" id="view-research">
+ <div class="section-title"><h2>Research Agent 큐</h2><span>조회 급등 · 거래대금 신규진입 · 돈 선행 재료미확인 자동 감지</span></div>
+ <div class="panel pad" style="margin-bottom:8px"><b id="researchStatus">Research Engine 대기</b><div class="sub" style="margin-top:5px">현재 단계는 Mac mini의 로컬 데이터로 우선순위를 만들고 근거를 묶는 LOCAL_RULES 모드입니다. 외부 심층 AI 조사는 별도 브리지를 붙일 종목만 표시합니다.</div></div>
+ <div class="research-grid" id="researchCards"></div>
+</section>
+
 <section class="view" id="view-mimosa">
  <div class="section-title"><h2>미모사 · 기본 차트 상태</h2><span>M수렴 · 전고 · 추세 · 돌파</span></div>
  <div class="panel pad" style="margin-bottom:8px"><b>기본 기준</b><div class="legend" style="margin-top:7px"><span class="pill">M 수렴</span><span class="pill">M 수렴 후 돌파</span><span class="pill">전고점 접근</span><span class="pill">돌파 후 지지</span><span class="pill">분봉 추세 유지</span><span class="pill">추세 훼손</span></div></div>
@@ -126,11 +133,10 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div class="panel pad" style="margin-bottom:8px"><div class="sub">과대낙폭과 분리합니다. 당일 거래대금·조회 관심이 유지된 강세주가 고점 대비 급락했는지, 최근 분봉에서 매도 속도가 둔화되는지를 감시합니다.</div></div>
  <div class="strategy-grid" id="fallingCards"></div>
 </section>
-</section>
 </div>
 
 <div class="bottom" id="bottom">
- <button class="active" data-view="home"><b>⌂</b>홈</button><button data-view="index"><b>⌁</b>지수</button><button data-view="query"><b>⌕</b>조회</button><button data-view="sector"><b>▦</b>섹터</button><button data-view="trade"><b>₩</b>대금</button><button data-view="material"><b>◆</b>재료</button><button data-view="mimosa"><b>M</b>미모사</button>
+ <button class="active" data-view="home"><b>⌂</b>홈</button><button data-view="index"><b>⌁</b>지수</button><button data-view="query"><b>⌕</b>조회</button><button data-view="sector"><b>▦</b>섹터</button><button data-view="trade"><b>₩</b>대금</button><button data-view="material"><b>◆</b>재료</button><button data-view="research"><b>R</b>리서치</button><button data-view="mimosa"><b>M</b>미모사</button>
 </div>
 
 <script>
@@ -250,6 +256,16 @@ function strategyCards(list,kind){
  }).join("");
 }
 
+
+function researchCards(rows){
+ if(!(rows||[]).length)return '<div class="panel pad muted">현재 Research Agent 트리거가 없습니다.</div>';
+ return (rows||[]).map(x=>{
+   const triggers=(x.triggers||[]).map(t=>'<span class="pill">'+esc(t)+'</span>').join("");
+   const evidence=(x.evidence||[]).slice(0,5).map(e=>'<div class="evidence"><b>'+esc(e.source||e.type||"근거")+'</b><p>'+esc(e.title||"")+'</p>'+(e.link?'<a href="'+esc(e.link)+'" target="_blank">원문</a>':"")+'</div>').join("");
+   return '<article class="research-card"><div class="material-top"><div><h3>'+esc(x.name||x.code)+'</h3><div class="sub">'+esc(x.created_at?new Date(x.created_at).toLocaleString("ko-KR"):"")+'</div></div><div class="priority">'+esc(x.priority)+'</div></div><div class="legend" style="margin-top:7px">'+triggers+(x.deep_research_needed?'<span class="pill deep">심층조사 필요</span>':'')+'</div><div class="material-summary">'+esc(x.headline||"")+'</div><div class="material-why">'+esc(x.summary||"")+'</div><details><summary>수집 근거 보기 · '+esc((x.evidence||[]).length)+'건</summary>'+evidence+'</details></article>';
+ }).join("");
+}
+
 function render(d){
  DATA=d;
  document.getElementById("stamp").textContent=new Date(d.generated_at).toLocaleString("ko-KR");
@@ -265,6 +281,9 @@ function render(d){
  document.getElementById("newsSub").textContent="확산 "+(ms.spreading||0)+" · 약한언급 "+(ms.weak||0)+" · Telegram "+(d.system.telegram.count_24h||0).toLocaleString()+"건";
  document.getElementById("turnover").textContent=d.regime_metrics?.rank_turnover_5m==null?"-":pct(d.regime_metrics.rank_turnover_5m);
  document.getElementById("mimosaStatus").textContent=d.system.mimosa?.status||"미연결";
+ const re=d.system.research||{};
+ const rsEl=document.getElementById("researchStatus");
+ if(rsEl)rsEl.textContent="Research Engine "+(re.status||"미연결")+(re.note?" · "+re.note:"");
  document.getElementById("mimosaSub").textContent=d.system.chartfeed?.status?"차트 "+d.system.chartfeed.status:"";
  document.getElementById("analysis").innerHTML=(d.analysis?.lines||[]).map(x=>'<div class="analysis-line">'+esc(x)+'</div>').join("")||'<span class="muted">시장 분석 대기</span>';
  const sig=[];
@@ -283,6 +302,7 @@ function render(d){
  document.getElementById("etfTradeRows").innerHTML=renderEtfRows(d.etf_trade_ranking);
  document.getElementById("officialSectors").innerHTML=(d.sectors||[]).map(x=>'<tr><td class="left"><b>'+esc(x.name)+'</b></td><td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td><td>'+esc(money(x.trade_value_krw))+'</td><td>'+esc(x.rising??"-")+'</td><td>'+esc(x.falling??"-")+'</td></tr>').join("");
  document.getElementById("materials").innerHTML=materialCards(d.materials);
+ document.getElementById("researchCards").innerHTML=researchCards(d.research_rows);
  document.getElementById("mimosaCards").innerHTML=mimosaCards(d.mimosa_rows);
  const ix=d.index_charts||{};
  const kp=ix.KOSPI||{}, kq=ix.KOSDAQ||{};
