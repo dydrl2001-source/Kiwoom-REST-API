@@ -1,4 +1,4 @@
-import os, json, re
+import os, json, re, secrets
 from datetime import datetime, timedelta, timezone, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -12,6 +12,7 @@ except Exception:
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
+KIWOOM_INGEST_TOKEN = os.getenv("KIWOOM_INGEST_TOKEN", "")
 app = FastAPI(title="Market Radar", version="0.6.1")
 
 THEME_KEYWORDS = {
@@ -1076,6 +1077,209 @@ async function load(){
 }
 load();setInterval(load,10000);
 </script></body></html>"""
+
+
+def require_kiwoom_ingest_token(x_kiwoom_ingest_token: Optional[str] = Header(None)):
+    if not KIWOOM_INGEST_TOKEN or not x_kiwoom_ingest_token or not secrets.compare_digest(x_kiwoom_ingest_token, KIWOOM_INGEST_TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+def ensure_kiwoom_ingest_schema(cur):
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS kiwoom_feed_status(
+      id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
+      updated_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL,
+      mode TEXT,
+      last_success_at TIMESTAMPTZ,
+      note TEXT,
+      last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS stock_master(
+      stock_code TEXT PRIMARY KEY,
+      stock_name TEXT,
+      market_name TEXT,
+      official_sector TEXT,
+      size_class TEXT,
+      nxt_enabled TEXT,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS market_rank_snapshots(
+      snapshot_time TIMESTAMPTZ NOT NULL,
+      stock_code TEXT NOT NULL,
+      stock_name TEXT,
+      rank_no INTEGER,
+      rank_change INTEGER,
+      change_rate DOUBLE PRECISION,
+      market_cap_krw NUMERIC,
+      official_sector TEXT,
+      market_theme TEXT,
+      current_price_krw NUMERIC,
+      PRIMARY KEY(snapshot_time,stock_code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rank_time ON market_rank_snapshots(snapshot_time DESC);
+    CREATE TABLE IF NOT EXISTS market_trade_value_snapshots(
+      snapshot_time TIMESTAMPTZ NOT NULL,
+      stock_code TEXT NOT NULL,
+      stock_name TEXT,
+      rank_no INTEGER,
+      trade_value_krw NUMERIC,
+      change_rate DOUBLE PRECISION,
+      market_cap_krw NUMERIC,
+      official_sector TEXT,
+      market_theme TEXT,
+      current_price_krw NUMERIC,
+      PRIMARY KEY(snapshot_time,stock_code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trade_time ON market_trade_value_snapshots(snapshot_time DESC);
+    CREATE TABLE IF NOT EXISTS market_sector_snapshots(
+      snapshot_time TIMESTAMPTZ NOT NULL,
+      sector_code TEXT NOT NULL,
+      sector_name TEXT NOT NULL,
+      change_rate DOUBLE PRECISION,
+      trade_value_krw NUMERIC,
+      rising_count INTEGER,
+      flat_count INTEGER,
+      falling_count INTEGER,
+      PRIMARY KEY(snapshot_time,sector_code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sector_time ON market_sector_snapshots(snapshot_time DESC);
+    CREATE TABLE IF NOT EXISTS market_index_snapshots(
+      snapshot_time TIMESTAMPTZ NOT NULL,
+      index_code TEXT NOT NULL,
+      index_name TEXT NOT NULL,
+      current_value DOUBLE PRECISION,
+      change_rate DOUBLE PRECISION,
+      open_value DOUBLE PRECISION,
+      high_value DOUBLE PRECISION,
+      low_value DOUBLE PRECISION,
+      PRIMARY KEY(snapshot_time,index_code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_index_time ON market_index_snapshots(snapshot_time DESC);
+    ALTER TABLE market_rank_snapshots ADD COLUMN IF NOT EXISTS current_price_krw NUMERIC;
+    ALTER TABLE market_trade_value_snapshots ADD COLUMN IF NOT EXISTS current_price_krw NUMERIC;
+    """)
+
+def _num(v, cast=float):
+    if v is None or v == "":
+        return None
+    try:
+        return cast(v)
+    except Exception:
+        return None
+
+@app.post("/api/kiwoom/ingest")
+def kiwoom_ingest(payload: dict = Body(...), _auth=Header(None, alias="x-kiwoom-ingest-token")):
+    require_kiwoom_ingest_token(_auth)
+    mode = str(payload.get("mode") or "external").strip().lower()
+    if mode not in ("demo","real","external"):
+        raise HTTPException(status_code=400, detail="invalid mode")
+    try:
+        snap_raw = payload.get("snapshot_time")
+        snap = datetime.fromisoformat(str(snap_raw).replace("Z","+00:00")) if snap_raw else datetime.now(timezone.utc)
+        if snap.tzinfo is None:
+            snap = snap.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if abs((now - snap.astimezone(timezone.utc)).total_seconds()) > 3600:
+            raise HTTPException(status_code=400, detail="snapshot_time too old or too far in future")
+
+        rank = payload.get("rank") or []
+        trade = payload.get("trade") or []
+        sectors = payload.get("sectors") or []
+        indices = payload.get("indices") or []
+        meta = payload.get("stock_meta") or []
+        if not isinstance(rank,list) or not isinstance(trade,list) or not isinstance(sectors,list) or not isinstance(indices,list):
+            raise HTTPException(status_code=400, detail="invalid payload shape")
+        if len(rank) > 200 or len(trade) > 200 or len(sectors) > 500 or len(indices) > 20 or len(meta) > 5000:
+            raise HTTPException(status_code=413, detail="payload too large")
+
+        with get_db() as c, c.cursor() as cur:
+            ensure_kiwoom_ingest_schema(cur)
+
+            for m in meta:
+                code=str(m.get("stock_code") or "").replace("_AL","").replace("_NX","").strip()
+                if not code: continue
+                cur.execute("""INSERT INTO stock_master(stock_code,stock_name,market_name,official_sector,size_class,nxt_enabled,updated_at)
+                               VALUES(%s,%s,%s,%s,%s,%s,now())
+                               ON CONFLICT(stock_code) DO UPDATE SET stock_name=COALESCE(excluded.stock_name,stock_master.stock_name),
+                               market_name=COALESCE(excluded.market_name,stock_master.market_name),
+                               official_sector=COALESCE(excluded.official_sector,stock_master.official_sector),
+                               size_class=COALESCE(excluded.size_class,stock_master.size_class),
+                               nxt_enabled=COALESCE(excluded.nxt_enabled,stock_master.nxt_enabled),updated_at=now()""",
+                            (code,m.get("stock_name"),m.get("market_name"),m.get("official_sector"),m.get("size_class"),m.get("nxt_enabled")))
+
+            for r in rank:
+                code=str(r.get("stock_code") or "").replace("_AL","").replace("_NX","").strip()
+                if not code: continue
+                cur.execute("""INSERT INTO market_rank_snapshots(snapshot_time,stock_code,stock_name,rank_no,rank_change,change_rate,
+                               market_cap_krw,official_sector,market_theme,current_price_krw)
+                               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(snapshot_time,stock_code) DO UPDATE SET
+                               stock_name=excluded.stock_name,rank_no=excluded.rank_no,rank_change=excluded.rank_change,
+                               change_rate=excluded.change_rate,market_cap_krw=excluded.market_cap_krw,
+                               official_sector=excluded.official_sector,market_theme=excluded.market_theme,current_price_krw=excluded.current_price_krw""",
+                            (snap,code,r.get("stock_name"),_num(r.get("rank_no"),int),_num(r.get("rank_change"),int),
+                             _num(r.get("change_rate")),_num(r.get("market_cap_krw")),r.get("official_sector"),
+                             r.get("market_theme"),_num(r.get("current_price_krw"))))
+
+            for r in trade:
+                code=str(r.get("stock_code") or "").replace("_AL","").replace("_NX","").strip()
+                if not code: continue
+                cur.execute("""INSERT INTO market_trade_value_snapshots(snapshot_time,stock_code,stock_name,rank_no,trade_value_krw,
+                               change_rate,market_cap_krw,official_sector,market_theme,current_price_krw)
+                               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(snapshot_time,stock_code) DO UPDATE SET
+                               stock_name=excluded.stock_name,rank_no=excluded.rank_no,trade_value_krw=excluded.trade_value_krw,
+                               change_rate=excluded.change_rate,market_cap_krw=excluded.market_cap_krw,
+                               official_sector=excluded.official_sector,market_theme=excluded.market_theme,current_price_krw=excluded.current_price_krw""",
+                            (snap,code,r.get("stock_name"),_num(r.get("rank_no"),int),_num(r.get("trade_value_krw")),
+                             _num(r.get("change_rate")),_num(r.get("market_cap_krw")),r.get("official_sector"),
+                             r.get("market_theme"),_num(r.get("current_price_krw"))))
+
+            for r in sectors:
+                scode=str(r.get("sector_code") or r.get("sector_name") or "").strip()
+                if not scode: continue
+                cur.execute("""INSERT INTO market_sector_snapshots(snapshot_time,sector_code,sector_name,change_rate,trade_value_krw,
+                               rising_count,flat_count,falling_count)
+                               VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(snapshot_time,sector_code) DO UPDATE SET
+                               sector_name=excluded.sector_name,change_rate=excluded.change_rate,trade_value_krw=excluded.trade_value_krw,
+                               rising_count=excluded.rising_count,flat_count=excluded.flat_count,falling_count=excluded.falling_count""",
+                            (snap,scode,r.get("sector_name") or scode,_num(r.get("change_rate")),_num(r.get("trade_value_krw")),
+                             _num(r.get("rising_count"),int),_num(r.get("flat_count"),int),_num(r.get("falling_count"),int)))
+
+            for r in indices:
+                icode=str(r.get("index_code") or "").strip()
+                if not icode: continue
+                cur.execute("""INSERT INTO market_index_snapshots(snapshot_time,index_code,index_name,current_value,change_rate,
+                               open_value,high_value,low_value)
+                               VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(snapshot_time,index_code) DO UPDATE SET
+                               index_name=excluded.index_name,current_value=excluded.current_value,change_rate=excluded.change_rate,
+                               open_value=excluded.open_value,high_value=excluded.high_value,low_value=excluded.low_value""",
+                            (snap,icode,r.get("index_name") or icode,_num(r.get("current_value")),_num(r.get("change_rate")),
+                             _num(r.get("open_value")),_num(r.get("high_value")),_num(r.get("low_value"))))
+
+            note=f"windows_ingest rank={len(rank)} trade={len(trade)} sectors={len(sectors)} indices={len(indices)}"
+            cur.execute("""INSERT INTO kiwoom_feed_status(id,updated_at,status,mode,last_success_at,note,last_error)
+                           VALUES(1,now(),'OK',%s,now(),%s,NULL)
+                           ON CONFLICT(id) DO UPDATE SET updated_at=now(),status='OK',mode=excluded.mode,
+                           last_success_at=now(),note=excluded.note,last_error=NULL""",(mode,note))
+            c.commit()
+        return {"ok":True,"snapshot_time":snap.isoformat(),"rank":len(rank),"trade":len(trade),"sectors":len(sectors),"indices":len(indices)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            with get_db() as c, c.cursor() as cur:
+                ensure_kiwoom_ingest_schema(cur)
+                cur.execute("""INSERT INTO kiwoom_feed_status(id,updated_at,status,mode,last_success_at,note,last_error)
+                               VALUES(1,now(),'ERROR',%s,NULL,'Windows ingest error',%s)
+                               ON CONFLICT(id) DO UPDATE SET updated_at=now(),status='ERROR',mode=excluded.mode,
+                               note='Windows ingest error',last_error=excluded.last_error""",(mode,str(e)[:500]))
+                c.commit()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="ingest failed")
 
 @app.get("/", response_class=HTMLResponse)
 def root():
