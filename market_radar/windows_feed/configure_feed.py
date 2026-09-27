@@ -9,11 +9,22 @@ def ask(label,default=""):
     v=input(f"{label}{suffix}: ").strip()
     return v or default
 
+existing={}
+if ENV.exists():
+    for raw in ENV.read_text(encoding="utf-8-sig").splitlines():
+        line=raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k,v=line.split("=",1); existing[k.strip()]=v.strip()
+
 print("Kiwoom Windows Feed 설정")
 print("- 키 값은 화면에 다시 출력하지 않습니다.")
-mode=ask("모드 (demo/real)","demo").lower()
-url=ask("Radar API URL","https://radar-api-production-b5e2.up.railway.app").rstrip("/")
-ingest=getpass.getpass("KIWOOM_INGEST_TOKEN: ").strip()
+mode=ask("모드 (demo/real)",existing.get("KIWOOM_MODE","demo")).lower()
+url=ask("Radar API URL",existing.get("RADAR_INGEST_URL","https://radar-api-production-b5e2.up.railway.app")).rstrip("/")
+ingest=existing.get("KIWOOM_INGEST_TOKEN","").strip()
+if ingest:
+    print("KIWOOM_INGEST_TOKEN: 이미 설정됨")
+else:
+    ingest=getpass.getpass("KIWOOM_INGEST_TOKEN: ").strip()
 if mode=="real":
     key=getpass.getpass("실전 APP_KEY: ").strip()
     secret=getpass.getpass("실전 APP_SECRET: ").strip()
