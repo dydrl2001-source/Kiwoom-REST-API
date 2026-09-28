@@ -553,8 +553,11 @@ def learning_payload():
         "ruleset_dry_run":{
             "enabled":os.getenv("MARKET_OS_RULESET_DRY_RUN_ENABLED","1").strip().lower() in {"1","true","yes","on"},
             "rulesets":[],"summaries":[],"events":[],
+            "succession_decisions":[],"succession_events":[],
+            "succession_summary":{"collecting":0,"comparable":0,"stable":0,
+                                  "succession_candidate":0,"more_data":0,"reject":0},
             "summary":{"active":0,"stopped":0,"stale_source":0,"observations":0,"changed":0},
-            "notice":"APPROVED_DRY_RUN dossier를 사람이 다시 시작한 뒤 CONTROL market-os-v1과 immutable candidate ruleset을 prospective로 병렬 계산합니다. live Market OS는 변경하지 않습니다."
+            "notice":"APPROVED_DRY_RUN dossier를 사람이 다시 시작한 뒤 CONTROL market-os-v1과 immutable candidate ruleset을 prospective로 병렬 계산합니다. SUCCESSION_CANDIDATE도 release 검토 자격일 뿐 live Market OS는 변경하지 않습니다."
         },
         "notes":[],"daily_assessments":[],
     }
@@ -867,6 +870,51 @@ def learning_payload():
                 x=dict(r)
                 x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
                 learning["ruleset_dry_run"]["events"].append(x)
+        if exists(cur,"market_os_ruleset_succession_decisions"):
+            cur.execute("""SELECT d.ruleset_id,d.decision_state,d.review_eligible,
+                                  d.primary_cohort,d.reason_codes,d.evidence,
+                                  d.manual_review_state,d.state_since,d.updated_at,
+                                  r.version_label,r.status,r.source_dossier_id
+                           FROM market_os_ruleset_succession_decisions d
+                           LEFT JOIN market_os_versioned_rulesets r
+                             ON r.ruleset_id=d.ruleset_id
+                           ORDER BY CASE d.decision_state
+                               WHEN 'SUCCESSION_CANDIDATE' THEN 1
+                               WHEN 'RULESET_STABLE' THEN 2
+                               WHEN 'RULESET_COMPARABLE' THEN 3
+                               WHEN 'RULESET_MORE_DATA' THEN 4
+                               WHEN 'RULESET_COLLECTING' THEN 5
+                               WHEN 'RULESET_REJECT' THEN 6 ELSE 7 END,
+                               d.updated_at DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("state_since","updated_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["ruleset_dry_run"]["succession_decisions"].append(x)
+            for state,key in (
+                ("RULESET_COLLECTING","collecting"),
+                ("RULESET_COMPARABLE","comparable"),
+                ("RULESET_STABLE","stable"),
+                ("SUCCESSION_CANDIDATE","succession_candidate"),
+                ("RULESET_MORE_DATA","more_data"),
+                ("RULESET_REJECT","reject")
+            ):
+                learning["ruleset_dry_run"]["succession_summary"][key]=sum(
+                    x["decision_state"]==state
+                    for x in learning["ruleset_dry_run"]["succession_decisions"]
+                )
+        if exists(cur,"market_os_ruleset_succession_events"):
+            cur.execute("""SELECT e.event_id,e.ruleset_id,e.event_time,e.from_state,e.to_state,
+                                  e.review_eligible,e.reason_codes,
+                                  r.version_label,r.status,r.source_dossier_id
+                           FROM market_os_ruleset_succession_events e
+                           LEFT JOIN market_os_versioned_rulesets r
+                             ON r.ruleset_id=e.ruleset_id
+                           ORDER BY e.event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["ruleset_dry_run"]["succession_events"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
