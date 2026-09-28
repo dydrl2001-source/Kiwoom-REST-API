@@ -244,6 +244,27 @@
    body.append(el('div','Dossier 심사 이력','mos-section-title'));const aeScroll=el('div',null,'mos-scroll'),aeTable=el('table',null,'mos-learn-table'),aeHead=el('tr');['시각','Dossier','이벤트','이전','현재','메모'].forEach(v=>aeHead.append(el('th',v)));const aeThead=el('thead');aeThead.append(aeHead);const aeBody=el('tbody');
    for(const e of are.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.dossier_id||'—','mos-code'),el('td',e.event_type||'—'),el('td',reviewKo(e.from_review_state)),el('td',reviewKo(e.to_review_state),e.to_review_state==='APPROVED_DRY_RUN'?'mos-up':e.to_review_state==='REJECTED'?'mos-down':''),el('td',e.note||'—','mos-micro'));aeBody.append(tr);}
    if(!are.length){const tr=el('tr'),td=el('td','아직 dossier 심사 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);aeBody.append(tr);}aeTable.append(aeThead,aeBody);aeScroll.append(aeTable);body.append(aeScroll);
+   body.append(el('div','Versioned Ruleset Dry Run','mos-section-title'));
+   const rd=learn.ruleset_dry_run||{},rds=rd.summary||{},rr=rd.rulesets||[],rsum=rd.summaries||[],rev=rd.events||[],rg=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['Active',rds.active||0,'사람이 시작한 candidate ruleset'],
+     ['Stopped',rds.stopped||0,'수동 중지'],
+     ['Stale',rds.stale_source||0,'source Decision 이탈'],
+     ['관측',rds.observations||0,'activation 이후 prospective'],
+     ['변경',rds.changed||0,'CONTROL과 tier가 달라진 건']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));rg.append(card);}body.append(rg);
+   body.append(el('div',rd.notice||'승인된 candidate ruleset을 CONTROL과 병렬 계산합니다.','mos-note'));
+   const rsScroll=el('div',null,'mos-scroll'),rsTable=el('table',null,'mos-learn-table'),rsHead=el('tr');
+   ['상태','Ruleset','Version','Base','Dossier','관측','변경','활성시각','마지막평가'].forEach(v=>rsHead.append(el('th',v)));const rsThead=el('thead');rsThead.append(rsHead);const rsBody=el('tbody');
+   for(const r of rr.slice(0,30)){const tr=el('tr');const cls=r.status==='DRY_RUN_ACTIVE'?'mos-up':r.status==='STALE_SOURCE'?'mos-down':'';tr.append(el('td',r.status,cls),el('td',r.ruleset_id||'—','mos-code'),el('td',r.version_label||'—','mos-code'),el('td',r.base_rule_version||'—'),el('td',r.source_dossier_id||'—','mos-code'),el('td',r.observations??0),el('td',r.changed??0),el('td',stamp(r.activated_at)),el('td',stamp(r.last_evaluated_at)));rsBody.append(tr);}
+   if(!rr.length){const tr=el('tr'),td=el('td','APPROVED_DRY_RUN dossier를 사람이 dry-run-start 해야 versioned ruleset이 생성됩니다.','mos-empty');td.colSpan=9;tr.append(td);rsBody.append(tr);}rsTable.append(rsThead,rsBody);rsScroll.append(rsTable);body.append(rsScroll);
+   body.append(el('div','Ruleset CONTROL vs CANDIDATE','mos-section-title'));const rcScroll=el('div',null,'mos-scroll'),rcTable=el('table',null,'mos-learn-table'),rcHead=el('tr');
+   ['Ruleset','구간','Cohort','상태','변경','Control N','Candidate N','Control 평균','Candidate 평균','Δ평균','Δ양(+)','ΔMAE'].forEach(v=>rcHead.append(el('th',v)));const rcThead=el('thead');rcThead.append(rcHead);const rcBody=el('tbody');
+   for(const s of rsum.slice(0,80)){const tr=el('tr'),d=s.delta_avg_return_pct;tr.append(el('td',(s.ruleset_id||'').slice(0,16),'mos-code'),el('td',s.horizon),el('td',s.cohort),el('td',stateKo(s.evidence_state)),el('td',s.membership_changes??0),el('td',s.control_samples??0),el('td',s.candidate_samples??0),el('td',pct(s.control_avg_return_pct)),el('td',pct(s.candidate_avg_return_pct)),el('td',d==null?'—':((d>=0?'+':'')+fmt(d,2)+'%p'),d>0?'mos-up':d<0?'mos-down':''),el('td',s.delta_positive_rate_pp==null?'—':((s.delta_positive_rate_pp>=0?'+':'')+fmt(s.delta_positive_rate_pp,1)+'%p')),el('td',s.delta_mae_pct==null?'—':((s.delta_mae_pct>=0?'+':'')+fmt(s.delta_mae_pct,2)+'%p')));rcBody.append(tr);}
+   if(!rsum.length){const tr=el('tr'),td=el('td','Dry Run outcome이 쌓이면 전체 ruleset 비교가 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);rcBody.append(tr);}rcTable.append(rcThead,rcBody);rcScroll.append(rcTable);body.append(rcScroll);
+   body.append(el('div','Ruleset 이력','mos-section-title'));const rvScroll=el('div',null,'mos-scroll'),rvTable=el('table',null,'mos-learn-table'),rvHead=el('tr');['시각','Ruleset','이벤트','이전','현재'].forEach(v=>rvHead.append(el('th',v)));const rvThead=el('thead');rvThead.append(rvHead);const rvBody=el('tbody');
+   for(const e of rev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.ruleset_id||'—','mos-code'),el('td',e.event_type||'—'),el('td',e.from_status||'—'),el('td',e.to_status||'—'));rvBody.append(tr);}
+   if(!rev.length){const tr=el('tr'),td=el('td','아직 ruleset 상태 이력이 없습니다.','mos-empty');td.colSpan=5;tr.append(td);rvBody.append(tr);}rvTable.append(rvThead,rvBody);rvScroll.append(rvTable);body.append(rvScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
