@@ -225,11 +225,16 @@ class Aggregator:
         self.last_cum={}
         self.total_ticks=0
         self.total_gaps=0
+        self.baseline_codes=set()
 
     def set_codes(self,codes):
         seeded=seed_cumulative(codes)
         for code,v in seeded.items():
             self.last_cum.setdefault(code,v)
+        # The first tick after subscribe/reconnect establishes a fresh baseline.
+        # Any cumulative-volume jump since the previous process is downtime, not
+        # an in-stream packet-loss event. Missing time is handled by bar coverage.
+        self.baseline_codes.update(codes)
 
     @staticmethod
     def _accumulate(store,key,time_key,ts,code,px,vol,signed_vol,gap,vals,cum):
@@ -261,7 +266,9 @@ class Aggregator:
 
         prev=self.last_cum.get(code);gap=0
         if cum is not None:
-            if prev is not None:
+            if code in self.baseline_codes:
+                self.baseline_codes.discard(code)
+            elif prev is not None:
                 delta=cum-prev
                 if delta==0:return
                 if delta>0 and delta>vol+1e-9:gap=1
