@@ -25,6 +25,8 @@ EXIT_SCORE=max(0,min(100,int(os.getenv("PAPER_EXIT_SCORE","55"))))
 MAX_HOLD_MIN=max(5,min(180,int(os.getenv("PAPER_MAX_HOLD_MINUTES","30"))))
 MAX_OPEN=max(1,min(20,int(os.getenv("PAPER_MAX_OPEN","5"))))
 QUOTE_FRESH_SEC=max(30,min(300,int(os.getenv("PAPER_QUOTE_FRESH_SECONDS","120"))))
+AI_DECISION_FRESH_SEC=max(30,min(600,int(os.getenv("PAPER_AI_DECISION_FRESH_SECONDS","180"))))
+REQUIRE_AI_BROKERAGE=os.getenv("PAPER_REQUIRE_AI_BROKERAGE","0").strip().lower() in ("1","true","yes","on")
 RULE_VERSION="paper-v1-observation"
 
 SCHEMA="""
@@ -61,6 +63,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_open_code
   ON radar_paper_trades(stock_code) WHERE status='OPEN';
 CREATE INDEX IF NOT EXISTS idx_paper_opened ON radar_paper_trades(opened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_rule_type ON radar_paper_trades(rule_version,primary_type,opened_at DESC);
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS strategy_id TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS strategy_name TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS strategy_family TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS strategy_lifecycle TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS strategy_fit DOUBLE PRECISION;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_conviction DOUBLE PRECISION;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_decision_time TIMESTAMPTZ;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_decision_version TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS regime_label TEXT;
+CREATE INDEX IF NOT EXISTS idx_paper_strategy_time ON radar_paper_trades(strategy_id,opened_at DESC);
 
 CREATE TABLE IF NOT EXISTS radar_paper_events(
   id BIGSERIAL PRIMARY KEY,
@@ -110,6 +122,17 @@ def pct(price,entry):
 def table_exists(cur,name):
     cur.execute("SELECT to_regclass(%s)",("public."+name,))
     return cur.fetchone()["to_regclass"] is not None
+
+def latest_ai_decision(cur,code,now):
+    if not table_exists(cur,"ai_brokerage_decisions"):return None
+    cur.execute("""SELECT snapshot_time,state,conviction,strategy_id,strategy_name,strategy_family,
+                          strategy_fit,strategy_lifecycle,regime_label,decision_version,packet
+                   FROM ai_brokerage_decisions
+                   WHERE stock_code=%s AND snapshot_time>=%s
+                   ORDER BY snapshot_time DESC LIMIT 1""",
+                (code,now-timedelta(seconds=AI_DECISION_FRESH_SEC)))
+    r=cur.fetchone()
+    return dict(r) if r else None
 
 def latest_quote(cur,code,now):
     if not table_exists(cur,"radar_flow_quotes"):return None
@@ -266,6 +289,11 @@ def maybe_open(cur,now):
         if c["stock_code"] in open_codes:continue
         cur.execute("SELECT 1 FROM radar_paper_trades WHERE episode_id=%s",(c["id"],))
         if cur.fetchone():continue
+        ai=latest_ai_decision(cur,c["stock_code"],now)
+        if REQUIRE_AI_BROKERAGE and (not ai or ai.get("state")!="PAPER_ENTRY"):
+            continue
+        if ai and ai.get("state") not in ("PAPER_ENTRY","READY"):
+            continue
         q=latest_quote(cur,c["stock_code"],now)
         if not q or not q["fresh"]:continue
         chart=latest_chart(cur,c["stock_code"])
@@ -274,21 +302,33 @@ def maybe_open(cur,now):
         if warn and warn.get("kind")=="TOP_WARNING" and int(warn.get("score") or 0)>=70:
             continue
         reasons=entry_reason(c,chart)
+        if ai:
+            if ai.get("strategy_id"):
+                reasons.append(f"AI 전략 {ai.get('strategy_id')} · fit {float(ai.get('strategy_fit') or 0):.0f}")
+            reasons.append(f"6-Desk conviction {float(ai.get('conviction') or 0):.0f}")
         cur.execute("""INSERT INTO radar_paper_trades(
                        episode_id,stock_code,stock_name,rule_version,status,opened_at,
                        entry_price_krw,last_mark_at,last_mark_price_krw,return_pct,mfe_pct,mae_pct,
-                       entry_score,primary_type,market_theme,event_type,chart_state_entry,entry_reason)
-                       VALUES(%s,%s,%s,%s,'OPEN',%s,%s,%s,%s,0,0,0,%s,%s,%s,%s,%s,%s::jsonb)
+                       entry_score,primary_type,market_theme,event_type,chart_state_entry,entry_reason,
+                       strategy_id,strategy_name,strategy_family,strategy_lifecycle,strategy_fit,
+                       ai_conviction,ai_decision_time,ai_decision_version,regime_label)
+                       VALUES(%s,%s,%s,%s,'OPEN',%s,%s,%s,%s,0,0,0,%s,%s,%s,%s,%s,%s::jsonb,
+                              %s,%s,%s,%s,%s,%s,%s,%s,%s)
                        RETURNING id""",
                     (c["id"],c["stock_code"],c["stock_name"],RULE_VERSION,
                      q["exchange_at"],q["price"],q["exchange_at"],q["price"],
                      c["last_score"],c["primary_type"],c["market_theme"],c["event_type"],
-                     chart.get("state_ko"),json.dumps(reasons,ensure_ascii=False)))
+                     chart.get("state_ko"),json.dumps(reasons,ensure_ascii=False),
+                     (ai or {}).get("strategy_id"),(ai or {}).get("strategy_name"),
+                     (ai or {}).get("strategy_family"),(ai or {}).get("strategy_lifecycle"),
+                     (ai or {}).get("strategy_fit"),(ai or {}).get("conviction"),
+                     (ai or {}).get("snapshot_time"),(ai or {}).get("decision_version"),
+                     (ai or {}).get("regime_label")))
         trade_id=cur.fetchone()["id"]
         event(cur,trade_id,q["exchange_at"],"PAPER_ENTRY",q["price"],c["last_score"],
               " | ".join(reasons),
               {"candidate_version":c["candidate_version"],"chart_state":chart.get("state"),
-               "top_warning":warn})
+               "top_warning":warn,"ai_decision":ai})
         opened+=1
     return opened
 
@@ -337,7 +377,7 @@ def update_status():
                        ON CONFLICT(id) DO UPDATE SET updated_at=now(),status='OK',
                          open_count=excluded.open_count,closed_today=excluded.closed_today,note=excluded.note""",
                     (open_count,closed_today,
-                     f"{RULE_VERSION}; 1 normalized unit; no orders; score {ENTRY_SCORE}/{EXIT_SCORE}; max {MAX_HOLD_MIN}m"))
+                     f"{RULE_VERSION}; 1 normalized unit; no orders; score {ENTRY_SCORE}/{EXIT_SCORE}; max {MAX_HOLD_MIN}m; ai_gate={REQUIRE_AI_BROKERAGE}"))
 
 def cycle():
     now=datetime.now(timezone.utc)
@@ -349,7 +389,7 @@ def cycle():
 def main():
     if not DB:raise RuntimeError("DATABASE_URL missing")
     schema()
-    print(f"Paper Lab started: {RULE_VERSION}; no orders; score>={ENTRY_SCORE}; hold<={MAX_HOLD_MIN}m",flush=True)
+    print(f"Paper Lab started: {RULE_VERSION}; no orders; score>={ENTRY_SCORE}; hold<={MAX_HOLD_MIN}m; ai_gate={REQUIRE_AI_BROKERAGE}",flush=True)
     while True:
         started=time.monotonic()
         try:cycle()
