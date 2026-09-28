@@ -458,6 +458,42 @@ function renderHomeCandidates(rows){
      '<div class="hc-tags"><span class="pill">'+esc(x.event_type||"재료 미확인")+'</span>'+(x.chart_state?'<span class="pill">'+esc(x.chart_state)+'</span>':'')+(sigText?'<span class="signal-badge '+(sig.kind==="TOP_WARNING"?"signal-top":"signal-bottom")+'">'+esc(sigText)+'</span>':'')+'</div></article>';
  }).join("");
 }
+function renderAIBrokerage(broker){
+ const b=broker||{},reg=b.registry||{},candidates=b.candidates||[];
+ const regEl=document.getElementById("brokerRegistry"),candEl=document.getElementById("brokerCandidates");
+ const modeEl=document.getElementById("brokerMode"),statusEl=document.getElementById("brokerStatus");
+ if(modeEl)modeEl.textContent=b.paper_only===false?"LIVE ENABLED":"PAPER ONLY";
+ if(statusEl)statusEl.textContent=(b.status||"대기")+" · "+(b.note||"실계좌 주문 경로 없음");
+ if(regEl){
+   const order=[["DESIGN","설계"],["PAPER","가상검증"],["ACTIVE","활성"],["DISABLED","중지"]];
+   const total=order.reduce((a,x)=>a+Number(reg[x[0]]||0),0);
+   regEl.innerHTML=order.map(x=>'<div class="broker-reg"><div class="br-k">'+esc(x[1])+' · '+esc(x[0])+'</div><div class="br-v">'+esc(reg[x[0]]??0)+'</div><div class="sub">'+(x[0]==="DESIGN"?"조건 정의·검증 전":x[0]==="PAPER"?"forward-test 중":x[0]==="ACTIVE"?"승격 기준 통과":"운영 제외")+'</div></div>').join("")+
+     '<div class="broker-reg" style="grid-column:1/-1"><div class="br-k">REGISTRY TOTAL</div><div class="br-v">'+esc(total)+'</div><div class="sub">슬롯 수와 검증 완료 수를 구분해 표시합니다.</div></div>';
+ }
+ if(!candEl)return;
+ if(!candidates.length){
+   candEl.innerHTML='<div class="panel pad muted" style="grid-column:1/-1">현재 candidate tracker에서 6-Desk 평가 대상으로 유지 중인 종목이 없습니다.</div>';
+   return;
+ }
+ const labels={market:"Market 시장",catalyst:"Catalyst 재료",flow:"Flow 수급",technical:"Technical 차트",strategy:"Strategy 전략",risk:"Risk 리스크"};
+ const states={PAPER_ENTRY:"PAPER 진입",READY:"READY",WATCH:"WATCH",BLOCKED:"BLOCKED",IGNORE:"IGNORE"};
+ candEl.innerHTML=candidates.slice(0,8).map(x=>{
+   const cls=x.state==="PAPER_ENTRY"?"entry":x.state==="READY"?"ready":x.state==="WATCH"?"watch":x.state==="BLOCKED"?"blocked":"";
+   const st=x.selected_strategy||{};
+   const desks=(x.desks||[]).map(d=>{
+     const raw=Number(d.score||0),conf=Number(d.confidence||0),bar=Math.max(0,Math.min(100,(raw+1)*50));
+     const signed=(raw>0?"+":"")+Math.round(raw*100);
+     return '<div class="broker-deskline"><b>'+esc(labels[d.desk]||d.desk)+'</b><div class="broker-bar"><i style="width:'+bar.toFixed(0)+'%"></i></div><span>'+esc(signed)+'</span></div>';
+   }).join("");
+   const blocks=(x.blockers||[]).slice(0,3);
+   return '<article class="broker-card '+cls+'"><div class="broker-top"><div><div class="broker-name">'+esc(x.stock_name||x.stock_code)+'</div><div class="sub">'+esc(x.stock_code||"")+'</div><span class="broker-state">'+esc(states[x.state]||x.state)+'</span></div><div><div class="broker-conv">'+esc(fmt(x.conviction,0))+'</div><div class="sub">conviction / 100</div></div></div>'+
+     '<div class="broker-strategy"><b>'+(st.strategy_id?esc(st.strategy_id+" · "+st.name):"선택 전략 없음")+'</b>'+(st.fit_score!=null?'<div class="sub">family '+esc(st.family||"-")+' · fit '+esc(fmt(st.fit_score,0))+' · '+esc(st.lifecycle||"")+'</div>':'')+'</div>'+
+     '<div style="margin-top:7px">'+desks+'</div>'+
+     (blocks.length?'<div class="broker-block"><b>VETO / BLOCKER</b><br>'+blocks.map(esc).join("<br>")+'</div>':'')+
+     '<div class="broker-foot">실거래 주문 아님 · 판단 근거와 거부 사유를 먼저 기록</div></article>';
+ }).join("");
+}
+
 function renderPaperLab(lab){
  const x=lab||{},sum=x.summary||{},open=x.open||[],closed=x.recent_closed||[];
  const kpi=[
@@ -628,6 +664,7 @@ function render(d){
  document.getElementById("homeStocks").innerHTML=renderHomeStocks(d.query_ranking);
  document.getElementById("homeCandidates").innerHTML=renderHomeCandidates(d.home_candidates);
  document.getElementById("homePaperLab").innerHTML=renderPaperLab(d.paper_lab);
+ renderAIBrokerage(d.ai_brokerage);
  document.getElementById("queryRows").innerHTML=(d.query_ranking||[]).map(x=>stockRow(x,"query")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
  document.getElementById("tradeRows").innerHTML=(d.trade_ranking||[]).map(x=>stockRow(x,"trade")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
  document.getElementById("etfTradeRows").innerHTML=renderEtfRows(d.etf_trade_ranking);
