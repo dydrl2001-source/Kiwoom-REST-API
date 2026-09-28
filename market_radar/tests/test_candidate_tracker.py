@@ -19,6 +19,22 @@ class CandidateTrackerSourceTests(unittest.TestCase):
         self.assertIn('PRIMARY KEY(snapshot_time,stock_code)', self.text)
         self.assertIn('ON CONFLICT(snapshot_time,stock_code) DO NOTHING', self.text)
 
+    def test_prospective_episode_tables_exist(self):
+        self.assertIn('radar_candidate_episodes', self.text)
+        self.assertIn('radar_candidate_outcomes', self.text)
+        self.assertIn('return_5m_pct', self.text)
+        self.assertIn('return_15m_pct', self.text)
+        self.assertIn('return_30m_pct', self.text)
+
+    def test_journal_uses_observed_flow_quotes(self):
+        self.assertIn('FROM radar_flow_quotes', self.text)
+        self.assertIn('MAX_HORIZON_DELAY_SECONDS', self.text)
+
+    def test_episode_is_not_fill_simulation(self):
+        self.assertIn('not fills', self.text.lower())
+        for banned in ('commission', 'slippage_model', 'fill_price_model'):
+            self.assertNotIn(banned, self.text)
+
     def test_history_retention_is_bounded(self):
         self.assertIn("interval '14 days'", self.text)
 
