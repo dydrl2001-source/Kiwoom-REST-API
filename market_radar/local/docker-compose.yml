@@ -59,6 +59,25 @@ services:
       mimosa-engine:
         condition: service_started
 
+  ai-brokerage-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/ai_brokerage_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      candidate-tracker:
+        condition: service_started
+      market-regime:
+        condition: service_started
+      mimosa-engine:
+        condition: service_started
+
   paper-trade-engine:
     build:
       context: ../..
@@ -74,6 +93,8 @@ services:
       candidate-tracker:
         condition: service_started
       mimosa-engine:
+        condition: service_started
+      ai-brokerage-worker:
         condition: service_started
 
   paper-feedback-engine:
