@@ -143,21 +143,45 @@ def _realtime_status(cur,now):
 
 
 def _flow_quality(cur):
+    """Separate turnover quality from market-cap quality.
+
+    Market OS money-flow math depends on validated turnover. Market-cap unit
+    issues are reported separately and must not downgrade live money-flow
+    readiness by themselves.
+    """
+    empty={"latest_batch":None,"stocks":0,
+           "turnover_unresolved":0,"turnover_unresolved_pct":None,
+           "cap_unresolved":0,"cap_unresolved_pct":None}
     if not exists(cur,"radar_flow_quotes"):
-        return {"latest_batch":None,"stocks":0,"unit_unresolved":0,"unit_unresolved_pct":None}
+        return empty
     cur.execute("SELECT MAX(batch_time) AS t FROM radar_flow_quotes")
     t=cur.fetchone()["t"]
-    if not t:return {"latest_batch":None,"stocks":0,"unit_unresolved":0,"unit_unresolved_pct":None}
+    if not t:return empty
     cur.execute("SELECT payload FROM radar_flow_quotes WHERE batch_time=%s",(t,))
     rows=cur.fetchall()
-    unresolved=0
+    turnover_bad=0;cap_bad=0
+    turnover_states={};cap_states={}
     for r in rows:
-        flags=(r["payload"] or {}).get("quality_flags") or []
-        if any(str(x).startswith(("TURNOVER_","CAP_")) for x in flags):
-            unresolved+=1
+        flags=[str(x) for x in ((r["payload"] or {}).get("quality_flags") or [])]
+        tflags=[x for x in flags if x.startswith("TURNOVER_")]
+        cflags=[x for x in flags if x.startswith("CAP_")]
+        if tflags:turnover_bad+=1
+        if cflags:cap_bad+=1
+        for x in tflags:turnover_states[x]=turnover_states.get(x,0)+1
+        for x in cflags:cap_states[x]=cap_states.get(x,0)+1
     n=len(rows)
-    return {"latest_batch":t.isoformat(),"stocks":n,"unit_unresolved":unresolved,
-            "unit_unresolved_pct":unresolved/n*100 if n else None}
+    return {
+        "latest_batch":t.isoformat(),"stocks":n,
+        "turnover_unresolved":turnover_bad,
+        "turnover_unresolved_pct":turnover_bad/n*100 if n else None,
+        "turnover_states":turnover_states,
+        "cap_unresolved":cap_bad,
+        "cap_unresolved_pct":cap_bad/n*100 if n else None,
+        "cap_states":cap_states,
+        # Backward-compatible aliases now mean turnover-money quality only.
+        "unit_unresolved":turnover_bad,
+        "unit_unresolved_pct":turnover_bad/n*100 if n else None,
+    }
 
 
 def _coverage(cur):
@@ -205,9 +229,9 @@ def payload():
             warnings.append("realtime:"+str(realtime.get("status")))
         elif realtime.get("age_sec") is None or realtime.get("age_sec")>120:
             warnings.append("realtime:STALE")
-    unresolved=quality.get("unit_unresolved_pct")
+    unresolved=quality.get("turnover_unresolved_pct")
     if unresolved is not None and unresolved>20:
-        warnings.append(f"money_unit_unresolved:{unresolved:.1f}%")
+        warnings.append(f"turnover_unit_unresolved:{unresolved:.1f}%")
     if session=="OFF_HOURS":
         overall="OFF_HOURS"
     elif blockers:
