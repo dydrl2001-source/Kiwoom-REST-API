@@ -368,13 +368,19 @@ def refresh_segments():
         groups=defaultdict(list)
         for r in rows:
             horizon=r["horizon"]
+            tier=r["watch_tier"] or "UNKNOWN"
+            stance=r["market_stance"] or "UNKNOWN"
+            trigger=r["trigger_state"] or "UNKNOWN"
+            session=r["session_bucket"] or "UNKNOWN"
             dims={
-                "TIER":r["watch_tier"] or "UNKNOWN",
-                "STANCE":r["market_stance"] or "UNKNOWN",
-                "TRIGGER":r["trigger_state"] or "UNKNOWN",
-                "SESSION":r["session_bucket"] or "UNKNOWN",
+                "TIER":tier,
+                "STANCE":stance,
+                "TRIGGER":trigger,
+                "SESSION":session,
                 "CATALYST":r["catalyst_grade"] or "UNKNOWN",
                 "SETUP":_bucket_setup(r["setup_score"]),
+                "STANCE_TRIGGER":stance+" | "+trigger,
+                "TIER_SESSION":tier+" | "+session,
             }
             for kind,value in dims.items():
                 groups[(kind,value,horizon)].append(r)
