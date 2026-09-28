@@ -62,17 +62,30 @@
   "axes": {
     "radar": {
       "meaning": "지금 관심과 실제 거래 활동이 얼마나 집중되는가",
-      "inputs": ["조회순위", "거래대금순위", "최근 구간 거래대금", "거래속도"],
+      "inputs": [
+        "조회순위",
+        "거래대금순위",
+        "최근 구간 거래대금",
+        "거래속도"
+      ],
       "type": "operational_heuristic"
     },
     "theme": {
       "meaning": "개별 종목이 아니라 같은 시장테마로 거래가 확산·지속되는가",
-      "inputs": ["동일테마 관찰 종목수", "고정 공통표본 테마 거래비중", "비중 변화"],
+      "inputs": [
+        "동일테마 관찰 종목수",
+        "고정 공통표본 테마 거래비중",
+        "비중 변화"
+      ],
       "type": "operational_heuristic"
     },
     "setup": {
       "meaning": "차트가 돌파·수렴·눌림·추세 유지 등 교재의 구조와 얼마나 맞는가",
-      "inputs": ["차트 상태", "분봉 추세", "일봉 맥락"],
+      "inputs": [
+        "차트 상태",
+        "분봉 추세",
+        "일봉 맥락"
+      ],
       "type": "operational_heuristic"
     },
     "catalyst": {
@@ -109,5 +122,41 @@
     "테마 소속만으로 당일 상승 이유를 만들지 않는다",
     "거래대금 증가를 외국인·기관 순매수 또는 순유입으로 부르지 않는다",
     "백테스트 전 점수 임계값을 승률로 해석하지 않는다"
-  ]
+  ],
+  "interaction_learning": {
+    "status": "shadow_only",
+    "purpose": "시장 레짐 × Setup × Trigger × 0B 체결상태의 조건부 차이를 검증하되 live 점수를 자동 변경하지 않는다.",
+    "sampling": {
+      "5m": "종목별 비중첩 5분 anchor",
+      "30m": "종목별 비중첩 30분 anchor",
+      "close": "종목·거래일당 1개 anchor",
+      "D+1": "종목·거래일당 1개 anchor"
+    },
+    "pre_registered_dimensions": [
+      "STANCE_SETUP",
+      "SETUP_TRIGGER",
+      "STANCE_TRIGGER",
+      "STANCE_SETUP_TRIGGER",
+      "STANCE_TRIGGER_MICRO",
+      "SETUP_TRIGGER_MICRO",
+      "STANCE_SETUP_TRIGGER_MICRO"
+    ],
+    "micro_state": {
+      "STRONG_CONFIRM": "체결강도 120+ AND 최근 15초 관측 매수체결 비중 65%+",
+      "POSITIVE": "체결강도 100+ AND 최근 15초 관측 매수체결 비중 55%+",
+      "MIXED": "위 강·약 조건 사이의 혼합 상태",
+      "NEGATIVE": "체결강도 100 미만 AND 최근 15초 관측 매수체결 비중 45% 미만",
+      "WEAK_CONFIRM": "체결강도 80 미만 AND 최근 15초 관측 매수체결 비중 45% 미만",
+      "NO_DATA": "gap-free 15초 0B 자료가 없거나 판독 불가"
+    },
+    "comparison": "복합조건의 평균·양(+)비율·MFE·MAE를 더 단순한 사전등록 부모조건과 비교해 Δ를 계산한다.",
+    "safeguards": [
+      "임의의 모든 변수 조합을 탐색하지 않고 사전등록 interaction만 계산한다",
+      "상위 interaction일수록 더 많은 표본·종목·거래일을 요구한다",
+      "gap이 있는 0B 15초 구간은 micro interaction 학습에서 제외한다",
+      "탐색·초기 결과는 live Rule 점수에 반영하지 않는다",
+      "형성·충분 등급도 자동 규칙 변경이 아니라 수동 검토 후보로만 제시한다"
+    ],
+    "type": "operational_heuristic_validation"
+  }
 }
