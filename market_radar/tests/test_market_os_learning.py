@@ -130,5 +130,50 @@ class LearningPureTests(unittest.TestCase):
         self.assertIsNone(learn.safe_num(None))
 
 
+    def test_validation_gate_promotes_only_aligned_formed_evidence(self):
+        s={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'30m',
+            'samples':170,'distinct_stocks':12,'distinct_days':7,'quality':'충분',
+            'avg_return_pct':.80,'median_return_pct':.40,'positive_rate':.64,
+            'avg_mfe_pct':1.5,'avg_mae_pct':-.6,
+        }
+        gate=store._validation_gate(s)
+        self.assertEqual(gate['status'],'PROMOTE_REVIEW')
+        self.assertEqual(gate['readiness'],'READY')
+
+    def test_validation_gate_holds_interaction_when_parent_edge_disagrees(self):
+        s={
+            'segment_type':'STANCE_TRIGGER','segment_value':'DEFENSIVE | BREAKOUT_TEST',
+            'horizon':'30m','samples':220,'distinct_stocks':18,'distinct_days':9,
+            'quality':'충분','interaction_depth':2,
+            'avg_return_pct':.80,'median_return_pct':.30,'positive_rate':.62,
+            'avg_mfe_pct':1.4,'avg_mae_pct':-.7,'edge_ready':True,
+            'edge_avg_return_pct':-.10,'edge_positive_rate_pp':-2.0,'edge_mae_pct':-.1,
+            'baseline':{'quality':'충분'}
+        }
+        gate=store._validation_gate(s)
+        self.assertEqual(gate['status'],'HOLD')
+        self.assertIn('EDGE_EFFECT_NOT_ALIGNED',gate['reason_codes'])
+
+    def test_validation_gate_can_flag_suppression_review(self):
+        s={
+            'segment_type':'SETUP','segment_value':'0-49','horizon':'close',
+            'samples':160,'distinct_stocks':12,'distinct_days':6,'quality':'충분',
+            'avg_return_pct':-.55,'median_return_pct':-.25,'positive_rate':.35,
+            'avg_mfe_pct':.4,'avg_mae_pct':-1.2,
+        }
+        gate=store._validation_gate(s)
+        self.assertEqual(gate['status'],'SUPPRESS_REVIEW')
+        self.assertEqual(gate['direction'],'WEAKNESS')
+
+    def test_validation_gate_ignores_5m_for_live_rule_review(self):
+        s={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'5m',
+            'samples':500,'distinct_stocks':30,'distinct_days':15,'quality':'충분',
+            'avg_return_pct':1.0,'median_return_pct':.5,'positive_rate':.70,
+        }
+        self.assertIsNone(store._validation_gate(s))
+
+
 if __name__=='__main__':
     unittest.main()
