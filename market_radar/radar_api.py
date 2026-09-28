@@ -794,15 +794,21 @@ def build_ai_daily_review(cur, paper_feedback):
 
 def build_shadow_execution_lab(cur):
     empty={
-        "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,"partial_exit_count":0,
-        "summary":{"closed":0,"median_gross_return_pct":None,"median_net_return_pct":None,
-                   "median_entry_slippage_bps":None,"median_exit_slippage_bps":None,
-                   "median_fill_ratio_pct":None,"median_notional_krw":None},
+        "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
+        "partial_exit_count":0,"risk_reject_count":0,
+        "summary":{
+            "closed":0,"median_gross_return_pct":None,"median_net_return_pct":None,
+            "median_fill_ratio_pct":None,"median_notional_krw":None,
+            "book_coverage_pct":None,"median_entry_is_bps":None,"median_exit_is_bps":None,
+            "median_round_trip_is_bps":None,"median_return_drag_pct":None
+        },
         "recent":[],
         "note":"Shadow Simulator 표본 대기 · 실계좌 주문 없음"
     }
     if not table_exists(cur,"ai_shadow_trades"):
         return empty
+    if not column_exists(cur,"ai_shadow_trades","entry_model_mode"):
+        return {**empty,"status":"WAITING_FOR_V2_SCHEMA","note":"Shadow v2 스키마 마이그레이션 대기"}
     try:
         status=dict(empty)
         if table_exists(cur,"ai_shadow_status"):
@@ -816,10 +822,13 @@ def build_shadow_execution_lab(cur):
         cur.execute("""SELECT COUNT(*),
                               percentile_cont(0.5) WITHIN GROUP(ORDER BY gross_return_pct),
                               percentile_cont(0.5) WITHIN GROUP(ORDER BY net_return_pct),
-                              percentile_cont(0.5) WITHIN GROUP(ORDER BY entry_slippage_bps),
-                              percentile_cont(0.5) WITHIN GROUP(ORDER BY exit_slippage_bps),
                               percentile_cont(0.5) WITHIN GROUP(ORDER BY entry_fill_ratio*100),
-                              percentile_cont(0.5) WITHIN GROUP(ORDER BY requested_notional_krw)
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY requested_notional_krw),
+                              AVG(CASE WHEN entry_model_mode='BOOK_V2' THEN 1.0 ELSE 0.0 END),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY entry_implementation_shortfall_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY exit_implementation_shortfall_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY round_trip_is_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY return_drag_pct)
                        FROM ai_shadow_trades
                        WHERE status='CLOSED' AND entry_at>now()-interval '90 days'""")
         r=cur.fetchone()
@@ -827,46 +836,53 @@ def build_shadow_execution_lab(cur):
             "closed":int(r[0] or 0),
             "median_gross_return_pct":float(r[1]) if r[1] is not None else None,
             "median_net_return_pct":float(r[2]) if r[2] is not None else None,
-            "median_entry_slippage_bps":float(r[3]) if r[3] is not None else None,
-            "median_exit_slippage_bps":float(r[4]) if r[4] is not None else None,
-            "median_fill_ratio_pct":float(r[5]) if r[5] is not None else None,
-            "median_notional_krw":float(r[6]) if r[6] is not None else None,
+            "median_fill_ratio_pct":float(r[3]) if r[3] is not None else None,
+            "median_notional_krw":float(r[4]) if r[4] is not None else None,
+            "book_coverage_pct":float(r[5])*100 if r[5] is not None else None,
+            "median_entry_is_bps":float(r[6]) if r[6] is not None else None,
+            "median_exit_is_bps":float(r[7]) if r[7] is not None else None,
+            "median_round_trip_is_bps":float(r[8]) if r[8] is not None else None,
+            "median_return_drag_pct":float(r[9]) if r[9] is not None else None,
         }
-        cur.execute("""SELECT COUNT(*) FROM ai_shadow_trades WHERE status='CLOSED_PARTIAL_LIQUIDITY'""")
+        cur.execute("""SELECT COUNT(*) FROM ai_shadow_trades
+                       WHERE status='CLOSED_PARTIAL_LIQUIDITY'""")
         status["partial_exit_count"]=int(cur.fetchone()[0] or 0)
-        cur.execute("""SELECT stock_code,stock_name,strategy_id,status,requested_shares,filled_shares,
-                              requested_notional_krw,stop_pct,entry_at,entry_ref_price_krw,
-                              entry_fill_price_krw,entry_slippage_bps,entry_fill_ratio,entry_model_quality,
-                              exit_at,exit_ref_price_krw,exit_fill_price_krw,exit_slippage_bps,
-                              exit_filled_shares,exit_fill_ratio,remaining_shares,
-                              gross_return_pct,net_return_pct,net_pnl_krw,costs_krw,entry_model,exit_model
+        cur.execute("""SELECT COUNT(*) FROM ai_shadow_trades
+                       WHERE status='REJECTED'
+                         AND entry_model_quality='PORTFOLIO_RISK_GATE'""")
+        status["risk_reject_count"]=int(cur.fetchone()[0] or 0)
+
+        cur.execute("""SELECT stock_code,stock_name,market_theme,strategy_id,strategy_family,status,
+                              requested_shares,filled_shares,requested_notional_krw,stop_pct,
+                              risk_at_entry_krw,entry_at,entry_ref_price_krw,entry_arrival_mid_krw,
+                              entry_fill_price_krw,entry_slippage_bps,entry_implementation_shortfall_bps,
+                              entry_fill_ratio,entry_model_quality,entry_model_mode,
+                              exit_at,exit_ref_price_krw,exit_arrival_mid_krw,exit_fill_price_krw,
+                              exit_slippage_bps,exit_implementation_shortfall_bps,
+                              exit_filled_shares,exit_fill_ratio,remaining_shares,round_trip_is_bps,
+                              paper_return_pct,gross_return_pct,net_return_pct,return_drag_pct,
+                              net_pnl_krw,costs_krw,risk_gate,entry_model,exit_model
                        FROM ai_shadow_trades
                        ORDER BY COALESCE(exit_at,entry_at) DESC LIMIT 12""")
+        names=[d.name for d in cur.description]
         recent=[]
-        for r in cur.fetchall():
-            recent.append({
-                "code":r[0],"name":r[1],"strategy_id":r[2],"status":r[3],
-                "requested_shares":r[4],"filled_shares":r[5],
-                "requested_notional_krw":float(r[6]) if r[6] is not None else None,
-                "stop_pct":r[7],"entry_at":iso(r[8]),
-                "entry_ref_price_krw":float(r[9]) if r[9] is not None else None,
-                "entry_fill_price_krw":float(r[10]) if r[10] is not None else None,
-                "entry_slippage_bps":r[11],"entry_fill_ratio":r[12],
-                "entry_model_quality":r[13],"exit_at":iso(r[14]),
-                "exit_ref_price_krw":float(r[15]) if r[15] is not None else None,
-                "exit_fill_price_krw":float(r[16]) if r[16] is not None else None,
-                "exit_slippage_bps":r[17],"exit_filled_shares":r[18],"exit_fill_ratio":r[19],
-                "remaining_shares":r[20],"gross_return_pct":r[21],"net_return_pct":r[22],
-                "net_pnl_krw":float(r[23]) if r[23] is not None else None,
-                "costs_krw":float(r[24]) if r[24] is not None else None,
-                "entry_model":r[25] or {},"exit_model":r[26] or {}
-            })
+        for raw in cur.fetchall():
+            row=dict(zip(names,raw))
+            for k in ("requested_notional_krw","risk_at_entry_krw","entry_ref_price_krw",
+                      "entry_arrival_mid_krw","entry_fill_price_krw","exit_ref_price_krw",
+                      "exit_arrival_mid_krw","exit_fill_price_krw","net_pnl_krw","costs_krw"):
+                row[k]=float(row[k]) if row.get(k) is not None else None
+            row["entry_at"]=iso(row.get("entry_at"))
+            row["exit_at"]=iso(row.get("exit_at"))
+            row["risk_gate"]=row.get("risk_gate") or {}
+            row["entry_model"]=row.get("entry_model") or {}
+            row["exit_model"]=row.get("exit_model") or {}
+            recent.append(row)
         status["recent"]=recent
-        status["model_note"]="실제 호가·잔량 미수집 상태의 v1: 체결가 + 단기변동성 + 최근거래대금 + 참여율로 보수 추정"
+        status["model_note"]="BOOK_V2 우선: Kiwoom ka10004 10호가를 haircut 후 VWAP 체결. 신선한 book이 없을 때만 명시적 PROXY_V1 fallback."
         return status
     except Exception as e:
-        return {**empty,"status":"ERROR","note":f"Shadow 집계 실패: {type(e).__name__}"}
-
+        return {**empty,"status":"ERROR","note":f"Shadow v2 집계 실패: {type(e).__name__}"}
 
 def build_home_candidates(cur, rows):
     """Read the current local candidate tracker for a compact Home Top5."""
