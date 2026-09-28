@@ -226,7 +226,9 @@ def candidate_tracking_payload(current_candidates, now, sample_time):
         returned=bool(h and prior_gap is not None and prior_gap>120)
         first=first_today.get(code)
         first_seen=first['snapshot_time'] if first else current_time
-        is_new=not bool(first)
+        # If the tracker has already written this exact market sample, it is still
+        # the candidate's first appearance rather than an instant transition to "유지".
+        is_new=(not first) or abs((current_time-first['snapshot_time']).total_seconds())<=1
 
         def hits(minutes):
             cutoff=current_time-timedelta(minutes=minutes)
