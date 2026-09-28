@@ -214,6 +214,53 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"{r['direction'] or '—'} {r['review_action'] or '—'} "
                       f"{r['horizon'] or '—'} {r['segment_type'] or '—'}={r['segment_value'] or '—'}")
 
+        print('\n[SHADOW RULE LAB v1.5]')
+        if not exists('market_os_shadow_rules'):
+            print('shadow rule tables missing')
+        else:
+            cur.execute("""SELECT r.shadow_rule_id,r.enabled,r.action,r.segment_type,r.segment_value,
+                                  r.source_horizon,r.approved_at,
+                                  COUNT(o.*) AS observations,
+                                  COUNT(o.*) FILTER(WHERE o.matched) AS matched,
+                                  COUNT(o.*) FILTER(WHERE o.changed) AS changed
+                           FROM market_os_shadow_rules r
+                           LEFT JOIN market_os_shadow_observations o
+                             ON o.shadow_rule_id=r.shadow_rule_id
+                           GROUP BY r.shadow_rule_id
+                           ORDER BY r.enabled DESC,r.approved_at DESC""")
+            rules=cur.fetchall()
+            if not rules:
+                print('approved shadow rules 없음')
+            for r in rules:
+                print(f"{r['shadow_rule_id']} {'ON' if r['enabled'] else 'OFF'} {r['action']} "
+                      f"{r['source_horizon']} {r['segment_type']}={r['segment_value']} "
+                      f"approved={r['approved_at']} obs={r['observations']} "
+                      f"matched={r['matched']} changed={r['changed']}")
+        if exists('market_os_shadow_experiment_summary'):
+            print('\n[CONTROL vs CHALLENGER]')
+            cur.execute("""SELECT shadow_rule_id,horizon,cohort,evidence_state,membership_changes,
+                                  control_samples,challenger_samples,control_avg_return_pct,
+                                  challenger_avg_return_pct,delta_avg_return_pct,
+                                  delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_shadow_experiment_summary
+                           ORDER BY CASE evidence_state
+                               WHEN 'COMPARABLE' THEN 1 WHEN 'FORMING' THEN 2
+                               WHEN 'COLLECTING' THEN 3 ELSE 4 END,
+                               shadow_rule_id,horizon,cohort""")
+            rows=cur.fetchall()
+            if not rows:
+                print('prospective outcomes 대기')
+            for r in rows[:60]:
+                ca=r['control_avg_return_pct'];ha=r['challenger_avg_return_pct'];da=r['delta_avg_return_pct']
+                print(f"{r['shadow_rule_id']} {r['horizon']} {r['cohort']} {r['evidence_state']} "
+                      f"changes={r['membership_changes']} controlN={r['control_samples']} "
+                      f"challengerN={r['challenger_samples']} "
+                      f"controlAvg={(f'{ca:+.3f}%' if ca is not None else '—')} "
+                      f"challengerAvg={(f'{ha:+.3f}%' if ha is not None else '—')} "
+                      f"dAvg={(f'{da:+.3f}pp' if da is not None else '—')} "
+                      f"dPos={(f'{r['delta_positive_rate_pp']:+.1f}pp' if r['delta_positive_rate_pp'] is not None else '—')} "
+                      f"dMAE={(f'{r['delta_mae_pct']:+.3f}pp' if r['delta_mae_pct'] is not None else '—')}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -245,5 +292,6 @@ print('\nSampling: 5m=non-overlap 5m, 30m=non-overlap 30m, close/D+1=one per sto
 print('Interaction policy: only pre-registered regime/setup/trigger/micro combinations are tested; no arbitrary combination search.')
 print('Validation gate v1.3: cumulative gate + day-split EARLY/RECENT walk-forward stability; recent reversal/weakening/comparator gaps => HOLD.')
 print('Promotion Registry v1.4: lifecycle is persisted with transition history; automation stops at PROMOTION_CANDIDATE and never creates SHADOW_RULE.')
+print('Shadow Rule Lab v1.5: only manually approved rules are observed; pre-approval data is excluded and CONTROL/CHALLENGER share identical outcome paths.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
