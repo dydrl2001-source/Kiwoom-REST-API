@@ -251,5 +251,48 @@ class LearningPureTests(unittest.TestCase):
         self.assertEqual(rows[0]['walk_forward']['status'],'INSUFFICIENT')
 
 
+    def test_promotion_stage_stays_validated_until_walk_forward_is_stable(self):
+        s={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'30m',
+            'samples':170,'distinct_stocks':12,'distinct_days':7,'quality':'충분',
+            'avg_return_pct':.80,'median_return_pct':.40,'positive_rate':.64,
+            'avg_mfe_pct':1.5,'avg_mae_pct':-.6,
+        }
+        v={'status':'HOLD','walk_forward':{
+            'status':'REVERSAL','ready':False,'reason_codes':['RECENT_DIRECTION_REVERSED']
+        }}
+        stage=store._promotion_stage(s,v)
+        self.assertEqual(stage['stage'],'VALIDATED')
+        self.assertEqual(stage['review_action'],'PROMOTE')
+
+    def test_promotion_stage_requires_sufficient_quality_for_candidate(self):
+        s={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'30m',
+            'samples':80,'distinct_stocks':9,'distinct_days':4,'quality':'형성',
+            'avg_return_pct':.80,'median_return_pct':.40,'positive_rate':.64,
+            'avg_mfe_pct':1.5,'avg_mae_pct':-.6,
+        }
+        v={'status':'PROMOTE_REVIEW','walk_forward':{
+            'status':'STABLE','ready':True,'reason_codes':['EARLY_RECENT_DIRECTION_ALIGNED']
+        }}
+        stage=store._promotion_stage(s,v)
+        self.assertEqual(stage['stage'],'STABLE')
+        self.assertNotEqual(stage['stage'],'PROMOTION_CANDIDATE')
+
+    def test_promotion_stage_candidate_never_auto_becomes_shadow_rule(self):
+        s={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'30m',
+            'samples':170,'distinct_stocks':12,'distinct_days':7,'quality':'충분',
+            'avg_return_pct':.80,'median_return_pct':.40,'positive_rate':.64,
+            'avg_mfe_pct':1.5,'avg_mae_pct':-.6,
+        }
+        v={'status':'PROMOTE_REVIEW','walk_forward':{
+            'status':'STABLE','ready':True,'reason_codes':['EARLY_RECENT_DIRECTION_ALIGNED']
+        }}
+        stage=store._promotion_stage(s,v)
+        self.assertEqual(stage['stage'],'PROMOTION_CANDIDATE')
+        self.assertNotEqual(stage['stage'],'SHADOW_RULE')
+
+
 if __name__=='__main__':
     unittest.main()
