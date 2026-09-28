@@ -127,7 +127,7 @@ class SectorUISourceTests(unittest.TestCase):
         self.assertIn('theme-strength',self.text)
         self.assertIn('strengthBlock',self.text)
         self.assertIn('테마강도 ',self.text)
-        self.assertIn('sectorCards(homeThemes,6,true)',self.text)
+        self.assertIn('sectorCards(homeThemes,4,true)',self.text)
 
     def test_home_material_colors_and_os_exist(self):
         self.assertIn('homeMaterialLegend',self.text)
@@ -139,7 +139,7 @@ class SectorUISourceTests(unittest.TestCase):
 
     def test_home_rank_history_and_density(self):
         self.assertIn('rankMovement',self.text)
-        self.assertIn('sectorCards(homeThemes,6,true)',self.text)
+        self.assertIn('sectorCards(homeThemes,4,true)',self.text)
         self.assertIn('.sector-grid{grid-template-columns:1fr;gap:7px}',self.text)
 
     def test_reference_style_leader_desk_is_on_home(self):
@@ -150,6 +150,13 @@ class SectorUISourceTests(unittest.TestCase):
         self.assertIn('renderLeaderSectors',self.text)
         self.assertIn('renderStrongTurnover',self.text)
         self.assertIn('renderLeaderCalendar',self.text)
+
+    def test_home_v3_compact_market_and_candidates(self):
+        self.assertIn('오늘 장',self.text)
+        self.assertIn('상세 시장 해석',self.text)
+        self.assertIn('관찰 후보 Top5',self.text)
+        self.assertIn('homeCandidates',self.text)
+        self.assertIn('renderHomeCandidates',self.text)
 
     def test_sector_cards_show_money_and_reason(self):
         self.assertIn('recentMoney(x)',self.text)
