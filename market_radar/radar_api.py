@@ -9,6 +9,11 @@ try:
     from radar_ui_v2 import DASHBOARD_HTML_V2
 except Exception:
     DASHBOARD_HTML_V2 = None
+try:
+    from flow_core import delta as radar_flow_delta, reversal_signals as radar_reversal_signals
+except Exception:
+    radar_flow_delta = None
+    radar_reversal_signals = None
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
@@ -191,6 +196,105 @@ def catalyst_for_stock(messages, code, name):
         "note": None,
     }
 
+def sector_reason_summary(group):
+    """Explain the observed sector move only as far as collected evidence supports it."""
+    stocks=group.get("stocks") or []
+    evidence=[]
+    for x in stocks:
+        d=x.get("material_digest") or {}
+        strength=int(d.get("material_strength") or 0)
+        if strength>=2:
+            evidence.append({
+                "code":x.get("code"),"name":x.get("name"),
+                "summary":d.get("summary"),"assessment":d.get("assessment"),
+                "source_kind":d.get("source_kind"),"strength":strength
+            })
+    evidence.sort(key=lambda x:(-x["strength"],x.get("name") or ""))
+    direct=[x for x in evidence if x["strength"]>=3]
+    sector=[x for x in evidence if x["strength"]==2]
+    positive=int(group.get("positive") or 0)
+    count=int(group.get("change_n") or group.get("count") or 0)
+    breadth=f"{positive}/{count}종목 상승" if count else "상승폭 표본 부족"
+    recent=group.get("recent_turnover_krw") or 0
+
+    if len(direct)>=2:
+        names=", ".join(x["name"] for x in direct[:3] if x.get("name"))
+        reason=f"복수 종목에서 직접 재료가 확인됨({names}). {breadth}이며 거래대금 동행 여부를 함께 확인하는 구간."
+        level="SUPPORTED"
+        label="복수 직접재료"
+    elif direct:
+        x=direct[0]
+        reason=f"{x.get('name')}: {x.get('summary') or '직접 재료 확인'}. 섹터 전체 공통 원인으로 단정하긴 어렵지만 {breadth}."
+        level="PARTIAL"
+        label="개별 직접재료"
+    elif sector:
+        x=sector[0]
+        reason=f"업종·테마형 재료가 관측됨: {x.get('summary') or x.get('assessment') or '테마 재료'}. {breadth}."
+        level="PARTIAL"
+        label="테마형 재료"
+    elif recent and recent>0:
+        reason=f"공통 촉발 재료는 아직 확인되지 않음. 다만 {breadth}이고 최근 관측구간 거래대금이 집중되는 상태."
+        level="UNCONFIRMED"
+        label="돈·관심 선행"
+    else:
+        reason=f"현재 수집 범위에서 섹터 공통 상승 재료를 확인하지 못함. {breadth}; 원인 확정은 보류."
+        level="UNCONFIRMED"
+        label="공통재료 미확인"
+    return {
+        "summary":reason,"level":level,"label":label,
+        "evidence":evidence[:4],
+        "note":"섹터 구성종목의 뉴스·공시·Telegram·거래 관측을 묶은 설명이며 인과관계 확정이 아님"
+    }
+
+
+def theme_strength_for_groups(groups):
+    """Operational 0-100 *current-theme observation strength*, not return probability.
+
+    Components:
+      interest 20  = relative query concentration in the current sample
+      money    30  = relative recent SOR turnover; cumulative turnover fallback is capped
+      breadth  20  = share of observed sector stocks currently positive
+      price    10  = positive average move, capped at +8%
+      surge    10  = count represented in query Top12, capped at 4 stocks
+      material 10  = evidence coverage (supported / partial / unconfirmed)
+    """
+    if not groups:
+        return groups
+    max_query=max([float(g.get("query_score") or 0) for g in groups] or [0])
+    max_recent=max([float(g.get("recent_turnover_krw") or 0) for g in groups] or [0])
+    max_total=max([float(g.get("trade_value_krw") or 0) for g in groups] or [0])
+    for g in groups:
+        interest=20*(float(g.get("query_score") or 0)/max_query) if max_query>0 else 0
+        if g.get("recent_turnover_known") and max_recent>0:
+            money=30*(float(g.get("recent_turnover_krw") or 0)/max_recent)
+            money_basis="RECENT_SOR"
+        else:
+            # Fallback is deliberately capped below the real-time component.
+            money=20*(float(g.get("trade_value_krw") or 0)/max_total) if max_total>0 else 0
+            money_basis="CUMULATIVE_FALLBACK"
+        breadth=20*max(0,min(1,float(g.get("positive_ratio") or 0)))
+        avg=float(g.get("avg_change_rate") or 0)
+        price=10*max(0,min(1,avg/8.0))
+        surge=10*max(0,min(1,float(g.get("surge_count") or 0)/4.0))
+        level=(g.get("reason") or {}).get("level")
+        material=10 if level=="SUPPORTED" else 5 if level=="PARTIAL" else 0
+        score=round(max(0,min(100,interest+money+breadth+price+surge+material)))
+        if score>=80: label="매우 강"
+        elif score>=65: label="강"
+        elif score>=50: label="보통"
+        elif score>=35: label="약"
+        else: label="미약"
+        g["theme_strength"]=score
+        g["theme_strength_label"]=label
+        g["theme_strength_components"]={
+            "interest":round(interest,1),"money":round(money,1),"breadth":round(breadth,1),
+            "price":round(price,1),"surge":round(surge,1),"material":round(material,1)
+        }
+        g["theme_strength_money_basis"]=money_basis
+        g["theme_strength_note"]="현재 조회·거래대금·상승확산·가격·급부상종목수·재료근거를 합친 운영 관찰도이며 수익확률이 아님"
+    return groups
+
+
 def build_sector_groups(rows):
     groups = {}
     for x in rows:
@@ -198,13 +302,16 @@ def build_sector_groups(rows):
         g = groups.setdefault(sector, {
             "name": sector, "count": 0, "query_score": 0.0, "rank_sum": 0.0,
             "change_sum": 0.0, "change_n": 0, "positive": 0,
-            "trade_value_krw": 0.0, "stocks": []
+            "trade_value_krw": 0.0, "recent_turnover_krw": 0.0,
+            "recent_turnover_known": 0, "surge_count": 0, "stocks": []
         })
         rank = x.get("rank")
         g["count"] += 1
         if rank is not None:
             g["query_score"] += max(1, 31 - int(rank))
             g["rank_sum"] += float(rank)
+            if int(rank) <= 12:
+                g["surge_count"] += 1
         chg = x.get("change_rate")
         if chg is not None:
             g["change_sum"] += float(chg)
@@ -214,18 +321,43 @@ def build_sector_groups(rows):
         tv = x.get("trade_value_krw")
         if tv is not None:
             g["trade_value_krw"] += float(tv)
+        recent=x.get("recent_turnover_krw")
+        if recent is not None:
+            g["recent_turnover_krw"] += float(recent)
+            g["recent_turnover_known"] += 1
         g["stocks"].append({
-            "rank": rank, "code": x.get("code"), "name": x.get("name"),
-            "change_rate": chg, "flow_state": x.get("flow_state")
+            "rank": rank, "rank_change": x.get("rank_change"),
+            "trade_rank":x.get("trade_rank"),
+            "code": x.get("code"), "name": x.get("name"),
+            "change_rate": chg, "flow_state": x.get("flow_state"),
+            "trade_value_krw":x.get("trade_value_krw"),
+            "recent_turnover_krw":x.get("recent_turnover_krw"),
+            "recent_turnover_seconds":x.get("recent_turnover_seconds"),
+            "material_digest":x.get("material_digest") or {},
+            "chart_state":x.get("chart_state")
         })
     out = []
     for g in groups.values():
         g["avg_rank"] = g["rank_sum"] / g["count"] if g["count"] else None
         g["avg_change_rate"] = g["change_sum"] / g["change_n"] if g["change_n"] else None
         g["positive_ratio"] = g["positive"] / g["change_n"] if g["change_n"] else None
-        g["stocks"] = sorted(g["stocks"], key=lambda z: (z["rank"] is None, z["rank"] or 999))[:8]
+        # Money-first ordering inside a sector; query rank breaks ties.
+        g["stocks"] = sorted(
+            g["stocks"],
+            key=lambda z:(z.get("recent_turnover_krw") is None,
+                          -(float(z.get("recent_turnover_krw") or 0)),
+                          z.get("trade_rank") is None,z.get("trade_rank") or 999,
+                          z.get("rank") is None,z.get("rank") or 999)
+        )[:8]
+        g["reason"]=sector_reason_summary(g)
         out.append(g)
-    out.sort(key=lambda z: (z["query_score"], z["count"], z["trade_value_krw"]), reverse=True)
+    theme_strength_for_groups(out)
+    out.sort(
+        key=lambda z:(z["query_score"],
+                      z.get("recent_turnover_krw") or 0,
+                      z["trade_value_krw"],z["count"]),
+        reverse=True
+    )
     for i, g in enumerate(out, 1):
         g["sector_rank"] = i
     return out
@@ -670,6 +802,36 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 except Exception:
                     strategy_map = {}
 
+            reversal_map={}
+            if radar_reversal_signals and ranks and table_exists(cur,"market_minute_bars"):
+                try:
+                    rank_codes=[x[0] for x in ranks if x and x[0]]
+                    cur.execute("""SELECT stock_code,bar_time,open_price,high_price,low_price,close_price,volume
+                                   FROM (
+                                     SELECT stock_code,bar_time,open_price,high_price,low_price,close_price,volume,
+                                            row_number() OVER(PARTITION BY stock_code ORDER BY bar_time DESC) AS rn
+                                     FROM market_minute_bars
+                                     WHERE interval_min=3 AND stock_code=ANY(%s)
+                                   ) q
+                                   WHERE rn<=60
+                                   ORDER BY stock_code,bar_time""",(rank_codes,))
+                    hist={}
+                    for code,bt,o,h,l,c,v in cur.fetchall():
+                        hist.setdefault(code,[]).append({
+                            "time":iso(bt),"open":float(o) if o is not None else None,
+                            "high":float(h) if h is not None else None,"low":float(l) if l is not None else None,
+                            "close":float(c) if c is not None else None,"volume":float(v) if v is not None else None
+                        })
+                    for code,bars in hist.items():
+                        pack=radar_reversal_signals(bars,strategy_map.get(code,{}) or {},max_signals=6)
+                        reversal_map[code]={
+                            "latest":pack.get("latest"),
+                            "recent":(pack.get("signals") or [])[-3:],
+                            "note":pack.get("note")
+                        }
+                except Exception:
+                    reversal_map={}
+
             news_map = {}
             if table_exists(cur, "stock_news_cache"):
                 cur.execute("""SELECT stock_code,stock_name,title,source,published_at,link
@@ -696,6 +858,33 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         arr.append({"rcept_no":x[1],"report_nm":x[2],"category":x[3],
                                     "rcept_dt":x[4].isoformat() if x[4] else None,
                                     "link":x[5],"filer":x[6]})
+
+            # Latest validated SOR observation delta for intuitive per-stock "how much just traded".
+            flow_map={}
+            if radar_flow_delta and table_exists(cur,"radar_flow_quotes"):
+                try:
+                    cur.execute("""SELECT stock_code,batch_time,payload FROM (
+                                     SELECT stock_code,batch_time,payload,
+                                            row_number() OVER(PARTITION BY stock_code ORDER BY batch_time DESC) AS rn
+                                     FROM radar_flow_quotes
+                                     WHERE batch_time>now()-interval '4 minutes'
+                                   ) q WHERE rn<=2 ORDER BY stock_code,batch_time DESC""")
+                    flow_hist={}
+                    for code,bt,payload in cur.fetchall():
+                        flow_hist.setdefault(code,[]).append(payload or {})
+                    for code,h in flow_hist.items():
+                        current=h[0] if h else None
+                        previous=h[1] if len(h)>1 else None
+                        value,state,seconds=radar_flow_delta(current,previous) if current else (None,"NO_SAMPLE",None)
+                        flow_map[code]={
+                            "recent_turnover_krw":value if state=="OK" else None,
+                            "recent_turnover_seconds":seconds,
+                            "recent_turnover_state":state,
+                            "sor_turnover_krw":current.get("turnover_krw") if current else None,
+                            "exchange_at":current.get("exchange_at") if current else None
+                        }
+                except Exception:
+                    flow_map={}
 
             rows = []
             for r in ranks:
@@ -725,8 +914,14 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "change_rate": chg, "trade_rank": tv.get("rank"), "trade_value_krw": trade_value,
                     "market_cap_krw": cap2, "trade_to_cap_pct": ratio,
                     "official_sector": sector2, "market_theme": theme2,
+                    "recent_turnover_krw":(flow_map.get(code) or {}).get("recent_turnover_krw"),
+                    "recent_turnover_seconds":(flow_map.get(code) or {}).get("recent_turnover_seconds"),
+                    "recent_turnover_state":(flow_map.get(code) or {}).get("recent_turnover_state"),
+                    "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
                     "catalyst": cat, "flow_state": flow,
                     "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
+                    "reversal_signal":(reversal_map.get(code) or {}).get("latest"),
+                    "recent_reversal_signals":(reversal_map.get(code) or {}).get("recent") or [],
                     "mimosa": chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
                     "mimosa_strategies": strategy_map.get(code,{})
                 }
@@ -765,8 +960,15 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 flow=stock_flow_state(None,None,tv.get("rank"),cat)
                 x={"rank":None,"rank_change":None,"code":code,"name":name,"change_rate":tv.get("change_rate"),
                    "trade_rank":tv.get("rank"),"trade_value_krw":value,"market_cap_krw":cap,"trade_to_cap_pct":ratio,
-                   "official_sector":tv.get("sector"),"market_theme":theme,"catalyst":cat,"flow_state":flow,
+                   "official_sector":tv.get("sector"),"market_theme":theme,
+                   "recent_turnover_krw":(flow_map.get(code) or {}).get("recent_turnover_krw"),
+                   "recent_turnover_seconds":(flow_map.get(code) or {}).get("recent_turnover_seconds"),
+                   "recent_turnover_state":(flow_map.get(code) or {}).get("recent_turnover_state"),
+                   "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
+                   "catalyst":cat,"flow_state":flow,
                    "chart_state":(chart_map.get(code) or {}).get("state_ko","대기"),
+                   "reversal_signal":(reversal_map.get(code) or {}).get("latest"),
+                   "recent_reversal_signals":(reversal_map.get(code) or {}).get("recent") or [],
                    "mimosa":chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
                    "mimosa_strategies":strategy_map.get(code,{})}
                 x["analysis"]=stock_analysis(x)
