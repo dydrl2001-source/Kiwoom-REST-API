@@ -30,9 +30,11 @@ from market_os_store import (
     _validation_candidates as store_validation_candidates,
     _promotion_stage,
 )
+from market_os_shadow import evaluate as shadow_evaluate, experiment_summaries as shadow_experiment_summaries
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
+SHADOW_LAB_ENABLED=os.getenv("MARKET_OS_SHADOW_LAB_ENABLED","1").strip().lower() in {"1","true","yes","on"}
 KST=ZoneInfo("Asia/Seoul")
 
 SCHEMA=r"""
@@ -232,6 +234,71 @@ CREATE TABLE IF NOT EXISTS market_os_promotion_events (
 );
 CREATE INDEX IF NOT EXISTS idx_market_os_promotion_events_candidate
     ON market_os_promotion_events(candidate_key,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_shadow_rules (
+    shadow_rule_id          TEXT PRIMARY KEY,
+    candidate_key           TEXT NOT NULL UNIQUE,
+    rule_version            TEXT NOT NULL,
+    segment_type            TEXT NOT NULL,
+    segment_value           TEXT NOT NULL,
+    source_horizon          TEXT NOT NULL,
+    action                  TEXT NOT NULL CHECK(action IN ('PROMOTE_ONE_TIER','SUPPRESS_ONE_TIER')),
+    enabled                 BOOLEAN NOT NULL DEFAULT TRUE,
+    approved_at             TIMESTAMPTZ NOT NULL,
+    approved_by             TEXT NOT NULL DEFAULT 'MANUAL',
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    disabled_at             TIMESTAMPTZ,
+    last_evaluated_at       TIMESTAMPTZ,
+    note                    TEXT,
+    spec                    JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_shadow_rules_enabled
+    ON market_os_shadow_rules(enabled,approved_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_shadow_observations (
+    assessment_time         TIMESTAMPTZ NOT NULL,
+    stock_code              TEXT NOT NULL,
+    rule_version            TEXT NOT NULL,
+    shadow_rule_id          TEXT NOT NULL,
+    observed_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    matched                 BOOLEAN NOT NULL,
+    changed                 BOOLEAN NOT NULL,
+    control_tier            TEXT NOT NULL,
+    challenger_tier         TEXT NOT NULL,
+    action                  TEXT NOT NULL,
+    PRIMARY KEY(assessment_time,stock_code,rule_version,shadow_rule_id)
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_shadow_obs_rule_time
+    ON market_os_shadow_observations(shadow_rule_id,assessment_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_shadow_experiment_summary (
+    shadow_rule_id              TEXT NOT NULL,
+    horizon                     TEXT NOT NULL,
+    cohort                      TEXT NOT NULL,
+    evidence_state              TEXT NOT NULL,
+    membership_changes          INTEGER NOT NULL DEFAULT 0,
+    control_samples             INTEGER NOT NULL DEFAULT 0,
+    control_stocks              INTEGER NOT NULL DEFAULT 0,
+    control_days                INTEGER NOT NULL DEFAULT 0,
+    control_avg_return_pct      DOUBLE PRECISION,
+    control_median_return_pct   DOUBLE PRECISION,
+    control_positive_rate       DOUBLE PRECISION,
+    control_avg_mfe_pct         DOUBLE PRECISION,
+    control_avg_mae_pct         DOUBLE PRECISION,
+    challenger_samples          INTEGER NOT NULL DEFAULT 0,
+    challenger_stocks           INTEGER NOT NULL DEFAULT 0,
+    challenger_days             INTEGER NOT NULL DEFAULT 0,
+    challenger_avg_return_pct   DOUBLE PRECISION,
+    challenger_median_return_pct DOUBLE PRECISION,
+    challenger_positive_rate    DOUBLE PRECISION,
+    challenger_avg_mfe_pct      DOUBLE PRECISION,
+    challenger_avg_mae_pct      DOUBLE PRECISION,
+    delta_avg_return_pct        DOUBLE PRECISION,
+    delta_positive_rate_pp      DOUBLE PRECISION,
+    delta_mae_pct               DOUBLE PRECISION,
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(shadow_rule_id,horizon,cohort)
+);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -1079,6 +1146,129 @@ def refresh_promotion_registry():
         }
 
 
+def capture_shadow_observations(limit_per_rule=800):
+    """Freeze CONTROL and CHALLENGER decisions prospectively after manual approval."""
+    if not SHADOW_LAB_ENABLED:
+        return 0
+    inserted=0
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_shadow_rules"):
+            return 0
+        cur.execute("""SELECT shadow_rule_id,candidate_key,rule_version,segment_type,segment_value,
+                              source_horizon,action,approved_at,spec
+                       FROM market_os_shadow_rules
+                       WHERE enabled=TRUE
+                       ORDER BY approved_at""")
+        rules=cur.fetchall()
+        for rule in rules:
+            cur.execute("""SELECT a.*
+                           FROM market_os_assessment_snapshots a
+                           WHERE a.rule_version=%s
+                             AND a.snapshot_time>=%s
+                             AND NOT EXISTS(
+                                 SELECT 1 FROM market_os_shadow_observations o
+                                 WHERE o.assessment_time=a.snapshot_time
+                                   AND o.stock_code=a.stock_code
+                                   AND o.rule_version=a.rule_version
+                                   AND o.shadow_rule_id=%s
+                             )
+                           ORDER BY a.snapshot_time,a.stock_code
+                           LIMIT %s""",
+                        (rule["rule_version"],rule["approved_at"],rule["shadow_rule_id"],limit_per_rule))
+            rows=[]
+            for a in cur.fetchall():
+                result=shadow_evaluate(dict(a),dict(rule))
+                rows.append((
+                    a["snapshot_time"],a["stock_code"],a["rule_version"],rule["shadow_rule_id"],
+                    result["matched"],result["changed"],result["control_tier"],
+                    result["challenger_tier"],result["action"]
+                ))
+            if rows:
+                cur.executemany("""INSERT INTO market_os_shadow_observations(
+                        assessment_time,stock_code,rule_version,shadow_rule_id,matched,changed,
+                        control_tier,challenger_tier,action)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT DO NOTHING""",rows)
+                inserted+=cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(rows)
+                cur.execute("""UPDATE market_os_shadow_rules
+                               SET last_evaluated_at=now()
+                               WHERE shadow_rule_id=%s""",(rule["shadow_rule_id"],))
+    return inserted
+
+
+def _shadow_evidence_state(summary):
+    changes=int(summary.get("membership_changes") or 0)
+    c=summary.get("control") or {};h=summary.get("challenger") or {}
+    n=min(int(c.get("samples") or 0),int(h.get("samples") or 0))
+    days=min(int(c.get("distinct_days") or 0),int(h.get("distinct_days") or 0))
+    stocks=min(int(c.get("distinct_stocks") or 0),int(h.get("distinct_stocks") or 0))
+    if changes==0:
+        return "NO_DIFFERENCE"
+    if n<10 or days<2 or stocks<3:
+        return "COLLECTING"
+    if n<30 or days<3 or changes<5:
+        return "FORMING"
+    return "COMPARABLE"
+
+
+def refresh_shadow_summaries():
+    """Recompute prospective A/B summaries from frozen observations and resolved outcomes."""
+    if not SHADOW_LAB_ENABLED:
+        return 0
+    written=0
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_shadow_rules"):
+            return 0
+        cur.execute("""SELECT shadow_rule_id,rule_version,approved_at
+                       FROM market_os_shadow_rules
+                       ORDER BY approved_at""")
+        rules=cur.fetchall()
+        for rule in rules:
+            cur.execute("""SELECT o.assessment_time,o.stock_code,o.control_tier,o.challenger_tier,
+                                  y.horizon,y.return_pct,y.mfe_pct,y.mae_pct
+                           FROM market_os_shadow_observations o
+                           JOIN market_os_assessment_outcomes y
+                             ON y.assessment_time=o.assessment_time
+                            AND y.stock_code=o.stock_code
+                            AND y.rule_version=o.rule_version
+                           WHERE o.shadow_rule_id=%s
+                             AND y.horizon IN ('5m','30m','close','D+1')
+                           ORDER BY y.horizon,o.stock_code,o.assessment_time""",
+                        (rule["shadow_rule_id"],))
+            raw=[]
+            for r in cur.fetchall():
+                x=dict(r)
+                x["snapshot_time"]=r["assessment_time"]
+                x["trade_day"]=r["assessment_time"].astimezone(KST).date().isoformat()
+                raw.append(x)
+            anchors=_episode_anchors(raw)
+            summaries=shadow_experiment_summaries(anchors)
+            cur.execute("""DELETE FROM market_os_shadow_experiment_summary
+                           WHERE shadow_rule_id=%s""",(rule["shadow_rule_id"],))
+            for s in summaries:
+                control=s["control"];challenger=s["challenger"]
+                state=_shadow_evidence_state(s)
+                cur.execute("""INSERT INTO market_os_shadow_experiment_summary(
+                        shadow_rule_id,horizon,cohort,evidence_state,membership_changes,
+                        control_samples,control_stocks,control_days,control_avg_return_pct,
+                        control_median_return_pct,control_positive_rate,control_avg_mfe_pct,control_avg_mae_pct,
+                        challenger_samples,challenger_stocks,challenger_days,challenger_avg_return_pct,
+                        challenger_median_return_pct,challenger_positive_rate,challenger_avg_mfe_pct,
+                        challenger_avg_mae_pct,delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct,updated_at)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                           %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
+                    (rule["shadow_rule_id"],s["horizon"],s["cohort"],state,s["membership_changes"],
+                     control["samples"],control["distinct_stocks"],control["distinct_days"],
+                     control["avg_return_pct"],control["median_return_pct"],control["positive_rate"],
+                     control["avg_mfe_pct"],control["avg_mae_pct"],
+                     challenger["samples"],challenger["distinct_stocks"],challenger["distinct_days"],
+                     challenger["avg_return_pct"],challenger["median_return_pct"],challenger["positive_rate"],
+                     challenger["avg_mfe_pct"],challenger["avg_mae_pct"],
+                     s["delta_avg_return_pct"],s["delta_positive_rate_pp"],s["delta_mae_pct"]))
+                written+=1
+    return written
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(RULE_VERSION,))
@@ -1097,17 +1287,19 @@ def update_status(status,note,last_snapshot=None,last_outcome=False):
 
 def cycle():
     captured,snap=capture_assessments()
+    shadow_obs=capture_shadow_observations()
     outcomes=resolve_outcomes()
     segments=refresh_segments()
     registry=refresh_promotion_registry()
+    shadow_summaries=refresh_shadow_summaries()
     update_status(
         "OK",
-        f"captured={captured} outcomes={outcomes} segments={segments} "
+        f"captured={captured} shadow_obs={shadow_obs} outcomes={outcomes} segments={segments} "
         f"registry_active={registry['active']} promotion_candidates={registry['promotion_candidates']} "
-        f"registry_transitions={registry['transitions']}",
+        f"registry_transitions={registry['transitions']} shadow_summaries={shadow_summaries}",
         last_snapshot=snap,last_outcome=bool(outcomes)
     )
-    return captured,outcomes,segments,registry
+    return captured,outcomes,segments,registry,shadow_obs,shadow_summaries
 
 
 if __name__=="__main__":
@@ -1115,12 +1307,12 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s,r=cycle()
-            if a or o or r.get("transitions"):
+            a,o,s,r,so,ss=cycle()
+            if a or o or so or r.get("transitions"):
                 print(
-                    f"learning cycle assessments={a} outcomes={o} segments={s} "
+                    f"learning cycle assessments={a} shadow_obs={so} outcomes={o} segments={s} "
                     f"registry={r['active']} candidates={r['promotion_candidates']} "
-                    f"transitions={r['transitions']}",
+                    f"transitions={r['transitions']} shadow_summaries={ss}",
                     flush=True
                 )
         except Exception as exc:
