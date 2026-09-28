@@ -485,6 +485,7 @@ def refresh_segments():
     with db() as c,c.cursor() as cur:
         cur.execute("""SELECT a.watch_tier,a.market_stance,a.trigger_state,a.session_bucket,
                               a.catalyst_grade,a.setup_score,a.micro_strength,a.micro_buy_share_15s,
+                              a.micro_tick_count_15s,a.micro_gap_count_15s,
                               o.horizon,o.return_pct,o.mfe_pct,o.mae_pct
                        FROM market_os_assessment_outcomes o
                        JOIN market_os_assessment_snapshots a
@@ -507,11 +508,12 @@ def refresh_segments():
                 "SESSION":session,
                 "CATALYST":r["catalyst_grade"] or "UNKNOWN",
                 "SETUP":_bucket_setup(r["setup_score"]),
-                "MICRO_STRENGTH":_bucket_strength(r["micro_strength"]),
-                "MICRO_BUY_SHARE":_bucket_buy_share(r["micro_buy_share_15s"]),
                 "STANCE_TRIGGER":stance+" | "+trigger,
                 "TIER_SESSION":tier+" | "+session,
             }
+            if int(r["micro_tick_count_15s"] or 0)>0 and int(r["micro_gap_count_15s"] or 0)==0:
+                dims["MICRO_STRENGTH"]=_bucket_strength(r["micro_strength"])
+                dims["MICRO_BUY_SHARE"]=_bucket_buy_share(r["micro_buy_share_15s"])
             for kind,value in dims.items():
                 groups[(kind,value,horizon)].append(r)
         cur.execute("DELETE FROM market_os_learning_segments")
