@@ -10,9 +10,10 @@ try:
 except Exception:
     DASHBOARD_HTML_V2 = None
 try:
-    from flow_core import delta as radar_flow_delta
+    from flow_core import delta as radar_flow_delta, reversal_signals as radar_reversal_signals
 except Exception:
     radar_flow_delta = None
+    radar_reversal_signals = None
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
@@ -801,6 +802,36 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 except Exception:
                     strategy_map = {}
 
+            reversal_map={}
+            if radar_reversal_signals and ranks and table_exists(cur,"market_minute_bars"):
+                try:
+                    rank_codes=[x[0] for x in ranks if x and x[0]]
+                    cur.execute("""SELECT stock_code,bar_time,open_price,high_price,low_price,close_price,volume
+                                   FROM (
+                                     SELECT stock_code,bar_time,open_price,high_price,low_price,close_price,volume,
+                                            row_number() OVER(PARTITION BY stock_code ORDER BY bar_time DESC) AS rn
+                                     FROM market_minute_bars
+                                     WHERE interval_min=3 AND stock_code=ANY(%s)
+                                   ) q
+                                   WHERE rn<=60
+                                   ORDER BY stock_code,bar_time""",(rank_codes,))
+                    hist={}
+                    for code,bt,o,h,l,c,v in cur.fetchall():
+                        hist.setdefault(code,[]).append({
+                            "time":iso(bt),"open":float(o) if o is not None else None,
+                            "high":float(h) if h is not None else None,"low":float(l) if l is not None else None,
+                            "close":float(c) if c is not None else None,"volume":float(v) if v is not None else None
+                        })
+                    for code,bars in hist.items():
+                        pack=radar_reversal_signals(bars,strategy_map.get(code,{}) or {},max_signals=6)
+                        reversal_map[code]={
+                            "latest":pack.get("latest"),
+                            "recent":(pack.get("signals") or [])[-3:],
+                            "note":pack.get("note")
+                        }
+                except Exception:
+                    reversal_map={}
+
             news_map = {}
             if table_exists(cur, "stock_news_cache"):
                 cur.execute("""SELECT stock_code,stock_name,title,source,published_at,link
@@ -889,6 +920,8 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
                     "catalyst": cat, "flow_state": flow,
                     "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
+                    "reversal_signal":(reversal_map.get(code) or {}).get("latest"),
+                    "recent_reversal_signals":(reversal_map.get(code) or {}).get("recent") or [],
                     "mimosa": chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
                     "mimosa_strategies": strategy_map.get(code,{})
                 }
@@ -934,6 +967,8 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                    "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
                    "catalyst":cat,"flow_state":flow,
                    "chart_state":(chart_map.get(code) or {}).get("state_ko","대기"),
+                   "reversal_signal":(reversal_map.get(code) or {}).get("latest"),
+                   "recent_reversal_signals":(reversal_map.get(code) or {}).get("recent") or [],
                    "mimosa":chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
                    "mimosa_strategies":strategy_map.get(code,{})}
                 x["analysis"]=stock_analysis(x)
