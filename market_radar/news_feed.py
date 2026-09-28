@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 import requests
 import psycopg
+from evidence_identity import identity_quality, usable_as_catalyst
 
 DB=os.getenv("DATABASE_URL","")
 POLL=int(os.getenv("NEWS_POLL_SECONDS","60"))
@@ -25,9 +26,11 @@ def schema():
           published_at TIMESTAMPTZ,
           link TEXT NOT NULL,
           fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          identity_quality TEXT,
           PRIMARY KEY(stock_code,link)
         );
         CREATE INDEX IF NOT EXISTS idx_news_stock_time ON stock_news_cache(stock_code,published_at DESC);
+        ALTER TABLE stock_news_cache ADD COLUMN IF NOT EXISTS identity_quality TEXT;
         CREATE TABLE IF NOT EXISTS news_feed_status(
           id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
           updated_at TIMESTAMPTZ NOT NULL,
@@ -59,7 +62,7 @@ def latest_universe():
         t=cur.fetchone()[0]
         if not t:
             return []
-        cur.execute("""SELECT stock_code,stock_name FROM market_rank_snapshots
+        cur.execute("""SELECT stock_code,stock_name,official_sector FROM market_rank_snapshots
                        WHERE snapshot_time=%s AND stock_name IS NOT NULL
                        ORDER BY rank_no NULLS LAST LIMIT %s""",(t,TOPN))
         return cur.fetchall()
@@ -79,7 +82,7 @@ def parse_dt(v):
     except Exception:
         return None
 
-def fetch_news(code,name):
+def fetch_news(code,name,official_sector=None):
     params={"q":f'"{name}" when:1d',"hl":"ko","gl":"KR","ceid":"KR:ko"}
     url="https://news.google.com/rss/search?"+urlencode(params)
     r=requests.get(url,headers={"User-Agent":"Mozilla/5.0 MarketRadar/0.1"},timeout=15)
@@ -92,13 +95,16 @@ def fetch_news(code,name):
         source=(item.findtext("source") or "").strip()
         pub=parse_dt(item.findtext("pubDate"))
         if title and link:
-            items.append((code,name,title,source,pub,link))
+            q=identity_quality(name,title,"NEWS",official_sector)
+            if not usable_as_catalyst(q):
+                continue
+            items.append((code,name,title,source,pub,link,q))
     with db() as c, c.cursor() as cur:
         for row in items:
-            cur.execute("""INSERT INTO stock_news_cache(stock_code,stock_name,title,source,published_at,link,fetched_at)
-                           VALUES(%s,%s,%s,%s,%s,%s,now())
+            cur.execute("""INSERT INTO stock_news_cache(stock_code,stock_name,title,source,published_at,link,fetched_at,identity_quality)
+                           VALUES(%s,%s,%s,%s,%s,%s,now(),%s)
                            ON CONFLICT(stock_code,link) DO UPDATE SET title=excluded.title,source=excluded.source,
-                           published_at=excluded.published_at,fetched_at=now()""",row)
+                           published_at=excluded.published_at,fetched_at=now(),identity_quality=excluded.identity_quality""",row)
         cur.execute("DELETE FROM stock_news_cache WHERE fetched_at < now()-interval '7 days'")
         c.commit()
     return len(items)
@@ -109,11 +115,11 @@ def cycle():
         set_status("WAITING_FOR_MARKET_DATA","실시간 조회순위 데이터 대기")
         return
     total=0; checked=0
-    for code,name in uni:
+    for code,name,official_sector in uni:
         if not needs_refresh(code):
             continue
         try:
-            total+=fetch_news(code,name)
+            total+=fetch_news(code,name,official_sector)
             checked+=1
         except Exception as e:
             print("news fetch error",code,name,str(e)[:200],flush=True)
