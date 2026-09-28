@@ -366,6 +366,115 @@ def build_sector_groups(rows):
         g["sector_rank"] = i
     return out
 
+def build_leader_calendar(cur, now):
+    """Recent four work-week grid from locally stored end-of-day-like trade snapshots.
+
+    Each date uses the latest stored trade-value snapshot for that KST date, then
+    groups stocks that were up at least 4%. Missing days stay blank; no history is invented.
+    """
+    monday=(now.astimezone(KST)-timedelta(days=now.astimezone(KST).weekday())).date()
+    start=monday-timedelta(days=21)
+    end=monday+timedelta(days=4)
+    agg={}
+    if table_exists(cur,"market_trade_value_snapshots"):
+        try:
+            cur.execute("""WITH day_last AS (
+                             SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,
+                                    MAX(snapshot_time) AS t
+                             FROM market_trade_value_snapshots
+                             WHERE snapshot_time >= %s AND snapshot_time < %s
+                             GROUP BY 1
+                           ), strong AS (
+                             SELECT (m.snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,
+                                    COALESCE(NULLIF(m.market_theme,''),NULLIF(m.official_sector,''),'미분류') AS theme,
+                                    m.stock_code,m.trade_value_krw,m.change_rate
+                             FROM market_trade_value_snapshots m
+                             JOIN day_last dl ON m.snapshot_time=dl.t
+                             WHERE m.change_rate>=4 AND COALESCE(m.rank_no,999)<=100
+                           )
+                           SELECT d,theme,COUNT(*),COALESCE(SUM(trade_value_krw),0),
+                                  AVG(change_rate)
+                           FROM strong
+                           GROUP BY d,theme
+                           ORDER BY d,COUNT(*) DESC,SUM(trade_value_krw) DESC""",
+                        (datetime.combine(start,dtime.min,tzinfo=KST).astimezone(timezone.utc),
+                         datetime.combine(end+timedelta(days=1),dtime.min,tzinfo=KST).astimezone(timezone.utc)))
+            for d,theme,count,total,avg in cur.fetchall():
+                agg.setdefault(d,[]).append({
+                    "theme":theme,"count":int(count or 0),
+                    "trade_value_krw":float(total or 0),
+                    "avg_change_rate":float(avg) if avg is not None else None
+                })
+        except Exception:
+            agg={}
+    cells=[]
+    today=now.astimezone(KST).date()
+    d=start
+    while d<=end:
+        if d.weekday()<5:
+            themes=sorted(agg.get(d,[]),key=lambda x:(-x["count"],-x["trade_value_krw"]))[:3]
+            cells.append({
+                "date":d.isoformat(),"day":d.day,"weekday":d.weekday(),
+                "future":d>today,"themes":themes
+            })
+        d+=timedelta(days=1)
+    observed=[x["date"] for x in cells if x["themes"]]
+    return {
+        "start":start.isoformat(),"end":end.isoformat(),"cells":cells,
+        "observed_days":len(observed),
+        "coverage_start":min(observed) if observed else None,
+        "note":"각 날짜의 마지막 저장 거래대금 스냅샷에서 +4% 이상 종목을 테마별 집계. 데이터가 없는 과거 날짜는 비워 둠"
+    }
+
+
+def build_leader_desk(cur, trade_map, query_rows, now):
+    """Reference-style home leader desk using current local market observations."""
+    qmap={x.get("code"):x for x in query_rows}
+    strong=[]
+    for code,tv in sorted(trade_map.items(),key=lambda kv:(kv[1].get("rank") is None,kv[1].get("rank") or 999)):
+        name=tv.get("name") or code
+        if is_etf_like(name):continue
+        chg=tv.get("change_rate")
+        try:
+            if chg is None or float(chg)<4:continue
+        except (TypeError,ValueError):
+            continue
+        q=qmap.get(code) or {}
+        theme=q.get("market_theme") or STOCK_THEME_HINTS.get(name) or tv.get("theme") or tv.get("sector") or "미분류"
+        strong.append({
+            "code":code,"name":name,"trade_rank":tv.get("rank"),
+            "trade_value_krw":tv.get("trade_value"),
+            "change_rate":float(chg),"current_price_krw":tv.get("current_price"),
+            "theme":theme,"query_rank":q.get("rank"),
+            "rank_history":q.get("rank_history") or {},
+            "material_type":(q.get("material_digest") or {}).get("material_type"),
+        })
+        if len(strong)>=16:break
+
+    groups={}
+    for x in strong:
+        g=groups.setdefault(x["theme"],{"name":x["theme"],"count":0,"trade_value_krw":0.0,
+                                       "change_sum":0.0,"stocks":[]})
+        g["count"]+=1
+        g["trade_value_krw"]+=float(x.get("trade_value_krw") or 0)
+        g["change_sum"]+=float(x.get("change_rate") or 0)
+        g["stocks"].append(x)
+    sectors=[]
+    for g in groups.values():
+        g["avg_change_rate"]=g["change_sum"]/g["count"] if g["count"] else None
+        g["stocks"]=sorted(g["stocks"],key=lambda x:(x.get("trade_rank") is None,x.get("trade_rank") or 999))[:5]
+        sectors.append(g)
+    sectors.sort(key=lambda g:(-g["count"],-g["trade_value_krw"],-(g["avg_change_rate"] or 0)))
+
+    return {
+        "threshold_pct":4,
+        "strong_stocks":strong[:12],
+        "leading_sectors":sectors[:4],
+        "calendar":build_leader_calendar(cur,now),
+        "note":"거래대금 상위 100 표본 중 +4% 이상 종목을 현재 테마로 묶은 실시간 관찰. 전체 시장 전수·매수추천이 아님"
+    }
+
+
 def stock_flow_state(rank_no, rank_change, trade_rank, catalyst):
     material = int(catalyst.get("material_strength") or 0) >= 2
     money = trade_rank is not None and int(trade_rank) <= 20
@@ -1077,6 +1186,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 rows.append(row)
 
             sector_groups = build_sector_groups(rows)
+            leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc))
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1304,6 +1414,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "trade_ranking": trade_rows,
         "etf_trade_ranking": etf_trade_rows,
         "sector_rankings": sector_groups,
+        "leader_desk": leader_desk,
         "materials": material_rows,
         "material_stats": material_stats,
         "home_brief": home_brief,
