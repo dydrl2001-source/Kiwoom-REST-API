@@ -186,6 +186,122 @@ def _enrich_edges(segments,edge_rows=None):
 
 
 
+def _validation_gate(segment):
+    """Deterministic shadow gate for deciding what deserves human rule review.
+
+    This never changes live tiers or thresholds. It only classifies already
+    resolved learning evidence into HOLD / PROMOTE_REVIEW / SUPPRESS_REVIEW.
+    """
+    horizon=segment.get("horizon")
+    if horizon not in ("30m","close","D+1"):
+        return None
+
+    depth=segment.get("interaction_depth",_segment_depth(segment.get("segment_type")))
+    quality=segment.get("quality") or _quality(
+        segment.get("samples",0),segment.get("distinct_stocks",0),
+        segment.get("distinct_days",0),depth
+    )
+    qrank=_quality_rank(quality)
+    if qrank<2:
+        return None
+
+    avg=segment.get("avg_return_pct")
+    median=segment.get("median_return_pct")
+    positive=segment.get("positive_rate")
+    if avg is None or median is None or positive is None:
+        return {
+            "status":"HOLD","direction":"MIXED","quality":quality,
+            "reason_codes":["MISSING_CORE_METRIC"],
+        }
+
+    strength=avg>=0.50 and median>0 and positive>=0.58
+    weakness=avg<=-0.30 and median<0 and positive<=0.42
+    if not strength and not weakness:
+        return {
+            "status":"HOLD","direction":"MIXED","quality":quality,
+            "reason_codes":["CORE_EFFECT_NOT_ALIGNED"],
+        }
+
+    direction="STRENGTH" if strength else "WEAKNESS"
+    reasons=["CORE_EFFECT_ALIGNED","MULTI_DAY_DIVERSITY"]
+    if depth>=2:
+        baseline=segment.get("baseline") or {}
+        if not segment.get("edge_ready"):
+            return {
+                "status":"HOLD","direction":direction,"quality":quality,
+                "reason_codes":reasons+["COMPARATOR_NOT_READY"],
+            }
+        edge_avg=segment.get("edge_avg_return_pct")
+        edge_pos=segment.get("edge_positive_rate_pp")
+        edge_mae=segment.get("edge_mae_pct")
+        comparator_quality=baseline.get("quality")
+        if _quality_rank(comparator_quality)<2:
+            return {
+                "status":"HOLD","direction":direction,"quality":quality,
+                "reason_codes":reasons+["COMPARATOR_NOT_DIVERSE"],
+            }
+        if direction=="STRENGTH":
+            edge_ok=(edge_avg is not None and edge_avg>=0.20
+                     and edge_pos is not None and edge_pos>=3.0
+                     and (edge_mae is None or edge_mae>=0))
+        else:
+            edge_ok=(edge_avg is not None and edge_avg<=-0.20
+                     and edge_pos is not None and edge_pos<=-3.0
+                     and (edge_mae is None or edge_mae<=0))
+        if not edge_ok:
+            return {
+                "status":"HOLD","direction":direction,"quality":quality,
+                "reason_codes":reasons+["EDGE_EFFECT_NOT_ALIGNED"],
+            }
+        reasons+=["PARENT_COMPLEMENT_READY","EDGE_EFFECT_ALIGNED"]
+
+    status="PROMOTE_REVIEW" if direction=="STRENGTH" else "SUPPRESS_REVIEW"
+    readiness="READY" if qrank>=3 else "FORMING"
+    return {
+        "status":status,"direction":direction,"quality":quality,
+        "readiness":readiness,"reason_codes":reasons,
+    }
+
+
+def _validation_candidates(segments):
+    """Return review-worthy shadow evidence without altering the live engine."""
+    rows=[]
+    for s in segments:
+        gate=_validation_gate(s)
+        if not gate:
+            continue
+        row={
+            "segment_type":s.get("segment_type"),
+            "segment_value":s.get("segment_value"),
+            "horizon":s.get("horizon"),
+            "samples":s.get("samples",0),
+            "distinct_stocks":s.get("distinct_stocks",0),
+            "distinct_days":s.get("distinct_days",0),
+            "interaction_depth":s.get("interaction_depth",_segment_depth(s.get("segment_type"))),
+            "avg_return_pct":s.get("avg_return_pct"),
+            "median_return_pct":s.get("median_return_pct"),
+            "positive_rate":s.get("positive_rate"),
+            "avg_mfe_pct":s.get("avg_mfe_pct"),
+            "avg_mae_pct":s.get("avg_mae_pct"),
+            "edge_avg_return_pct":s.get("edge_avg_return_pct"),
+            "edge_positive_rate_pp":s.get("edge_positive_rate_pp"),
+            "edge_mae_pct":s.get("edge_mae_pct"),
+            "baseline":s.get("baseline"),
+            **gate,
+        }
+        rows.append(row)
+    priority={"PROMOTE_REVIEW":0,"SUPPRESS_REVIEW":1,"HOLD":2}
+    rows.sort(key=lambda x:(
+        priority.get(x["status"],9),
+        -_quality_rank(x.get("quality")),
+        -x.get("interaction_depth",1),
+        -x.get("samples",0),
+        {"close":0,"D+1":1,"30m":2}.get(x.get("horizon"),9)
+    ))
+    return rows
+
+
+
 def latest_microstructure(cur,codes):
     out={}
     if not codes:return out
@@ -235,7 +351,9 @@ def learning_payload():
         "rule_version":RULE_VERSION,
         "mode":"SHADOW_LEARNING",
         "notice":"성과를 자동 측정하고 조건별 차이를 학습하지만, 충분한 표본 전에는 규칙 임계값을 자동 변경하지 않습니다.",
-        "status":None,"segments":[],"interactions":[],"notes":[],"daily_assessments":[],
+        "status":None,"segments":[],"interactions":[],"validation_candidates":[],
+        "validation_summary":{"promote_review":0,"suppress_review":0,"hold":0},
+        "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
     with db() as c,c.cursor() as cur:
@@ -300,6 +418,12 @@ def learning_payload():
             ]
 
     learning["interactions"]=_enrich_edges(learning["segments"],edge_rows)
+    learning["validation_candidates"]=_validation_candidates(learning["segments"])
+    learning["validation_summary"]={
+        "promote_review":sum(x["status"]=="PROMOTE_REVIEW" for x in learning["validation_candidates"]),
+        "suppress_review":sum(x["status"]=="SUPPRESS_REVIEW" for x in learning["validation_candidates"]),
+        "hold":sum(x["status"]=="HOLD" for x in learning["validation_candidates"]),
+    }
 
     # Conservative, deterministic feedback. This is evidence for review, not an
     # automatic rewrite of thresholds.
