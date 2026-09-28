@@ -7,7 +7,7 @@ on:
       - ".github/workflows/market-os-ci.yml"
   push:
     branches:
-      - "feature/market-os-rulebook-v1"
+      - "feature/market-os-live-v2"
     paths:
       - "market_radar/**"
       - ".github/workflows/market-os-ci.yml"
