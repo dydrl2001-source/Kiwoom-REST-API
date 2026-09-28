@@ -302,3 +302,71 @@ def implementation_shortfall_summary(entry: dict[str,Any], exit: dict[str,Any] |
         "entry_depth_slippage_bps":finite(entry.get("depth_slippage_bps")),
         "exit_depth_slippage_bps":finite((exit or {}).get("depth_slippage_bps")),
     }
+
+
+def estimate_book_capacity(
+    side: Side,
+    book: dict[str,Any],
+    policy: BookPolicy | None=None,
+    max_implementation_shortfall_bps: float=30.0,
+) -> dict[str,Any]:
+    """Maximum immediately executable size supported by the visible 10-level book.
+
+    This is a point-in-time liquidity estimate, not a strategy capacity forecast.
+    Displayed quantities are haircutted before use.
+    """
+    p=policy or BookPolicy()
+    asks=list(book.get("asks") or [])
+    bids=list(book.get("bids") or [])
+    levels=(asks if side=="BUY" else bids)[:max(1,int(p.max_levels))]
+    best_ask=finite(book.get("best_ask_krw"));best_bid=finite(book.get("best_bid_krw"))
+    if best_ask is None or best_bid is None or best_ask<=0 or best_bid<=0 or best_ask<best_bid:
+        return {"status":"INVALID_BOOK","capacity_shares":0,"capacity_notional_krw":0.0}
+    mid=(best_ask+best_bid)/2.0
+    spread_bps=(best_ask-best_bid)/mid*10_000.0
+    if spread_bps>p.max_spread_bps:
+        return {"status":"SPREAD_TOO_WIDE","capacity_shares":0,"capacity_notional_krw":0.0,
+                "spread_bps":spread_bps}
+    haircut=clamp(p.displayed_liquidity_haircut,0.0,1.0)
+    cumulative_shares=0
+    cumulative_notional=0.0
+    accepted_shares=0
+    accepted_notional=0.0
+    accepted_is=None
+    accepted_levels=0
+    curve=[]
+    direction=1.0 if side=="BUY" else -1.0
+    for level in levels:
+        price=finite(level.get("price_krw"))
+        displayed=max(0,int(level.get("qty") or 0))
+        usable=max(0,int(math.floor(displayed*haircut)))
+        if price is None or price<=0 or usable<=0:
+            continue
+        cumulative_shares+=usable
+        cumulative_notional+=price*usable
+        vwap=cumulative_notional/cumulative_shares
+        is_bps=direction*(vwap/mid-1.0)*10_000.0
+        point={"level":int(level.get("level") or 0),"cumulative_shares":cumulative_shares,
+               "cumulative_notional_krw":cumulative_notional,"vwap_krw":vwap,
+               "implementation_shortfall_bps":is_bps}
+        curve.append(point)
+        if is_bps<=max_implementation_shortfall_bps:
+            accepted_shares=cumulative_shares
+            accepted_notional=cumulative_notional
+            accepted_is=is_bps
+            accepted_levels=len(curve)
+        else:
+            break
+    return {
+        "status":"OK" if accepted_shares>0 else "IS_LIMIT",
+        "capacity_shares":accepted_shares,
+        "capacity_notional_krw":accepted_notional,
+        "capacity_is_bps":accepted_is,
+        "levels_used":accepted_levels,
+        "spread_bps":spread_bps,
+        "arrival_mid_krw":mid,
+        "max_implementation_shortfall_bps":max_implementation_shortfall_bps,
+        "curve":curve,
+        "model_quality":"ORDER_BOOK_10L_CAPACITY",
+        "policy":asdict(p),
+    }
