@@ -157,6 +157,63 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"pos={(g['positive_rate'] or 0)*100:.1f}% dAvg={edge_txt} "
                       f"reasons={','.join(g.get('reason_codes') or [])}")
 
+        print('\n[PROMOTION REGISTRY]')
+        if not exists('market_os_promotion_registry'):
+            print('promotion registry table missing')
+        else:
+            cur.execute("""SELECT current_stage,COUNT(*) AS n
+                           FROM market_os_promotion_registry
+                           WHERE rule_version=%s AND active=TRUE
+                           GROUP BY current_stage
+                           ORDER BY CASE current_stage
+                               WHEN 'SHADOW_RULE' THEN 1
+                               WHEN 'PROMOTION_CANDIDATE' THEN 2
+                               WHEN 'STABLE' THEN 3
+                               WHEN 'VALIDATED' THEN 4
+                               WHEN 'FORMING' THEN 5 ELSE 6 END""",(VERSION,))
+            stage_rows=cur.fetchall()
+            if not stage_rows:
+                print('active registry entries 없음')
+            for r in stage_rows:
+                print(f"{r['current_stage']}: {r['n']}")
+            cur.execute("""SELECT candidate_key,current_stage,direction,review_action,manual_review_state,
+                                  segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
+                                  quality,walk_forward_status,early_avg_return_pct,recent_avg_return_pct
+                           FROM market_os_promotion_registry
+                           WHERE rule_version=%s AND active=TRUE
+                           ORDER BY CASE current_stage
+                               WHEN 'SHADOW_RULE' THEN 1
+                               WHEN 'PROMOTION_CANDIDATE' THEN 2
+                               WHEN 'STABLE' THEN 3
+                               WHEN 'VALIDATED' THEN 4
+                               WHEN 'FORMING' THEN 5 ELSE 6 END,
+                               samples DESC LIMIT 30""",(VERSION,))
+            for r in cur.fetchall():
+                ea=r['early_avg_return_pct'];ra=r['recent_avg_return_pct']
+                print(f"{r['current_stage']} {r['review_action']} {r['horizon']} "
+                      f"{r['segment_type']}={r['segment_value']} N={r['samples']} "
+                      f"stocks={r['distinct_stocks']} days={r['distinct_days']} q={r['quality']} "
+                      f"wf={r['walk_forward_status'] or '—'} "
+                      f"early={(f'{ea:+.3f}%' if ea is not None else '—')} "
+                      f"recent={(f'{ra:+.3f}%' if ra is not None else '—')} "
+                      f"manual={r['manual_review_state']}")
+
+        print('\n[PROMOTION TRANSITIONS]')
+        if exists('market_os_promotion_events'):
+            cur.execute("""SELECT e.event_time,e.event_type,e.from_stage,e.to_stage,e.direction,
+                                  e.review_action,r.segment_type,r.segment_value,r.horizon
+                           FROM market_os_promotion_events e
+                           LEFT JOIN market_os_promotion_registry r ON r.candidate_key=e.candidate_key
+                           ORDER BY e.event_time DESC LIMIT 15""")
+            events=cur.fetchall()
+            if not events:
+                print('transition history 없음')
+            for r in events:
+                print(f"{r['event_time']} {r['event_type']} "
+                      f"{r['from_stage'] or '—'}->{r['to_stage']} "
+                      f"{r['direction'] or '—'} {r['review_action'] or '—'} "
+                      f"{r['horizon'] or '—'} {r['segment_type'] or '—'}={r['segment_value'] or '—'}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -187,5 +244,6 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
 print('\nSampling: 5m=non-overlap 5m, 30m=non-overlap 30m, close/D+1=one per stock-day.')
 print('Interaction policy: only pre-registered regime/setup/trigger/micro combinations are tested; no arbitrary combination search.')
 print('Validation gate v1.3: cumulative gate + day-split EARLY/RECENT walk-forward stability; recent reversal/weakening/comparator gaps => HOLD.')
+print('Promotion Registry v1.4: lifecycle is persisted with transition history; automation stops at PROMOTION_CANDIDATE and never creates SHADOW_RULE.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
