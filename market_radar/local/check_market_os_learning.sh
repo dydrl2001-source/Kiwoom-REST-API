@@ -63,7 +63,7 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
             print(r['outcome_source'],r['n'])
 
     if exists('market_os_learning_segments'):
-        cur.execute("""SELECT segment_type,segment_value,horizon,samples,
+        cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,sample_basis,
                               ROUND(avg_return_pct::numeric,3) AS avg_return,
                               ROUND(median_return_pct::numeric,3) AS median_return,
                               ROUND((positive_rate*100)::numeric,1) AS positive_pct,
@@ -79,18 +79,23 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
         if not rows:
             print('표본 5개 이상 구간 없음')
         for r in rows:
-            print(f"{r['horizon']} | {r['segment_type']}={r['segment_value']} | N={r['samples']} "
+            print(f"{r['horizon']} | {r['segment_type']}={r['segment_value']} | "
+                  f"N={r['samples']} stocks={r['distinct_stocks']} days={r['distinct_days']} basis={r['sample_basis']} "
                   f"avg={r['avg_return']}% med={r['median_return']}% pos={r['positive_pct']}% "
                   f"MFE={r['avg_mfe']}% MAE={r['avg_mae']}%")
 
-        cur.execute("""SELECT segment_type,segment_value,horizon,samples,avg_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct
+        cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
+                              avg_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct
                        FROM market_os_learning_segments
-                       WHERE samples>=20 AND horizon IN('30m','close')
+                       WHERE samples>=20 AND distinct_stocks>=5 AND distinct_days>=2
+                         AND horizon IN('30m','close')
                        ORDER BY avg_return_pct DESC NULLS LAST LIMIT 8""")
         strong=cur.fetchall()
-        cur.execute("""SELECT segment_type,segment_value,horizon,samples,avg_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct
+        cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
+                              avg_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct
                        FROM market_os_learning_segments
-                       WHERE samples>=20 AND horizon IN('30m','close')
+                       WHERE samples>=20 AND distinct_stocks>=5 AND distinct_days>=2
+                         AND horizon IN('30m','close')
                        ORDER BY avg_return_pct ASC NULLS LAST LIMIT 8""")
         weak=cur.fetchall()
         print('\n[REVIEW CANDIDATES N>=20]')
@@ -100,8 +105,9 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
             for label,rows in [('STRONG',strong),('WEAK',weak)]:
                 for r in rows:
                     print(f"{label} {r['horizon']} {r['segment_type']}={r['segment_value']} "
-                          f"N={r['samples']} avg={r['avg_return_pct']:.3f}% "
-                          f"positive={(r['positive_rate'] or 0)*100:.1f}%")
+                          f"N={r['samples']} stocks={r['distinct_stocks']} days={r['distinct_days']} "
+                          f"avg={r['avg_return_pct']:.3f}% positive={(r['positive_rate'] or 0)*100:.1f}%")
 
-print('\nNotice: early samples are descriptive only. No threshold or live score was changed.')
+print('\nSampling: 5m=non-overlap 5m, 30m=non-overlap 30m, close/D+1=one per stock-day.')
+print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
