@@ -25,6 +25,18 @@ except Exception:
     def usable_as_catalyst(q): return q not in ("ENTITY_CONFLICT","LIST_MENTION","MISSING_NAME")
     def usable_for_theme(q): return q in ("VERIFIED","CONTEXT_VERIFIED")
     def stock_context(text,name,radius=130): return str(text or "")
+try:
+    from ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
+    from ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
+except Exception:
+    try:
+        from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
+        from market_radar.ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
+    except Exception:
+        AIBrokerageDecisionEngine = None
+        ai_context_from_dashboard_row = None
+
+AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
@@ -38,7 +50,7 @@ _LEADER_CAL_CACHE_LOCK = threading.Lock()
 _LEADER_CAL_CACHE = None
 _LEADER_CAL_CACHE_AT = 0.0
 _LEADER_CAL_CACHE_KEY = None
-app = FastAPI(title="Market Radar", version="0.6.1")
+app = FastAPI(title="Market Radar", version="0.7.0")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "패키징", "테스트", "파운드리", "D램", "DRAM", "낸드"],
@@ -1147,18 +1159,20 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     }
             regime_metrics = None
             if table_exists(cur, "market_regime_snapshots"):
-                cur.execute("""SELECT snapshot_time,confidence,data_freshness_sec,rank_turnover_5m,top5_trade_share,
+                cur.execute("""SELECT snapshot_time,candidate_trend_state,candidate_flow_state,candidate_sentiment_state,
+                                      confidence,data_freshness_sec,rank_turnover_5m,top5_trade_share,
                                       top10_trade_share,top_sector_share,top3_sector_share,largecap_trade_share,
                                       positive_rank_share,avg_rank_change_rate,sector_count_top20,explanation
                                FROM market_regime_snapshots ORDER BY snapshot_time DESC LIMIT 1""")
                 r = cur.fetchone()
                 if r:
                     regime_metrics = {
-                        "snapshot_time": iso(r[0]), "confidence": r[1], "freshness_sec": r[2],
-                        "rank_turnover_5m": r[3], "top5_trade_share": r[4], "top10_trade_share": r[5],
-                        "top_sector_share": r[6], "top3_sector_share": r[7], "largecap_trade_share": r[8],
-                        "positive_rank_share": r[9], "avg_rank_change_rate": r[10],
-                        "sector_count_top20": r[11], "explanation": r[12] or {}
+                        "snapshot_time": iso(r[0]), "trend": r[1], "flow": r[2], "sentiment": r[3],
+                        "confidence": r[4], "freshness_sec": r[5],
+                        "rank_turnover_5m": r[6], "top5_trade_share": r[7], "top10_trade_share": r[8],
+                        "top_sector_share": r[9], "top3_sector_share": r[10], "largecap_trade_share": r[11],
+                        "positive_rank_share": r[12], "avg_rank_change_rate": r[13],
+                        "sector_count_top20": r[14], "explanation": r[15] or {}
                     }
 
             # latest telegram sample for catalyst matching
@@ -1372,6 +1386,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "recent_turnover_seconds":(flow_map.get(code) or {}).get("recent_turnover_seconds"),
                     "recent_turnover_state":(flow_map.get(code) or {}).get("recent_turnover_state"),
                     "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
+                    "quote_exchange_at":(flow_map.get(code) or {}).get("exchange_at"),
                     "catalyst": cat, "flow_state": flow,
                     "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
                     "reversal_signal":(reversal_map.get(code) or {}).get("latest"),
@@ -1395,6 +1410,56 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc),sector_groups)
             home_candidates=build_home_candidates(cur,rows)
             paper_lab=build_paper_lab(cur)
+
+            # AI Brokerage v1: explainable PAPER-only decisions for current Top candidates.
+            ai_brokerage={
+                "status":"NOT_CONFIGURED","paper_only":True,
+                "registry":{},"candidates":[],
+                "note":"6-Desk 판단 모듈 미로딩"
+            }
+            if AI_BROKERAGE_ENGINE and ai_context_from_dashboard_row:
+                try:
+                    candidate_map={x.get("code"):x for x in home_candidates if x.get("code")}
+                    theme_strength_map={
+                        g.get("name"):g.get("theme_strength")
+                        for g in sector_groups if g.get("name") and g.get("theme_strength") is not None
+                    }
+                    max_open=max(1,min(20,int(os.getenv("PAPER_MAX_OPEN","5"))))
+                    packets=[]
+                    for row in rows:
+                        candidate=candidate_map.get(row.get("code"))
+                        if not candidate:
+                            continue
+                        row["candidate"]={
+                            "score":candidate.get("attention_score"),
+                            "last_score":candidate.get("attention_score"),
+                            "entry_score":candidate.get("entry_score"),
+                            "peak_score":candidate.get("peak_score"),
+                            "primary_type":candidate.get("primary_type"),
+                            "event_type":candidate.get("event_type"),
+                        }
+                        ctx=ai_context_from_dashboard_row(
+                            row,regime,regime_metrics,theme_strength_map,paper_lab,max_open=max_open
+                        )
+                        packet=AI_BROKERAGE_ENGINE.evaluate(ctx).to_dict()
+                        row["ai_brokerage"]=packet
+                        packets.append(packet)
+                    state_order={"PAPER_ENTRY":0,"READY":1,"WATCH":2,"BLOCKED":3,"IGNORE":4}
+                    packets.sort(key=lambda x:(state_order.get(x.get("state"),9),-(x.get("conviction") or 0)))
+                    ai_brokerage={
+                        "status":"OK","paper_only":True,
+                        "registry":AI_BROKERAGE_ENGINE.registry.lifecycle_counts(),
+                        "candidates":packets,
+                        "note":"실거래 주문 없음 · candidate tracker Top 후보를 6개 Desk가 평가"
+                    }
+                except Exception as e:
+                    ai_brokerage={
+                        "status":"ERROR","paper_only":True,
+                        "registry":AI_BROKERAGE_ENGINE.registry.lifecycle_counts(),
+                        "candidates":[],
+                        "note":f"AI Brokerage 평가 실패: {type(e).__name__}: {e}"
+                    }
+
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1641,6 +1706,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "telegram_recent": recent_telegram,
         "home_candidates": home_candidates,
         "paper_lab": paper_lab,
+        "ai_brokerage": ai_brokerage,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
     with _DASH_CACHE_LOCK:
