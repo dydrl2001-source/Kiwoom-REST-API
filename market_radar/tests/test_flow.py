@@ -117,6 +117,48 @@ class CoreTests(unittest.TestCase):
   r={'text':text,'citations':[{'url':'https://example.org','start':text.index('[1]'),'end':text.index('[1]')+3}]}
   out=fc.report_sections(r);s=out['핵심 재료'];self.assertEqual(s['text'][s['citations'][0]['start']:s['citations'][0]['end']],'[1]')
 
+    def test_reversal_signal_requires_confirmation(self):
+        bars=[]
+        for i in range(25):
+            p=100+i
+            bars.append({'time':str(i),'open':p,'high':p+1,'low':p-1,'close':p+.5,'volume':100})
+        # Momentum extreme by itself must not cross the composite display threshold.
+        out=fc.reversal_signals(bars)
+        latest=out.get('latest')
+        self.assertTrue(latest is None or latest['score']>=45)
+
+    def test_failed_breakout_with_volume_marks_top_warning(self):
+        bars=[]
+        for i in range(25):
+            p=100+i
+            bars.append({'time':str(i),'open':p,'high':p+1,'low':p-1,'close':p+.7,'volume':100})
+        prior=max(x['high'] for x in bars[-20:])
+        bars.append({'time':'25','open':prior-.5,'high':prior+5,'low':prior-1,'close':prior-.2,'volume':320})
+        out=fc.reversal_signals(bars)
+        self.assertIsNotNone(out['latest'])
+        self.assertEqual(out['latest']['kind'],'TOP_WARNING')
+        self.assertIn('전고 돌파 실패',out['latest']['reasons'])
+
+    def test_spring_with_volume_marks_bottom_watch(self):
+        bars=[]
+        for i in range(25):
+            p=150-i
+            bars.append({'time':str(i),'open':p,'high':p+1,'low':p-1,'close':p-.7,'volume':100})
+        prior=min(x['low'] for x in bars[-20:])
+        bars.append({'time':'25','open':prior+.5,'high':prior+2,'low':prior-5,'close':prior+.3,'volume':320})
+        out=fc.reversal_signals(bars)
+        self.assertIsNotNone(out['latest'])
+        self.assertEqual(out['latest']['kind'],'BOTTOM_WATCH')
+        self.assertIn('저점 이탈 후 회복',out['latest']['reasons'])
+
+    def test_signal_output_never_calls_it_buy_or_sell(self):
+        bars=[]
+        for i in range(30):
+            p=100+i*.2
+            bars.append({'time':str(i),'open':p,'high':p+1,'low':p-1,'close':p+.1,'volume':100})
+        text=json.dumps(fc.reversal_signals(bars),ensure_ascii=False).lower()
+        self.assertNotIn('매수',text);self.assertNotIn('매도',text)
+
 class RouteTests(unittest.TestCase):
  def setUp(self):
   from fastapi import FastAPI,HTTPException
