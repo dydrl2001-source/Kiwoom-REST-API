@@ -174,18 +174,30 @@ def top_warning(cur,code):
     return (reversal_signals(bars,{}).get("latest"))
 
 def active_candidates(cur,now):
-    if not table_exists(cur,"radar_candidate_episodes"):return []
-    cur.execute("""SELECT id,stock_code,stock_name,started_at,last_seen_at,candidate_version,
-                          last_score,peak_score,primary_type,market_theme,event_type,chart_state
-                   FROM radar_candidate_episodes
-                   WHERE status='ACTIVE'
-                     AND last_seen_at>=%s
-                     AND started_at<=%s
-                     AND last_score>=%s
-                     AND COALESCE(primary_type,'')<>'조건 미완성'
-                   ORDER BY last_score DESC,peak_score DESC,last_seen_at DESC
+    if not table_exists(cur,"radar_candidate_episodes") or not table_exists(cur,"radar_candidate_history"):
+        return []
+    cutoff=now-timedelta(seconds=ENTRY_SURVIVE_SEC)
+    cur.execute("""SELECT e.id,e.stock_code,e.stock_name,e.started_at,e.last_seen_at,e.candidate_version,
+                          e.last_score,e.peak_score,e.primary_type,e.market_theme,e.event_type,e.chart_state,
+                          h.n_obs,h.min_score
+                   FROM radar_candidate_episodes e
+                   JOIN LATERAL (
+                     SELECT COUNT(*) AS n_obs,MIN(attention_score) AS min_score
+                     FROM radar_candidate_history h
+                     WHERE h.stock_code=e.stock_code
+                       AND h.snapshot_time>=%s
+                       AND h.snapshot_time<=%s
+                   ) h ON true
+                   WHERE e.status='ACTIVE'
+                     AND e.last_seen_at>=%s
+                     AND e.started_at<=%s
+                     AND e.last_score>=%s
+                     AND h.n_obs>=3
+                     AND h.min_score>=%s
+                     AND COALESCE(e.primary_type,'')<>'조건 미완성'
+                   ORDER BY e.last_score DESC,e.peak_score DESC,e.last_seen_at DESC
                    LIMIT 20""",
-                (now-timedelta(seconds=90),now-timedelta(seconds=ENTRY_SURVIVE_SEC),ENTRY_SCORE))
+                (cutoff,now,now-timedelta(seconds=90),cutoff,ENTRY_SCORE,ENTRY_SCORE))
     return cur.fetchall()
 
 def open_trades(cur):
@@ -238,7 +250,7 @@ def close_trade(cur,t,now,reason,exit_score=None,chart=None):
 def entry_reason(c,chart):
     return [
         f"관찰도 {c['last_score']}≥{ENTRY_SCORE}",
-        f"후보 {ENTRY_SURVIVE_SEC}초 이상 유지",
+        f"최근 {ENTRY_SURVIVE_SEC}초 최저 관찰도도 {ENTRY_SCORE} 이상",
         "최근 SOR 체결 확인",
         "차트 훼손 상태 아님",
         f"유형 {c.get('primary_type') or '미확인'}",
