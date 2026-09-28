@@ -306,11 +306,10 @@ def rotation_series(rows,history_by_code,max_intervals=10):
 
 
 def candidate_watchlist(rows, theme_rotation, limit=12):
-    """Rank *observation* candidates, never trade instructions.
+    """Rank observation candidates and classify *why* they deserve inspection.
 
-    This score only compresses current local observations so the user can decide
-    what to inspect first. It does not forecast returns and does not generate
-    buy/sell orders.
+    The output is not a trade instruction or return forecast. It compresses local
+    observations into four watch types plus an incomplete-data fallback.
     """
     theme_move={x.get('name'):x for x in (theme_rotation or {}).get('series',[])}
     eligible=[]
@@ -383,6 +382,42 @@ def candidate_watchlist(rows, theme_rotation, limit=12):
         else:
             risks.append('재료 종합 미완료')
 
+        strategies=r.get('strategy_signals') or {}
+        close_sig=strategies.get('CLOSE_BET') or {}
+        over_sig=strategies.get('OVERSOLD') or {}
+        fall_sig=strategies.get('FALLING_STOCK') or {}
+        watch_types=[]
+
+        if over_sig.get('state') in ('OVERSOLD_WATCH','OVERSOLD_REBOUND_WATCH') or \
+           fall_sig.get('state') in ('FALLING_WATCH','FALLING_REBOUND_WATCH'):
+            watch_types.append('과대낙폭·낙주 반등')
+            reasons.append((over_sig.get('state_ko') if over_sig.get('state','').startswith('OVERSOLD_')
+                            else fall_sig.get('state_ko')) or '반등 감시 구조')
+            score+=8
+
+        if state in ('BREAKOUT_HOLD','NEW_HIGH','M_BREAKOUT_TEST','PREV_HIGH_APPROACH','LEADER_TREND') or \
+           close_sig.get('state') in ('CLOSEBET_NXT_LEADER','CLOSEBET_NXT_BREAKOUT','CLOSEBET_KRX_CONSECUTIVE'):
+            watch_types.append('추세·돌파')
+            if close_sig.get('state_ko') and close_sig.get('state')!='CLOSEBET_NO':
+                reasons.append(close_sig['state_ko'])
+
+        if state in ('M_CONTRACTION','PULLBACK_INTACT'):
+            watch_types.append('수렴·눌림')
+
+        catalyst_ready=bool(r.get('research') and not r.get('research_stale')
+                            and r.get('event_type') and r.get('event_type')!='기타·미확인'
+                            and ((burst or 0)>=1.4 or (money_rank and money_rank<=20)
+                                 or (move is not None and move>=1)))
+        if catalyst_ready:
+            watch_types.append('재료+거래대금')
+
+        if not watch_types:
+            watch_types=['조건 미완성']
+
+        # One primary bucket prevents duplicate cards while preserving all matching tags.
+        priority=('과대낙폭·낙주 반등','추세·돌파','수렴·눌림','재료+거래대금','조건 미완성')
+        primary_type=next((x for x in priority if x in watch_types),'조건 미완성')
+
         chg=r.get('change_pct')
         if chg is not None:
             if chg>=20: risks.append('당일 급등 20%+')
@@ -392,11 +427,11 @@ def candidate_watchlist(rows, theme_rotation, limit=12):
         score=max(0,min(100,round(score)))
         if score<40: continue
         label='관찰 우선' if score>=70 else ('조건 확인' if score>=55 else '추적')
-        style='추세·돌파' if state in ('BREAKOUT_HOLD','NEW_HIGH','M_BREAKOUT_TEST','PREV_HIGH_APPROACH') else (
-              '수렴·추세' if state in ('M_CONTRACTION','PULLBACK_INTACT','LEADER_TREND') else '수급·재료 확인')
         eligible.append({
             'code':r['code'],'name':r.get('name'),'attention_score':score,
-            'label':label,'style':style,'reasons':reasons[:6],'risk_flags':risks[:5],
+            'label':label,'style':primary_type,'primary_type':primary_type,
+            'watch_types':watch_types,'reasons':list(dict.fromkeys(reasons))[:7],
+            'risk_flags':list(dict.fromkeys(risks))[:6],
             'query_rank':qr,'trade_rank':tr,'interval_turnover_krw':r.get('interval_turnover_krw'),
             'five_min_turnover_krw':r.get('five_min_turnover_krw'),'turnover_krw':r.get('turnover_krw'),
             'burst_multiple':burst,'change_pct':chg,'market_theme':r.get('market_theme'),
@@ -404,11 +439,14 @@ def candidate_watchlist(rows, theme_rotation, limit=12):
             'chart_state':chart.get('state_ko') or chart.get('state'),
             'minute_trend':chart.get('minute_trend'),
             'theme_share_change_pp':move,'research_state':r.get('research_state'),
+            'strategy_signals':{
+                k:{'state':v.get('state'),'state_ko':v.get('state_ko'),'score':v.get('score')}
+                for k,v in strategies.items()
+            },
             'observed_at':r.get('received_at')
         })
     eligible.sort(key=lambda x:(-x['attention_score'],-(x.get('interval_turnover_krw') or 0)))
     return eligible[:limit]
-
 
 def report_sections(report):
     """Slice report sections without destroying citation offsets. No new AI calls."""
