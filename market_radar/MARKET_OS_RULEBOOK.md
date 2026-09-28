@@ -635,3 +635,133 @@ bash market_radar/local/shadow_rule_admin.sh review <dossier_id> reject --confir
 
 모든 revision은 immutable evidence snapshot을 유지한다.
 
+## Versioned Ruleset Dry Run v1.8 — CONTROL vs Candidate System
+
+`APPROVED_DRY_RUN`은 versioned ruleset을 자동으로 만들지 않는다. 사람이 다시 명시적으로 dry run을 시작해야 한다.
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh dry-run-start <dossier_id> --confirm
+bash market_radar/local/shadow_rule_admin.sh ruleset <ruleset_id>
+bash market_radar/local/shadow_rule_admin.sh dry-run-stop <ruleset_id> --confirm
+```
+
+### 두 번째 prospective boundary
+
+`dry-run-start` 실행 시각을 ruleset의 `activated_at`으로 고정한다.
+
+- 활성시각 이전 assessment는 Versioned Ruleset Dry Run에 포함하지 않는다.
+- 같은 dossier에서 다시 start해 prospective boundary를 재설정하는 것을 금지한다.
+- source dossier는 반드시 `APPROVED_DRY_RUN`이어야 한다.
+- 시작 순간에도 source Shadow Decision이 여전히 `ACCEPT_CANDIDATE` + `review_eligible=true`인지 재검증한다.
+- source Shadow Rule도 enabled 상태여야 한다.
+
+### Candidate ruleset v1
+
+v1.8의 candidate system은 현재 CONTROL engine을 base로 하는 immutable spec이다.
+
+```text
+base_rule_version = market-os-v1
++
+Adoption Dossier에서 승인된 1개 tier overlay
+=
+candidate versioned ruleset
+```
+
+Ruleset spec에는 다음을 저장한다.
+
+- spec version
+- base rule version
+- source dossier ID / dossier hash
+- source Shadow Rule ID
+- prospective_only=true
+- live_activation=false
+- max_tier_shift=1
+- blocked_override=false
+- overlay condition
+- overlay action
+
+spec 전체를 canonical JSON으로 hash해 `ruleset_id`와 `version_label`을 생성한다.
+
+같은 dossier 증거에서 같은 spec을 만들면 동일한 hash가 나온다.
+
+### CONTROL과 CANDIDATE
+
+각 assessment마다:
+
+- CONTROL tier = 실제 당시 Market OS가 저장한 `watch_tier`
+- CANDIDATE tier = 같은 assessment + immutable ruleset overlay
+- Radar / Theme / Setup / Catalyst / Trigger / Risk는 같은 관측값을 공유한다.
+- v1.8에서는 candidate가 기존 assessment universe 밖의 종목을 추가하지 않는다.
+- `BLOCKED`는 candidate overlay로 해제하지 않는다.
+
+따라서 v1.8은 아직 base axis 계산 알고리즘 전체를 바꾸는 실험이 아니라, **현재 시스템 전체에 승인된 정책 overlay를 얹은 차기 버전 후보**를 prospective로 검증하는 단계다.
+
+### Dry-run 저장
+
+- ruleset 정의: `market_os_versioned_rulesets`
+- 당시 CONTROL/CANDIDATE 판단: `market_os_ruleset_dry_run_observations`
+- 5m/30m/close/D+1 cohort summary: `market_os_ruleset_dry_run_summary`
+- 시작/중지/stale 이력: `market_os_ruleset_events`
+
+반복 snapshot은 기존 episode-anchor 규칙을 동일하게 적용한다.
+
+비교 cohort:
+- FOCUS
+- REVIEW = FOCUS + PREP
+
+측정:
+- CONTROL/CANDIDATE N
+- 종목 수
+- 거래일 수
+- 평균/중앙값/양(+)비율
+- MFE/MAE
+- Δ평균
+- Δ양(+)
+- ΔMAE
+- 실제 membership change 수
+
+### Source stale 자동 중단
+
+Dry Run이 활성화되어 있어도 source Shadow Decision이 더 이상 `ACCEPT_CANDIDATE`가 아니거나 `review_eligible=false`, 또는 source Shadow Rule이 disable되면:
+
+```text
+DRY_RUN_ACTIVE
+→ STALE_SOURCE
+```
+
+으로 자동 전환하고 새 관측을 중단한다.
+
+이 ruleset을 다시 활성화하지 않는다. 이후 다시 증거가 회복되면:
+
+```text
+새 ACCEPT transition
+→ 새 dossier revision
+→ 새 human approval
+→ 새 ruleset
+```
+
+경로를 밟아 새로운 prospective boundary를 만든다.
+
+### 상태
+
+- `DRY_RUN_ACTIVE`: prospective candidate 관측 중
+- `DRY_RUN_STOPPED`: 사람이 수동 중지
+- `STALE_SOURCE`: source Decision/Shadow Rule이 무효화되어 자동 중단
+
+### Kill switch
+
+`MARKET_OS_RULESET_DRY_RUN_ENABLED=0`이면 새로운 ruleset observation과 summary 계산을 중단한다.
+
+이 설정도 live CONTROL Market OS에는 영향을 주지 않는다.
+
+### v1.8이 하지 않는 것
+
+- live Market OS ruleset 교체 안 함
+- 실제 watch tier 변경 안 함
+- 주문/포지션/비중 변경 안 함
+- 여러 overlay 조합 안 함
+- base axis 계산식 변경 안 함
+- universe expansion 안 함
+
+v1.8의 목적은 **사람이 승인한 차기 ruleset candidate를 기존 CONTROL과 완전히 분리된 prospective 버전으로 운영 검증**하는 것이다.
+
