@@ -8,6 +8,7 @@ os.environ.setdefault('DATABASE_URL','')
 os.environ.setdefault('DASHBOARD_TOKEN','test')
 
 import radar_api as api
+import evidence_identity as identity
 
 class SectorBoardTests(unittest.TestCase):
     def row(self,name,sector,rank,tv,recent,chg,strength=0,summary=''):
@@ -18,7 +19,7 @@ class SectorBoardTests(unittest.TestCase):
             'change_rate':chg,'flow_state':'관찰','chart_state':'대기',
             'material_digest':{'material_strength':strength,'summary':summary or '미확인',
                                'assessment':'직접 재료 후보' if strength>=3 else ('테마·업종 재료' if strength==2 else '직접 재료 미확인'),
-                               'source_kind':'뉴스'}
+                               'source_kind':'뉴스','identity_quality':'VERIFIED','material_type':'수주·공급계약' if strength>=3 else '기타·미확인'}
         }
 
     def test_stock_money_and_recent_money_are_kept(self):
@@ -34,9 +35,10 @@ class SectorBoardTests(unittest.TestCase):
           self.row('BBB','로봇',2,90,8,6.0,3,'신제품 양산'),
         ]
         g=api.build_sector_groups(rows)[0]
-        self.assertEqual(g['reason']['level'],'SUPPORTED')
-        self.assertIn('복수 종목',g['reason']['summary'])
-        self.assertIn('인과관계 확정이 아님',g['reason']['note'])
+        self.assertEqual(g['reason']['level'],'PARTIAL')
+        self.assertEqual(g['reason']['label'],'복수 개별재료')
+        self.assertIn('공통 원인으로 확정하지 않음',g['reason']['summary'])
+        self.assertIn('공통 인과는 별개',g['reason']['note'])
 
     def test_no_material_stays_unconfirmed(self):
         rows=[self.row('AAA','전력',1,100,10,4.0,0,'미확인')]
@@ -103,6 +105,24 @@ class SectorBoardTests(unittest.TestCase):
         self.assertEqual(out['leading_sectors'][0]['name'],'반도체')
         self.assertEqual(out['leading_sectors'][0]['count'],2)
         self.assertEqual(out['threshold_pct'],4)
+
+    def test_remedy_game_article_is_entity_conflict(self):
+        title="레메디 신작 '컨트롤 레조넌트' 글로벌 출시…뒤틀린 맨해튼서 초자연적 액션"
+        self.assertEqual(identity.identity_quality('레메디',title,'NEWS','의료/정밀기기'),'ENTITY_CONFLICT')
+        self.assertFalse(identity.usable_as_catalyst('ENTITY_CONFLICT'))
+
+    def test_ticker_list_is_not_direct_catalyst(self):
+        text="9/28 특징 상한가 및 급등종목 +30.00% HLB +25.52% 쓰리빌리언"
+        self.assertEqual(identity.identity_quality('쓰리빌리언',text,'Telegram','제약'),'LIST_MENTION')
+        self.assertFalse(identity.usable_as_catalyst('LIST_MENTION'))
+
+    def test_unverified_hbm_text_cannot_override_official_sector(self):
+        cat={'material_strength':3,'best_identity_quality':'NAME_MATCH','theme':'반도체/HBM'}
+        self.assertEqual(api.choose_market_theme('한국비엔씨','제약',cat),'제약')
+
+    def test_verified_stock_context_can_supply_theme(self):
+        cat={'material_strength':3,'best_identity_quality':'CONTEXT_VERIFIED','theme':'반도체/HBM'}
+        self.assertEqual(api.choose_market_theme('테스트기업','전기전자',cat),'반도체/HBM')
 
     def test_money_first_order_inside_sector(self):
         rows=[
