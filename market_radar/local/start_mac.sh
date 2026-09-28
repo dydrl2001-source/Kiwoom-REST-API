@@ -23,7 +23,7 @@ PY
   exit 0
 fi
 docker compose build
-docker compose up -d postgres radar-api kiwoom-feed market-theme-feed candidate-tracker market-regime news-feed dart-feed chart-feed mimosa-engine index-chart-feed research-engine deep-research-engine web-research-worker
+docker compose up -d postgres radar-api kiwoom-feed market-theme-feed candidate-tracker market-regime news-feed dart-feed chart-feed mimosa-engine index-chart-feed research-engine deep-research-engine web-research-worker kiwoom-realtime market-os-learning
 if [ -f data/marketcollector.session ]; then
   docker compose up -d telegram-collector
 else
