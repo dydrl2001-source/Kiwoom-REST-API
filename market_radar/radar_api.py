@@ -9,6 +9,10 @@ try:
     from radar_ui_v2 import DASHBOARD_HTML_V2
 except Exception:
     DASHBOARD_HTML_V2 = None
+try:
+    from flow_core import delta as radar_flow_delta
+except Exception:
+    radar_flow_delta = None
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
@@ -191,6 +195,57 @@ def catalyst_for_stock(messages, code, name):
         "note": None,
     }
 
+def sector_reason_summary(group):
+    """Explain the observed sector move only as far as collected evidence supports it."""
+    stocks=group.get("stocks") or []
+    evidence=[]
+    for x in stocks:
+        d=x.get("material_digest") or {}
+        strength=int(d.get("material_strength") or 0)
+        if strength>=2:
+            evidence.append({
+                "code":x.get("code"),"name":x.get("name"),
+                "summary":d.get("summary"),"assessment":d.get("assessment"),
+                "source_kind":d.get("source_kind"),"strength":strength
+            })
+    evidence.sort(key=lambda x:(-x["strength"],x.get("name") or ""))
+    direct=[x for x in evidence if x["strength"]>=3]
+    sector=[x for x in evidence if x["strength"]==2]
+    positive=int(group.get("positive") or 0)
+    count=int(group.get("change_n") or group.get("count") or 0)
+    breadth=f"{positive}/{count}종목 상승" if count else "상승폭 표본 부족"
+    recent=group.get("recent_turnover_krw") or 0
+
+    if len(direct)>=2:
+        names=", ".join(x["name"] for x in direct[:3] if x.get("name"))
+        reason=f"복수 종목에서 직접 재료가 확인됨({names}). {breadth}이며 거래대금 동행 여부를 함께 확인하는 구간."
+        level="SUPPORTED"
+        label="복수 직접재료"
+    elif direct:
+        x=direct[0]
+        reason=f"{x.get('name')}: {x.get('summary') or '직접 재료 확인'}. 섹터 전체 공통 원인으로 단정하긴 어렵지만 {breadth}."
+        level="PARTIAL"
+        label="개별 직접재료"
+    elif sector:
+        x=sector[0]
+        reason=f"업종·테마형 재료가 관측됨: {x.get('summary') or x.get('assessment') or '테마 재료'}. {breadth}."
+        level="PARTIAL"
+        label="테마형 재료"
+    elif recent and recent>0:
+        reason=f"공통 촉발 재료는 아직 확인되지 않음. 다만 {breadth}이고 최근 관측구간 거래대금이 집중되는 상태."
+        level="UNCONFIRMED"
+        label="돈·관심 선행"
+    else:
+        reason=f"현재 수집 범위에서 섹터 공통 상승 재료를 확인하지 못함. {breadth}; 원인 확정은 보류."
+        level="UNCONFIRMED"
+        label="공통재료 미확인"
+    return {
+        "summary":reason,"level":level,"label":label,
+        "evidence":evidence[:4],
+        "note":"섹터 구성종목의 뉴스·공시·Telegram·거래 관측을 묶은 설명이며 인과관계 확정이 아님"
+    }
+
+
 def build_sector_groups(rows):
     groups = {}
     for x in rows:
@@ -198,7 +253,8 @@ def build_sector_groups(rows):
         g = groups.setdefault(sector, {
             "name": sector, "count": 0, "query_score": 0.0, "rank_sum": 0.0,
             "change_sum": 0.0, "change_n": 0, "positive": 0,
-            "trade_value_krw": 0.0, "stocks": []
+            "trade_value_krw": 0.0, "recent_turnover_krw": 0.0,
+            "recent_turnover_known": 0, "stocks": []
         })
         rank = x.get("rank")
         g["count"] += 1
@@ -214,18 +270,42 @@ def build_sector_groups(rows):
         tv = x.get("trade_value_krw")
         if tv is not None:
             g["trade_value_krw"] += float(tv)
+        recent=x.get("recent_turnover_krw")
+        if recent is not None:
+            g["recent_turnover_krw"] += float(recent)
+            g["recent_turnover_known"] += 1
         g["stocks"].append({
-            "rank": rank, "code": x.get("code"), "name": x.get("name"),
-            "change_rate": chg, "flow_state": x.get("flow_state")
+            "rank": rank, "rank_change": x.get("rank_change"),
+            "trade_rank":x.get("trade_rank"),
+            "code": x.get("code"), "name": x.get("name"),
+            "change_rate": chg, "flow_state": x.get("flow_state"),
+            "trade_value_krw":x.get("trade_value_krw"),
+            "recent_turnover_krw":x.get("recent_turnover_krw"),
+            "recent_turnover_seconds":x.get("recent_turnover_seconds"),
+            "material_digest":x.get("material_digest") or {},
+            "chart_state":x.get("chart_state")
         })
     out = []
     for g in groups.values():
         g["avg_rank"] = g["rank_sum"] / g["count"] if g["count"] else None
         g["avg_change_rate"] = g["change_sum"] / g["change_n"] if g["change_n"] else None
         g["positive_ratio"] = g["positive"] / g["change_n"] if g["change_n"] else None
-        g["stocks"] = sorted(g["stocks"], key=lambda z: (z["rank"] is None, z["rank"] or 999))[:8]
+        # Money-first ordering inside a sector; query rank breaks ties.
+        g["stocks"] = sorted(
+            g["stocks"],
+            key=lambda z:(z.get("recent_turnover_krw") is None,
+                          -(float(z.get("recent_turnover_krw") or 0)),
+                          z.get("trade_rank") is None,z.get("trade_rank") or 999,
+                          z.get("rank") is None,z.get("rank") or 999)
+        )[:8]
+        g["reason"]=sector_reason_summary(g)
         out.append(g)
-    out.sort(key=lambda z: (z["query_score"], z["count"], z["trade_value_krw"]), reverse=True)
+    out.sort(
+        key=lambda z:(z["query_score"],
+                      z.get("recent_turnover_krw") or 0,
+                      z["trade_value_krw"],z["count"]),
+        reverse=True
+    )
     for i, g in enumerate(out, 1):
         g["sector_rank"] = i
     return out
@@ -697,6 +777,33 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                                     "rcept_dt":x[4].isoformat() if x[4] else None,
                                     "link":x[5],"filer":x[6]})
 
+            # Latest validated SOR observation delta for intuitive per-stock "how much just traded".
+            flow_map={}
+            if radar_flow_delta and table_exists(cur,"radar_flow_quotes"):
+                try:
+                    cur.execute("""SELECT stock_code,batch_time,payload FROM (
+                                     SELECT stock_code,batch_time,payload,
+                                            row_number() OVER(PARTITION BY stock_code ORDER BY batch_time DESC) AS rn
+                                     FROM radar_flow_quotes
+                                     WHERE batch_time>now()-interval '4 minutes'
+                                   ) q WHERE rn<=2 ORDER BY stock_code,batch_time DESC""")
+                    flow_hist={}
+                    for code,bt,payload in cur.fetchall():
+                        flow_hist.setdefault(code,[]).append(payload or {})
+                    for code,h in flow_hist.items():
+                        current=h[0] if h else None
+                        previous=h[1] if len(h)>1 else None
+                        value,state,seconds=radar_flow_delta(current,previous) if current else (None,"NO_SAMPLE",None)
+                        flow_map[code]={
+                            "recent_turnover_krw":value if state=="OK" else None,
+                            "recent_turnover_seconds":seconds,
+                            "recent_turnover_state":state,
+                            "sor_turnover_krw":current.get("turnover_krw") if current else None,
+                            "exchange_at":current.get("exchange_at") if current else None
+                        }
+                except Exception:
+                    flow_map={}
+
             rows = []
             for r in ranks:
                 code,name,rank_no,rank_change,chg,cap,sector,theme = r
@@ -725,6 +832,10 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "change_rate": chg, "trade_rank": tv.get("rank"), "trade_value_krw": trade_value,
                     "market_cap_krw": cap2, "trade_to_cap_pct": ratio,
                     "official_sector": sector2, "market_theme": theme2,
+                    "recent_turnover_krw":(flow_map.get(code) or {}).get("recent_turnover_krw"),
+                    "recent_turnover_seconds":(flow_map.get(code) or {}).get("recent_turnover_seconds"),
+                    "recent_turnover_state":(flow_map.get(code) or {}).get("recent_turnover_state"),
+                    "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
                     "catalyst": cat, "flow_state": flow,
                     "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
                     "mimosa": chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
@@ -765,7 +876,12 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 flow=stock_flow_state(None,None,tv.get("rank"),cat)
                 x={"rank":None,"rank_change":None,"code":code,"name":name,"change_rate":tv.get("change_rate"),
                    "trade_rank":tv.get("rank"),"trade_value_krw":value,"market_cap_krw":cap,"trade_to_cap_pct":ratio,
-                   "official_sector":tv.get("sector"),"market_theme":theme,"catalyst":cat,"flow_state":flow,
+                   "official_sector":tv.get("sector"),"market_theme":theme,
+                   "recent_turnover_krw":(flow_map.get(code) or {}).get("recent_turnover_krw"),
+                   "recent_turnover_seconds":(flow_map.get(code) or {}).get("recent_turnover_seconds"),
+                   "recent_turnover_state":(flow_map.get(code) or {}).get("recent_turnover_state"),
+                   "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
+                   "catalyst":cat,"flow_state":flow,
                    "chart_state":(chart_map.get(code) or {}).get("state_ko","대기"),
                    "mimosa":chart_map.get(code) or {"state":"WAITING_FOR_CHART","state_ko":"차트 데이터 대기","score":0},
                    "mimosa_strategies":strategy_map.get(code,{})}
