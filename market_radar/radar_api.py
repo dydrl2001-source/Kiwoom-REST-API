@@ -427,7 +427,7 @@ def build_leader_calendar(cur, now):
     }
 
 
-def build_leader_desk(cur, trade_map, query_rows, now):
+def build_leader_desk(cur, trade_map, query_rows, now, sector_groups=None):
     """Reference-style home leader desk using current local market observations."""
     qmap={x.get("code"):x for x in query_rows}
     strong=[]
@@ -465,6 +465,12 @@ def build_leader_desk(cur, trade_map, query_rows, now):
         g["stocks"]=sorted(g["stocks"],key=lambda x:(x.get("trade_rank") is None,x.get("trade_rank") or 999))[:5]
         sectors.append(g)
     sectors.sort(key=lambda g:(-g["count"],-g["trade_value_krw"],-(g["avg_change_rate"] or 0)))
+    sector_info={g.get("name"):g for g in (sector_groups or [])}
+    for g in sectors:
+        ref=sector_info.get(g.get("name")) or {}
+        g["theme_strength"]=ref.get("theme_strength")
+        g["theme_strength_label"]=ref.get("theme_strength_label")
+        g["reason"]=ref.get("reason") or {}
 
     return {
         "threshold_pct":4,
@@ -1186,7 +1192,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 rows.append(row)
 
             sector_groups = build_sector_groups(rows)
-            leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc))
+            leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc),sector_groups)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
