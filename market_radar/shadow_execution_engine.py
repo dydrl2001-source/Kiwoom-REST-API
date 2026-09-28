@@ -133,11 +133,13 @@ def quote_pair(cur,code,at):
                    WHERE stock_code=%s
                      AND batch_time<=%s+interval '60 seconds'
                      AND batch_time>=%s-interval '180 seconds'
-                   ORDER BY batch_time DESC LIMIT 2""",(code,at,at))
+                   ORDER BY batch_time ASC LIMIT 12""",(code,at,at))
     rows=cur.fetchall()
     if not rows:return None,None,None
-    current=rows[0]["payload"] or {}
-    previous=rows[1]["payload"] if len(rows)>1 else None
+    idx=next((i for i,r in enumerate(rows) if r["batch_time"]>=at),len(rows)-1)
+    current_row=rows[idx]
+    current=current_row["payload"] or {}
+    previous=(rows[idx-1]["payload"] or {}) if idx>0 else None
     recent=None
     if previous:
         value,state,_=flow_delta(current,previous)
@@ -145,9 +147,14 @@ def quote_pair(cur,code,at):
     price=finite(current.get("price_krw"))
     exchange=current.get("exchange_at")
     try:
-        exchange=datetime.fromisoformat(exchange) if exchange else rows[0]["batch_time"]
+        exchange=datetime.fromisoformat(exchange) if exchange else current_row["batch_time"]
     except ValueError:
-        exchange=rows[0]["batch_time"]
+        exchange=current_row["batch_time"]
+    if exchange.tzinfo is None:
+        exchange=exchange.replace(tzinfo=timezone.utc)
+    event_at=at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    if abs((exchange.astimezone(timezone.utc)-event_at.astimezone(timezone.utc)).total_seconds())>120:
+        return None,recent,exchange
     return price,recent,exchange
 
 def volatility_bps(cur,code,at):
@@ -185,7 +192,7 @@ def open_new(cur):
     opened=0
     for p in cur.fetchall():
         ref,recent,exchange=quote_pair(cur,p["stock_code"],p["opened_at"])
-        ref=ref or finite(p["entry_price_krw"])
+        ref=ref
         vol=volatility_bps(cur,p["stock_code"],p["opened_at"])
         sizing=SIZING.size(ref,vol) if ref else {"shares":0,"requested_notional_krw":0,"stop_pct":None}
         fill=estimate_fill("BUY",ref or 0,sizing.get("shares") or 0,recent,vol,FILL)
@@ -218,7 +225,7 @@ def close_ready(cur):
         if not s["closed_at"]:
             continue
         ref,recent,exchange=quote_pair(cur,s["stock_code"],s["closed_at"])
-        ref=ref or finite(s["exit_price_krw"])
+        ref=ref
         vol=volatility_bps(cur,s["stock_code"],s["closed_at"])
         exit_fill=estimate_fill("SELL",ref or 0,int(s["filled_shares"] or 0),recent,vol,FILL)
         entry_model=s["entry_model"] or {}
