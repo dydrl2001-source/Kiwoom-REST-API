@@ -151,7 +151,7 @@ def safe_num(v):
 
 
 def capture_assessments():
-    payload=desk_payload()
+    payload=desk_payload(include_tracking=False)
     if not payload.get("recent_trade_count"):
         return 0,None
     sample=parse_dt(payload.get("sample_time"))
