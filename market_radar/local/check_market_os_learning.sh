@@ -264,6 +264,50 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"controlAvg={ca_txt} challengerAvg={ha_txt} "
                       f"dAvg={da_txt} dPos={dp_txt} dMAE={dm_txt}")
 
+        print('\n[SHADOW DECISION GATE v1.6]')
+        if not exists('market_os_shadow_decisions'):
+            print('shadow decision table missing')
+        else:
+            cur.execute("""SELECT d.shadow_rule_id,d.decision_state,d.review_eligible,
+                                  d.primary_cohort,d.reason_codes,d.manual_decision_state,
+                                  d.state_since,d.updated_at,
+                                  r.action,r.segment_type,r.segment_value,r.source_horizon
+                           FROM market_os_shadow_decisions d
+                           LEFT JOIN market_os_shadow_rules r
+                             ON r.shadow_rule_id=d.shadow_rule_id
+                           ORDER BY CASE d.decision_state
+                               WHEN 'ACCEPT_CANDIDATE' THEN 1
+                               WHEN 'CONSISTENT' THEN 2
+                               WHEN 'COMPARABLE' THEN 3
+                               WHEN 'MORE_DATA' THEN 4
+                               WHEN 'COLLECTING' THEN 5
+                               WHEN 'REJECT' THEN 6 ELSE 7 END,
+                               d.updated_at DESC""")
+            decisions=cur.fetchall()
+            if not decisions:
+                print('decision rows 없음')
+            for r in decisions:
+                print(f"{r['decision_state']} eligible={r['review_eligible']} "
+                      f"cohort={r['primary_cohort'] or '—'} {r['shadow_rule_id']} "
+                      f"{r['action'] or '—'} {r['source_horizon'] or '—'} "
+                      f"{r['segment_type'] or '—'}={r['segment_value'] or '—'} "
+                      f"manual={r['manual_decision_state']} "
+                      f"reasons={','.join(r['reason_codes'] or [])}")
+        if exists('market_os_shadow_decision_events'):
+            print('\n[SHADOW DECISION TRANSITIONS]')
+            cur.execute("""SELECT event_time,shadow_rule_id,from_state,to_state,
+                                  review_eligible,reason_codes
+                           FROM market_os_shadow_decision_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            events=cur.fetchall()
+            if not events:
+                print('decision transition history 없음')
+            for r in events:
+                print(f"{r['event_time']} {r['shadow_rule_id']} "
+                      f"{r['from_state'] or '—'}->{r['to_state']} "
+                      f"eligible={r['review_eligible']} "
+                      f"reasons={','.join(r['reason_codes'] or [])}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -296,5 +340,6 @@ print('Interaction policy: only pre-registered regime/setup/trigger/micro combin
 print('Validation gate v1.3: cumulative gate + day-split EARLY/RECENT walk-forward stability; recent reversal/weakening/comparator gaps => HOLD.')
 print('Promotion Registry v1.4: lifecycle is persisted with transition history; automation stops at PROMOTION_CANDIDATE and never creates SHADOW_RULE.')
 print('Shadow Rule Lab v1.5: only manually approved rules are observed; pre-approval data is excluded and CONTROL/CHALLENGER share identical outcome paths.')
+print('Shadow Decision Gate v1.6: 30m+close, time-split stability, membership changes and stance reproduction are required before ACCEPT_CANDIDATE; no automatic live adoption.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
