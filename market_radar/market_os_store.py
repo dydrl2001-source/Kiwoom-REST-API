@@ -22,12 +22,40 @@ def exists(cur,name):
     return cur.fetchone()["name"] is not None
 
 
-def _quality(n,stocks=0,days=0):
-    # A large N from one stock or one day is not strong evidence.
+def _segment_depth(kind):
+    return {
+        "STANCE_TRIGGER":2,"TIER_SESSION":2,"STANCE_SETUP":2,"SETUP_TRIGGER":2,
+        "STANCE_SETUP_TRIGGER":3,
+        "STANCE_TRIGGER_MICRO":3,"SETUP_TRIGGER_MICRO":3,
+        "STANCE_SETUP_TRIGGER_MICRO":4,
+    }.get(kind,1)
+
+
+def _quality(n,stocks=0,days=0,depth=1):
+    """Evidence quality with stricter diversity gates for higher-order interactions."""
+    if depth>=4:
+        if n>=350 and stocks>=20 and days>=12:return "충분"
+        if n>=160 and stocks>=15 and days>=8:return "형성"
+        if n>=60 and stocks>=10 and days>=4:return "초기"
+        return "탐색"
+    if depth==3:
+        if n>=260 and stocks>=18 and days>=10:return "충분"
+        if n>=120 and stocks>=12 and days>=6:return "형성"
+        if n>=40 and stocks>=8 and days>=3:return "초기"
+        return "탐색"
+    if depth==2:
+        if n>=200 and stocks>=15 and days>=8:return "충분"
+        if n>=90 and stocks>=10 and days>=5:return "형성"
+        if n>=30 and stocks>=6 and days>=3:return "초기"
+        return "탐색"
     if n>=150 and stocks>=10 and days>=5:return "충분"
     if n>=60 and stocks>=8 and days>=3:return "형성"
     if n>=20 and stocks>=5 and days>=2:return "초기"
     return "탐색"
+
+
+def _quality_rank(q):
+    return {"탐색":0,"초기":1,"형성":2,"충분":3}.get(q,0)
 
 
 def _current_session():
@@ -59,6 +87,80 @@ def _bucket_buy_share(v):
     if v>=.55:return "55-64%"
     if v>=.45:return "45-54%"
     return "<45%"
+
+
+def _bucket_setup(v):
+    try:v=int(v)
+    except (TypeError,ValueError):return "UNKNOWN"
+    if v>=80:return "80-100"
+    if v>=65:return "65-79"
+    if v>=50:return "50-64"
+    return "0-49"
+
+
+def _micro_state(strength,buy_share):
+    try:s=float(strength)
+    except (TypeError,ValueError):s=None
+    try:b=float(buy_share)
+    except (TypeError,ValueError):b=None
+    if s is None or b is None:return "NO_DATA"
+    if s>=120 and b>=.65:return "STRONG_CONFIRM"
+    if s<80 and b<.45:return "WEAK_CONFIRM"
+    if s>=100 and b>=.55:return "POSITIVE"
+    if s<100 and b<.45:return "NEGATIVE"
+    return "MIXED"
+
+
+def _parent_key(kind,value):
+    p=value.split(" | ")
+    try:
+        if kind=="STANCE_TRIGGER":return ("STANCE",p[0])
+        if kind=="TIER_SESSION":return ("TIER",p[0])
+        if kind=="STANCE_SETUP":return ("STANCE",p[0])
+        if kind=="SETUP_TRIGGER":return ("SETUP",p[0])
+        if kind=="STANCE_SETUP_TRIGGER":return ("STANCE_TRIGGER",p[0]+" | "+p[2])
+        if kind=="STANCE_TRIGGER_MICRO":return ("STANCE_TRIGGER",p[0]+" | "+p[1])
+        if kind=="SETUP_TRIGGER_MICRO":return ("SETUP_TRIGGER",p[0]+" | "+p[1])
+        if kind=="STANCE_SETUP_TRIGGER_MICRO":
+            return ("STANCE_SETUP_TRIGGER",p[0]+" | "+p[1]+" | "+p[2])
+    except IndexError:
+        return None
+    return None
+
+
+def _enrich_edges(segments):
+    idx={(s["segment_type"],s["segment_value"],s["horizon"]):s for s in segments}
+    interactions=[]
+    for s in segments:
+        depth=_segment_depth(s["segment_type"])
+        s["interaction_depth"]=depth
+        parent_key=_parent_key(s["segment_type"],s["segment_value"])
+        if parent_key:
+            parent=idx.get((parent_key[0],parent_key[1],s["horizon"]))
+            if parent:
+                s["baseline"]={
+                    "segment_type":parent["segment_type"],"segment_value":parent["segment_value"],
+                    "samples":parent["samples"],"quality":parent["quality"],
+                    "avg_return_pct":parent["avg_return_pct"],"positive_rate":parent["positive_rate"],
+                    "avg_mfe_pct":parent["avg_mfe_pct"],"avg_mae_pct":parent["avg_mae_pct"],
+                }
+                s["edge_avg_return_pct"]=(s["avg_return_pct"]-parent["avg_return_pct"]
+                    if s["avg_return_pct"] is not None and parent["avg_return_pct"] is not None else None)
+                s["edge_positive_rate_pp"]=((s["positive_rate"]-parent["positive_rate"])*100
+                    if s["positive_rate"] is not None and parent["positive_rate"] is not None else None)
+                s["edge_mfe_pct"]=(s["avg_mfe_pct"]-parent["avg_mfe_pct"]
+                    if s["avg_mfe_pct"] is not None and parent["avg_mfe_pct"] is not None else None)
+                s["edge_mae_pct"]=(s["avg_mae_pct"]-parent["avg_mae_pct"]
+                    if s["avg_mae_pct"] is not None and parent["avg_mae_pct"] is not None else None)
+                # Complex edges require at least forming evidence on both child and parent.
+                s["edge_ready"]=bool(_quality_rank(s["quality"])>=2 and _quality_rank(parent["quality"])>=2)
+        if depth>=2:
+            interactions.append(s)
+    interactions.sort(key=lambda s:(
+        -_quality_rank(s["quality"]),-s["interaction_depth"],-s["samples"],
+        {"30m":0,"close":1,"D+1":2,"5m":3}.get(s["horizon"],9)
+    ))
+    return interactions
 
 
 def latest_microstructure(cur,codes):
@@ -144,7 +246,8 @@ def learning_payload():
                     "horizon":r["horizon"],"samples":r["samples"],
                     "distinct_stocks":r["distinct_stocks"],"distinct_days":r["distinct_days"],
                     "sample_basis":r["sample_basis"],
-                    "quality":_quality(r["samples"],r["distinct_stocks"],r["distinct_days"]),
+                    "quality":_quality(r["samples"],r["distinct_stocks"],r["distinct_days"],
+                                       _segment_depth(r["segment_type"])),
                     "avg_return_pct":r["avg_return_pct"],"median_return_pct":r["median_return_pct"],
                     "positive_rate":r["positive_rate"],"avg_mfe_pct":r["avg_mfe_pct"],
                     "avg_mae_pct":r["avg_mae_pct"],
@@ -162,10 +265,14 @@ def learning_payload():
                 for r in cur.fetchall()
             ]
 
+    learning["interactions"]=_enrich_edges(learning["segments"])
+
     # Conservative, deterministic feedback. This is evidence for review, not an
     # automatic rewrite of thresholds.
     for s in learning["segments"]:
         if s["quality"]=="탐색" or s["horizon"] not in ("30m","close"):
+            continue
+        if s.get("interaction_depth",1)>=2 and not s.get("edge_ready"):
             continue
         avg=s["avg_return_pct"];pr=s["positive_rate"]
         if avg is not None and pr is not None and avg>0.5 and pr>=0.58:
@@ -187,31 +294,53 @@ def learning_payload():
     seg_index={(s["segment_type"],s["segment_value"],s["horizon"]):s for s in learning["segments"]}
     for x in current.get("market_os_watchlist",[]):
         m=micro.get(x.get("code"))
+        stance=x.get("market_stance") or "UNKNOWN"
+        trigger=x.get("trigger_state") or "UNKNOWN"
+        setup=_bucket_setup(x.get("setup_score"))
         keys=[
-            ("STANCE_TRIGGER",(x.get("market_stance") or "UNKNOWN")+" | "+(x.get("trigger_state") or "UNKNOWN")),
+            ("STANCE_SETUP_TRIGGER",stance+" | "+setup+" | "+trigger),
+            ("STANCE_TRIGGER",stance+" | "+trigger),
+            ("STANCE_SETUP",stance+" | "+setup),
+            ("SETUP_TRIGGER",setup+" | "+trigger),
             ("TIER_SESSION",(x.get("watch_tier") or "UNKNOWN")+" | "+_current_session()),
-            ("TRIGGER",x.get("trigger_state") or "UNKNOWN"),
-            ("STANCE",x.get("market_stance") or "UNKNOWN"),
-            ("TIER",x.get("watch_tier") or "UNKNOWN"),
+            ("TRIGGER",trigger),("SETUP",setup),("STANCE",stance),("TIER",x.get("watch_tier") or "UNKNOWN"),
         ]
         if m and int(m.get("tick_count_15s") or 0)>0 and int(m.get("gap_count_15s") or 0)==0:
-            keys.extend([
+            micro_state=_micro_state(m.get("strength"),m.get("buy_share_15s"))
+            keys=[
+                ("STANCE_SETUP_TRIGGER_MICRO",stance+" | "+setup+" | "+trigger+" | "+micro_state),
+                ("STANCE_TRIGGER_MICRO",stance+" | "+trigger+" | "+micro_state),
+                ("SETUP_TRIGGER_MICRO",setup+" | "+trigger+" | "+micro_state),
+            ]+keys+[
+                ("MICRO_STATE",micro_state),
                 ("MICRO_STRENGTH",_bucket_strength(m.get("strength"))),
                 ("MICRO_BUY_SHARE",_bucket_buy_share(m.get("buy_share_15s"))),
-            ])
+            ]
         evidence=[]
         for horizon in ("30m","close","5m"):
             for kind,value in keys:
                 s=seg_index.get((kind,value,horizon))
-                if s and s["quality"]!="탐색":
+                depth=_segment_depth(kind)
+                ready=bool(s and s["quality"]!="탐색")
+                if depth>=3:
+                    ready=bool(s and _quality_rank(s["quality"])>=2 and s.get("edge_ready"))
+                if ready:
                     evidence.append({
                         "segment_type":kind,"segment_value":value,"horizon":horizon,
-                        "samples":s["samples"],"quality":s["quality"],
-                        "avg_return_pct":s["avg_return_pct"],"median_return_pct":s["median_return_pct"],
-                        "positive_rate":s["positive_rate"],"avg_mfe_pct":s["avg_mfe_pct"],"avg_mae_pct":s["avg_mae_pct"]
+                        "samples":s["samples"],"distinct_stocks":s["distinct_stocks"],
+                        "distinct_days":s["distinct_days"],"quality":s["quality"],
+                        "interaction_depth":depth,"avg_return_pct":s["avg_return_pct"],
+                        "median_return_pct":s["median_return_pct"],"positive_rate":s["positive_rate"],
+                        "avg_mfe_pct":s["avg_mfe_pct"],"avg_mae_pct":s["avg_mae_pct"],
+                        "edge_avg_return_pct":s.get("edge_avg_return_pct"),
+                        "edge_positive_rate_pp":s.get("edge_positive_rate_pp"),
+                        "edge_mae_pct":s.get("edge_mae_pct"),
+                        "baseline":s.get("baseline")
                     })
             if evidence:break
-        x["learning_context"]=sorted(evidence,key=lambda z:-z["samples"])[:3]
+        x["learning_context"]=sorted(evidence,key=lambda z:(
+            -_quality_rank(z["quality"]),-z.get("interaction_depth",1),-z["samples"]
+        ))[:3]
         x["microstructure"]=micro.get(x.get("code"))
 
     current["learning"]=learning
