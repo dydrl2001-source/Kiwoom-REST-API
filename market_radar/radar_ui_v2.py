@@ -238,7 +238,7 @@ async function sendFeedback(category,stock,predicted,verdict,btn){
 
 
 function digest(x){return x?.material_digest||x?.digest||{}}
-function sectorCards(list,limit=8){
+function sectorCards(list,limit=8,showStrength=false){
  return (list||[]).slice(0,limit).map(g=>{
    const xs=(g.stocks||[]).slice(0,6),maxMoney=Math.max(1,...xs.map(x=>Number(x.trade_value_krw||0)));
    const stocks=xs.map(x=>{
@@ -256,7 +256,7 @@ function sectorCards(list,limit=8){
    const hotCount=((DATA?.query_ranking)||[]).slice(0,12).filter(x=>sectorName(x)===g.name).length;
    return '<div class="sector-card '+sectorClass(g.name)+'"><div class="sector-head"><div><strong>'+esc(g.name)+'</strong> '+(hotCount?'<span class="sector-chip '+sectorClass(g.name)+'"><i></i>급부상 '+hotCount+'개</span>':'')+
      '<div class="sector-meta">조회상위 '+esc(g.count)+'종목 · 상승 '+esc(g.positive??0)+'/'+esc(g.change_n??g.count)+'</div>'+
-     '<div class="sector-money">누적 '+esc(money(g.trade_value_krw))+esc(recent)+'</div>'+strengthBlock(g)+'</div>'+
+     '<div class="sector-money">누적 '+esc(money(g.trade_value_krw))+esc(recent)+'</div>'+(showStrength?strengthBlock(g):'')+'</div>'+
      '<div class="'+klass(g.avg_change_rate)+'"><b>'+esc(rate(g.avg_change_rate))+'</b></div></div>'+
      '<div class="stock-list">'+stocks+'</div>'+
      '<div class="sector-reason '+reasonClass+'"><b>왜 움직이나 · '+esc(why.label||"분석 대기")+'</b><div>'+esc(why.summary||"섹터 재료 분석 대기")+'</div>'+
@@ -406,6 +406,8 @@ function render(d){
  document.getElementById("mimosaSub").textContent=d.system.chartfeed?.status?"차트 "+d.system.chartfeed.status:"";
  document.getElementById("analysis").innerHTML=(d.analysis?.lines||[]).map(x=>'<div class="analysis-line">'+esc(x)+'</div>').join("")||'<span class="muted">시장 분석 대기</span>';
  const sig=[];
+ const strongestTheme=[...(d.sector_rankings||[])].sort((a,b)=>Number(b.theme_strength||0)-Number(a.theme_strength||0))[0];
+ if(strongestTheme)sig.push("테마강도 "+strongestTheme.name+" "+(strongestTheme.theme_strength??"-"));
  if((d.sector_rankings||[])[0])sig.push("조회집중 "+d.sector_rankings[0].name);
  const noMat=(d.query_ranking||[]).filter(x=>x.flow_state==="돈 선행 / 재료 미확인").length;
  if(noMat)sig.push("돈선행 "+noMat+"종목");
@@ -415,8 +417,8 @@ function render(d){
  document.getElementById("quickSignals").innerHTML=sig.map(x=>'<span class="pill">'+esc(x)+'</span>').join("");
  const homeThemes=[...(d.sector_rankings||[])].sort((a,b)=>(Number(b.theme_strength||0)-Number(a.theme_strength||0))||(Number(b.recent_turnover_krw||0)-Number(a.recent_turnover_krw||0)));
  document.getElementById("homeSectorPulse").innerHTML=renderSectorPulse(homeThemes,d.query_ranking);
- document.getElementById("homeSectors").innerHTML=sectorCards(homeThemes,8);
- document.getElementById("sectorBoard").innerHTML=sectorCards(d.sector_rankings,20);
+ document.getElementById("homeSectors").innerHTML=sectorCards(homeThemes,8,true);
+ document.getElementById("sectorBoard").innerHTML=sectorCards(d.sector_rankings,20,false);
  document.getElementById("homeSectorMix").innerHTML=renderSectorMix(d.query_ranking);
  document.getElementById("homeStocks").innerHTML=renderHomeStocks(d.query_ranking);
  document.getElementById("queryRows").innerHTML=(d.query_ranking||[]).map(x=>stockRow(x,"query")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
