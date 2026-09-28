@@ -97,6 +97,25 @@ services:
       ai-brokerage-worker:
         condition: service_started
 
+  shadow-execution-engine:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/shadow_execution_engine.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      paper-trade-engine:
+        condition: service_started
+      kiwoom-feed:
+        condition: service_started
+      chart-feed:
+        condition: service_started
+
   paper-feedback-engine:
     build:
       context: ../..
