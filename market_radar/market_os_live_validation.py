@@ -25,6 +25,7 @@ TABLES={
     "assessment":"market_os_assessment_snapshots",
     "outcome":"market_os_assessment_outcomes",
     "realtime":"market_realtime_minute_bars",
+    "realtime_5s":"market_realtime_5s_bars",
 }
 
 TIME_COLUMNS={
@@ -37,6 +38,7 @@ TIME_COLUMNS={
     "market_os_assessment_snapshots":"snapshot_time",
     "market_os_assessment_outcomes":"calculated_at",
     "market_realtime_minute_bars":"minute_time",
+    "market_realtime_5s_bars":"bucket_time",
 }
 
 
@@ -70,7 +72,7 @@ def _freshness_level(key,age,session):
     if session=="OFF_HOURS":return "HISTORICAL"
     limits={
         "rank":120,"trade":120,"flow":120,"regime":180,
-        "chart":300,"theme":86400,"assessment":180,"outcome":86400,"realtime":120,
+        "chart":300,"theme":86400,"assessment":180,"outcome":86400,"realtime":120,"realtime_5s":30,
     }
     limit=limits.get(key,300)
     if age<=limit:return "OK"
