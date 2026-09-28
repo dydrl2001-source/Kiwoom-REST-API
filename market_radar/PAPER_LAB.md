@@ -44,3 +44,17 @@ The Home Paper Lab displays open experiments, observed return, MFE/MAE, entry re
 ## Audit
 
 radar_paper_events records PAPER_ENTRY and PAPER_EXIT events. The baseline rule version is paper-v1-observation.
+## Automatic feedback
+
+`paper_feedback_engine.py` analyzes only completed prospective Paper Lab observations.
+It does not change environment variables or live entry/exit thresholds.
+
+Feedback is gated by sample size:
+
+- type-level interpretation: at least 20 completed observations per candidate type;
+- rule-level calibration: at least 30 completed observations overall;
+- smaller samples remain `표본 축적`.
+
+The feedback panel reports overall median observed return, positive-observation ratio, median MFE/MAE, giveback rate, immediate-failure rate, candidate-type summaries, entry-score bands, and exit-reason counts.
+
+Possible rule labels are `표본 축적`, `현재값 유지`, and `수정 검토`. A `수정 검토` result is only an experiment candidate. Any new threshold must be introduced as a new rule version and compared prospectively rather than overwriting the existing baseline.
