@@ -99,3 +99,29 @@ v1에서는 다음을 독립적으로 표시한다.
 5. 숫자 임계값은 검증 전까지 강의의 공식 수치로 표현하지 않는다.
 
 구체 규칙과 출처 메타데이터는 `rulebook/market_os_rules.json`에 둔다.
+
+
+## 0B Shadow Microstructure
+
+Kiwoom 주식체결 0B는 현재 **live scoring에 직접 넣지 않는다.** 먼저 별도 shadow feature로 저장해 설명력이 있는지 검증한다.
+
+저장 항목:
+- 최근 15초 관측 거래대금
+- 최근 15초 관측 매수체결 비중
+- 최근 15초 tick / gap 수
+- 체결강도
+- Kiwoom 매수비율
+
+학습 차원:
+- `MICRO_STRENGTH`: <80 / 80–99 / 100–119 / 120+
+- `MICRO_BUY_SHARE`: <45% / 45–54% / 55–64% / 65%+
+
+이 구간은 **운영 휴리스틱**이며 강사의 공식 임계값이 아니다. 최소 표본을 확보한 뒤 30분·종가 MFE/MAE와 함께 비교하고, 설명력이 확인되기 전에는 Radar/Setup 점수를 변경하지 않는다.
+
+### Look-ahead 방지
+
+- assessment는 실제 관측 초(second)를 보존한다.
+- 0B point outcome은 target 이후 첫 **완결된 5초 bucket의 open**을 사용한다.
+- MFE/MAE는 outcome 시각 이전 bucket만 사용한다.
+- 누락 tick이 감지되면 gap으로 보존하며 값을 보간하지 않는다.
+- 0B가 불충분하면 SOR → 보수적 3분봉 fallback 순으로 사용한다.
