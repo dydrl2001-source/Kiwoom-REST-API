@@ -53,3 +53,42 @@ v1에는 LIVE_ENTRY가 존재하지 않습니다.
 6. regime별 전략 가중치 calibration과 승격/강등
 
 Self-check: python -m market_radar.ai_brokerage.selfcheck
+
+## Context Matrix
+
+전략 성과는 전체 평균 하나로 판단하지 않습니다.
+
+`Strategy × Regime × Catalyst × Chart State` 셀별로 Paper 결과를 나누고 다음을 확인합니다.
+
+- 완료 표본 수
+- 양(+) 비율
+- 평균/중앙 관찰수익
+- Profit Factor
+- MFE / MAE
+- 특정 컨텍스트 집중도
+
+셀 완료 표본 5건 미만은 견고성 판단에서 제외합니다.
+
+## Lifecycle Review
+
+Lifecycle 변경은 자동 적용하지 않습니다.
+
+현재 기본 승격 검토 gate:
+
+- 완료 표본 30건 이상
+- 양(+) 비율 55% 이상
+- 중앙 관찰수익 +0.20% 이상
+- Profit Factor 1.20 이상
+- 유효 컨텍스트 셀 2개 이상
+- 견고한 컨텍스트 셀 2개 이상
+- 단일 컨텍스트 집중도 70% 이하
+
+가능한 판정:
+
+- `PROMOTE_CANDIDATE` — PAPER → ACTIVE 검토
+- `KEEP_PAPER` — PAPER 유지
+- `REWORK_CANDIDATE` — 전략 수정·중지 검토
+- `DEMOTE_CANDIDATE` — ACTIVE → PAPER 강등 검토
+- `SAMPLE_BUILDING` — 표본 부족
+
+모든 판정에는 `auto_apply=false`가 붙습니다. 실제 lifecycle 변경은 별도 검토·버전 변경으로만 수행합니다.
