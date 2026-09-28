@@ -186,6 +186,27 @@
    body.append(el('div','최근 단계 전이','mos-section-title'));const evScroll=el('div',null,'mos-scroll'),evTable=el('table',null,'mos-learn-table'),evHead=el('tr');['시각','조건','구간','이벤트','이전','현재','방향','행동'].forEach(v=>evHead.append(el('th',v)));const evThead=el('thead');evThead.append(evHead);const evBody=el('tbody');
    for(const e of pe.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.segment_type||'—')+' · '+(e.segment_value||'—')),el('td',e.horizon||'—'),el('td',e.event_type||'—'),el('td',stageKo(e.from_stage)),el('td',stageKo(e.to_stage)),el('td',e.direction||'—'),el('td',actionKo(e.review_action)));evBody.append(tr);}
    if(!pe.length){const tr=el('tr'),td=el('td','아직 단계 전이 이력이 없습니다.','mos-empty');td.colSpan=8;tr.append(td);evBody.append(tr);}evTable.append(evThead,evBody);evScroll.append(evTable);body.append(evScroll);
+   body.append(el('div','Shadow Rule Lab','mos-section-title'));
+   const sl=learn.shadow_lab||{},ss=sl.stats||{},sr=sl.rules||[],sum=sl.summaries||[],slGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['활성 규칙',ss.enabled_rules||0,'수동 승인된 challenger'],
+     ['관측',ss.observations||0,'승인 이후 prospective snapshots'],
+     ['조건 일치',ss.matched||0,'승인 조건을 실제로 충족'],
+     ['판단 변경',ss.changed||0,'CONTROL과 tier가 달라진 건']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));slGrid.append(card);}body.append(slGrid);
+   body.append(el('div',sl.notice||'승인 이후 새 자료만 A/B shadow로 비교합니다.','mos-note'));
+   const shadowAction=x=>({PROMOTE_ONE_TIER:'한 단계 상향',SUPPRESS_ONE_TIER:'한 단계 하향'})[x]||x||'—';
+   const stateKo=x=>({COMPARABLE:'비교가능',FORMING:'형성',COLLECTING:'수집중',NO_DIFFERENCE:'판단차이 없음'})[x]||x||'—';
+   const srScroll=el('div',null,'mos-scroll'),srTable=el('table',null,'mos-learn-table'),srHead=el('tr');
+   ['Rule','상태','Action','조건','근거구간','승인시각','관측','일치','변경'].forEach(v=>srHead.append(el('th',v)));const srThead=el('thead');srThead.append(srHead);const srBody=el('tbody');
+   for(const r of sr.slice(0,30)){const tr=el('tr');tr.append(el('td',(r.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',r.enabled?'ON':'OFF',r.enabled?'mos-up':'mos-muted'),el('td',shadowAction(r.action)),el('td',r.segment_type+' · '+r.segment_value),el('td',r.source_horizon||'—'),el('td',stamp(r.approved_at)),el('td',r.observations??0),el('td',r.matched??0),el('td',r.changed??0));srBody.append(tr);}
+   if(!sr.length){const tr=el('tr'),td=el('td','승인된 Shadow Rule이 없습니다. Promotion candidate는 자동으로 활성화되지 않습니다.','mos-empty');td.colSpan=9;tr.append(td);srBody.append(tr);}srTable.append(srThead,srBody);srScroll.append(srTable);body.append(srScroll);
+   body.append(el('div','CONTROL vs CHALLENGER','mos-section-title'));
+   body.append(el('div','동일한 episode-anchor와 동일한 이후 가격경로를 사용합니다. 차이는 후보 규칙이 FOCUS 또는 REVIEW(FOCUS+PREP) cohort의 구성원을 바꾼 효과만 비교합니다. Δ는 challenger − control이며, 표본이 적을 때는 우열 판정을 하지 않습니다.','mos-note'));
+   const abScroll=el('div',null,'mos-scroll'),abTable=el('table',null,'mos-learn-table'),abHead=el('tr');
+   ['Rule','구간','Cohort','상태','변경','Control N','Challenger N','Control 평균','Challenger 평균','Δ평균','Δ양(+)','ΔMAE'].forEach(v=>abHead.append(el('th',v)));const abThead=el('thead');abThead.append(abHead);const abBody=el('tbody');
+   for(const s of sum.slice(0,80)){const tr=el('tr');const d=s.delta_avg_return_pct;tr.append(el('td',(s.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',s.horizon),el('td',s.cohort),el('td',stateKo(s.evidence_state)),el('td',s.membership_changes??0),el('td',s.control_samples??0),el('td',s.challenger_samples??0),el('td',pct(s.control_avg_return_pct)),el('td',pct(s.challenger_avg_return_pct)),el('td',d==null?'—':((d>=0?'+':'')+fmt(d,2)+'%p'),d>0?'mos-up':d<0?'mos-down':''),el('td',s.delta_positive_rate_pp==null?'—':((s.delta_positive_rate_pp>=0?'+':'')+fmt(s.delta_positive_rate_pp,1)+'%p')),el('td',s.delta_mae_pct==null?'—':((s.delta_mae_pct>=0?'+':'')+fmt(s.delta_mae_pct,2)+'%p')));abBody.append(tr);}
+   if(!sum.length){const tr=el('tr'),td=el('td','승인 후 outcome이 쌓이면 CONTROL/CHALLENGER 비교가 여기에 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);abBody.append(tr);}abTable.append(abThead,abBody);abScroll.append(abTable);body.append(abScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
