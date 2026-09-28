@@ -792,6 +792,78 @@ def build_ai_daily_review(cur, paper_feedback):
         return {**empty,"status":"ERROR","note":f"Daily Review 집계 실패: {type(e).__name__}"}
 
 
+def build_shadow_execution_lab(cur):
+    empty={
+        "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
+        "summary":{"closed":0,"median_gross_return_pct":None,"median_net_return_pct":None,
+                   "median_entry_slippage_bps":None,"median_exit_slippage_bps":None,
+                   "median_fill_ratio_pct":None,"median_notional_krw":None},
+        "recent":[],
+        "note":"Shadow Simulator 표본 대기 · 실계좌 주문 없음"
+    }
+    if not table_exists(cur,"ai_shadow_trades"):
+        return empty
+    try:
+        status=dict(empty)
+        if table_exists(cur,"ai_shadow_status"):
+            cur.execute("""SELECT status,updated_at,open_count,closed_count,rejected_count,note
+                           FROM ai_shadow_status WHERE id=1""")
+            r=cur.fetchone()
+            if r:
+                status.update({"status":r[0],"updated_at":iso(r[1]),"open_count":int(r[2] or 0),
+                               "closed_count":int(r[3] or 0),"rejected_count":int(r[4] or 0),
+                               "note":r[5] or empty["note"]})
+        cur.execute("""SELECT COUNT(*),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY gross_return_pct),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY net_return_pct),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY entry_slippage_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY exit_slippage_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY entry_fill_ratio*100),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY requested_notional_krw)
+                       FROM ai_shadow_trades
+                       WHERE status='CLOSED' AND entry_at>now()-interval '90 days'""")
+        r=cur.fetchone()
+        status["summary"]={
+            "closed":int(r[0] or 0),
+            "median_gross_return_pct":float(r[1]) if r[1] is not None else None,
+            "median_net_return_pct":float(r[2]) if r[2] is not None else None,
+            "median_entry_slippage_bps":float(r[3]) if r[3] is not None else None,
+            "median_exit_slippage_bps":float(r[4]) if r[4] is not None else None,
+            "median_fill_ratio_pct":float(r[5]) if r[5] is not None else None,
+            "median_notional_krw":float(r[6]) if r[6] is not None else None,
+        }
+        cur.execute("""SELECT stock_code,stock_name,strategy_id,status,requested_shares,filled_shares,
+                              requested_notional_krw,stop_pct,entry_at,entry_ref_price_krw,
+                              entry_fill_price_krw,entry_slippage_bps,entry_fill_ratio,entry_model_quality,
+                              exit_at,exit_ref_price_krw,exit_fill_price_krw,exit_slippage_bps,
+                              gross_return_pct,net_return_pct,net_pnl_krw,costs_krw,entry_model,exit_model
+                       FROM ai_shadow_trades
+                       ORDER BY COALESCE(exit_at,entry_at) DESC LIMIT 12""")
+        recent=[]
+        for r in cur.fetchall():
+            recent.append({
+                "code":r[0],"name":r[1],"strategy_id":r[2],"status":r[3],
+                "requested_shares":r[4],"filled_shares":r[5],
+                "requested_notional_krw":float(r[6]) if r[6] is not None else None,
+                "stop_pct":r[7],"entry_at":iso(r[8]),
+                "entry_ref_price_krw":float(r[9]) if r[9] is not None else None,
+                "entry_fill_price_krw":float(r[10]) if r[10] is not None else None,
+                "entry_slippage_bps":r[11],"entry_fill_ratio":r[12],
+                "entry_model_quality":r[13],"exit_at":iso(r[14]),
+                "exit_ref_price_krw":float(r[15]) if r[15] is not None else None,
+                "exit_fill_price_krw":float(r[16]) if r[16] is not None else None,
+                "exit_slippage_bps":r[17],"gross_return_pct":r[18],"net_return_pct":r[19],
+                "net_pnl_krw":float(r[20]) if r[20] is not None else None,
+                "costs_krw":float(r[21]) if r[21] is not None else None,
+                "entry_model":r[22] or {},"exit_model":r[23] or {}
+            })
+        status["recent"]=recent
+        status["model_note"]="실제 호가·잔량 미수집 상태의 v1: 체결가 + 단기변동성 + 최근거래대금 + 참여율로 보수 추정"
+        return status
+    except Exception as e:
+        return {**empty,"status":"ERROR","note":f"Shadow 집계 실패: {type(e).__name__}"}
+
+
 def build_home_candidates(cur, rows):
     """Read the current local candidate tracker for a compact Home Top5."""
     if not table_exists(cur,"radar_candidate_episodes"):
@@ -1636,6 +1708,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             ai_morning_brief=build_ai_morning_brief(regime,sector_groups,ai_brokerage,paper_lab)
             ai_strategy_performance=build_ai_strategy_performance(cur)
             ai_daily_review=build_ai_daily_review(cur,paper_feedback)
+            shadow_execution=build_shadow_execution_lab(cur)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1887,6 +1960,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "ai_morning_brief": ai_morning_brief,
         "ai_strategy_performance": ai_strategy_performance,
         "ai_daily_review": ai_daily_review,
+        "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
     with _DASH_CACHE_LOCK:
