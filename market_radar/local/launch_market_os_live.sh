@@ -89,7 +89,9 @@ chmod 600 "$backup"
 echo "Env backup: $backup"
 
 # Require the existing REST/flow path to be healthy before introducing WebSocket data.
+# Recreate the API/realtime containers so the disabled env is actually active during preflight.
 set_env KIWOOM_REALTIME_ENABLED 0
+docker compose up -d --force-recreate --no-deps kiwoom-realtime radar-api
 if ! bash check_market_os_live.sh; then
   echo "ERROR: base live preflight is blocked. 0B remains OFF."
   exit 2
