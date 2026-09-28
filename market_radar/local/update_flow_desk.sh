@@ -36,6 +36,7 @@ for n in $(seq 1 30); do
  sleep 2
 done
 if [ "$ready" -ne 1 ]; then echo 'API health not ready. Inspect: docker compose logs --tail=40 radar-api';exit 1;fi
+bash check_market_os.sh
 bash check_flow_desk.sh
 echo 'Open the existing dashboard, refresh, and select [Market OS] or [30초 흐름].'
 echo 'First deltas need at least 2 new batches; speed baseline needs at least 5 earlier intervals.'
