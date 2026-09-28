@@ -53,3 +53,4 @@ jobs:
           bash -n market_radar/local/check_market_os.sh
           bash -n market_radar/local/check_market_os_live.sh
           bash -n market_radar/local/launch_market_os_live.sh
+          bash -n market_radar/local/check_market_os_learning.sh
