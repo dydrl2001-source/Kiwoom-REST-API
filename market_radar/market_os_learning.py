@@ -677,6 +677,13 @@ def refresh_segments():
             parent=_parent_key(kind,value)
             if not parent:continue
             parent_vals=groups.get((parent[0],parent[1],horizon)) or []
+            if kind.endswith("_MICRO"):
+                parent_vals=[
+                    r for r in parent_vals
+                    if int(r["micro_tick_count_15s"] or 0)>0
+                    and int(r["micro_gap_count_15s"] or 0)==0
+                    and _micro_state(r["micro_strength"],r["micro_buy_share_15s"])!="NO_DATA"
+                ]
             if not parent_vals:continue
             child_ids={(r["stock_code"],r["snapshot_time"]) for r in child_vals}
             comparator=[r for r in parent_vals if (r["stock_code"],r["snapshot_time"]) not in child_ids]
