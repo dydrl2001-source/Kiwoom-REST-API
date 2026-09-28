@@ -65,6 +65,28 @@ class SectorBoardTests(unittest.TestCase):
         self.assertEqual(b['surge_count'],0)
         self.assertGreater(a['theme_strength_components']['surge'],b['theme_strength_components']['surge'])
 
+    def test_material_type_contract(self):
+        cat={'best_text':'대규모 공급계약 체결','dart':[],'external_news':[]}
+        self.assertEqual(api.classify_material_type(cat),'수주·공급계약')
+
+    def test_material_type_external_report_can_override_local_generic(self):
+        cat={'best_text':'회사 관련 뉴스','dart':[],'external_news':[]}
+        self.assertEqual(api.classify_material_type(cat,'승인·임상'),'승인·임상')
+
+    def test_rank_movement_up_down_new_reentry(self):
+        row={'code':'000001','rank':3}
+        api.apply_rank_movement(row,{'000001':{'rank_30s':8,'rank_5m':12,'best_today':2}})
+        self.assertEqual(row['rank_history']['movement'],'▲5')
+        row={'code':'000002','rank':7}
+        api.apply_rank_movement(row,{'000002':{'rank_30s':4,'best_today':4}})
+        self.assertEqual(row['rank_history']['movement'],'▼3')
+        row={'code':'000003','rank':9}
+        api.apply_rank_movement(row,{'000003':{'rank_30s':None,'rank_5m':None,'had_earlier':False}})
+        self.assertEqual(row['rank_history']['movement'],'NEW')
+        row={'code':'000004','rank':10}
+        api.apply_rank_movement(row,{'000004':{'rank_30s':None,'rank_5m':None,'had_earlier':True}})
+        self.assertEqual(row['rank_history']['movement'],'RE')
+
     def test_money_first_order_inside_sector(self):
         rows=[
           self.row('AAA','반도체',1,100,2,3.0),
@@ -89,6 +111,20 @@ class SectorUISourceTests(unittest.TestCase):
         self.assertIn('strengthBlock',self.text)
         self.assertIn('테마강도 ',self.text)
         self.assertIn('sectorCards(homeThemes,8,true)',self.text)
+
+    def test_home_material_colors_and_os_exist(self):
+        self.assertIn('homeMaterialLegend',self.text)
+        self.assertIn('materialTone',self.text)
+        self.assertIn('mt-contract',self.text)
+        self.assertIn('mt-earnings',self.text)
+        self.assertIn('osMini',self.text)
+        self.assertIn('sourceMini',self.text)
+
+    def test_home_rank_history_and_density(self):
+        self.assertIn('rankMovement',self.text)
+        self.assertIn('sectorCards(homeThemes,6,true)',self.text)
+        self.assertIn('slice(0,4).map',self.text)
+        self.assertIn('.sector-grid{grid-template-columns:1fr;gap:7px}',self.text)
 
     def test_sector_cards_show_money_and_reason(self):
         self.assertIn('recentMoney(x)',self.text)
