@@ -29,8 +29,12 @@ try:
     from ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
     from ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
 except Exception:
-    AIBrokerageDecisionEngine = None
-    ai_context_from_dashboard_row = None
+    try:
+        from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
+        from market_radar.ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
+    except Exception:
+        AIBrokerageDecisionEngine = None
+        ai_context_from_dashboard_row = None
 
 AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
