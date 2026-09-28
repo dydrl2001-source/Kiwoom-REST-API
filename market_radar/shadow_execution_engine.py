@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS ai_shadow_trades(
   exit_ref_price_krw NUMERIC,
   exit_fill_price_krw NUMERIC,
   exit_slippage_bps DOUBLE PRECISION,
+  exit_filled_shares INTEGER NOT NULL DEFAULT 0,
+  exit_fill_ratio DOUBLE PRECISION,
+  remaining_shares INTEGER NOT NULL DEFAULT 0,
   gross_return_pct DOUBLE PRECISION,
   net_return_pct DOUBLE PRECISION,
   gross_pnl_krw NUMERIC,
@@ -69,6 +72,9 @@ CREATE TABLE IF NOT EXISTS ai_shadow_trades(
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS exit_filled_shares INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS exit_fill_ratio DOUBLE PRECISION;
+ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS remaining_shares INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_shadow_status_time ON ai_shadow_trades(status,entry_at DESC);
 CREATE INDEX IF NOT EXISTS idx_shadow_strategy_time ON ai_shadow_trades(strategy_id,entry_at DESC);
 
@@ -179,15 +185,25 @@ def close_ready(cur):
         exit_fill=estimate_fill("SELL",ref or 0,int(s["filled_shares"] or 0),recent,vol,FILL)
         entry_model=s["entry_model"] or {}
         result=round_trip_result(entry_model,exit_fill)
-        status="CLOSED" if result.get("status")=="COMPLETE" else "CLOSED_NO_FILL"
+        entry_shares=int(s["filled_shares"] or 0)
+        exit_shares=int(exit_fill.get("filled_shares") or 0)
+        remaining=max(0,entry_shares-exit_shares)
+        if result.get("status")!="COMPLETE":
+            status="CLOSED_NO_FILL"
+        elif remaining>0:
+            status="CLOSED_PARTIAL_LIQUIDITY"
+        else:
+            status="CLOSED"
         cur.execute("""UPDATE ai_shadow_trades
                        SET status=%s,exit_at=%s,exit_ref_price_krw=%s,exit_fill_price_krw=%s,
-                           exit_slippage_bps=%s,gross_return_pct=%s,net_return_pct=%s,
+                           exit_slippage_bps=%s,exit_filled_shares=%s,exit_fill_ratio=%s,
+                           remaining_shares=%s,gross_return_pct=%s,net_return_pct=%s,
                            gross_pnl_krw=%s,net_pnl_krw=%s,costs_krw=%s,
                            exit_model=%s::jsonb,updated_at=now()
                        WHERE id=%s""",
                     (status,exchange or s["closed_at"],ref,exit_fill.get("fill_price_krw"),
-                     exit_fill.get("slippage_bps"),result.get("gross_return_pct"),result.get("net_return_pct"),
+                     exit_fill.get("slippage_bps"),exit_shares,exit_fill.get("fill_ratio"),remaining,
+                     result.get("gross_return_pct"),result.get("net_return_pct"),
                      result.get("gross_pnl_krw"),result.get("net_pnl_krw"),result.get("costs_krw"),
                      json.dumps(exit_fill,ensure_ascii=False),s["id"]))
         closed+=1
@@ -195,7 +211,7 @@ def close_ready(cur):
 
 def update_status(cur):
     cur.execute("""SELECT COUNT(*) FILTER(WHERE status='OPEN') AS open_n,
-                          COUNT(*) FILTER(WHERE status LIKE 'CLOSED%%') AS closed_n,
+                          COUNT(*) FILTER(WHERE status='CLOSED') AS closed_n,
                           COUNT(*) FILTER(WHERE status='REJECTED') AS rejected_n
                    FROM ai_shadow_trades""")
     r=cur.fetchone()
