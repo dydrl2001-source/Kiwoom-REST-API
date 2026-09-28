@@ -14,6 +14,10 @@ try:
 except Exception:
     radar_flow_delta = None
     radar_reversal_signals = None
+try:
+    from report_library import clean_report as radar_clean_report
+except Exception:
+    radar_clean_report = None
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
@@ -484,6 +488,112 @@ def enrich_catalyst(cat, stock_name=None):
         cat["quality_note"]="직접 재료 미확인"
     return cat
 
+def classify_material_type(cat, external_event=None):
+    """Stable visual category for the home dashboard; not a causal verdict."""
+    allowed={"수주·공급계약","실적·가이던스","기술·제품·양산","정책·규제",
+             "승인·임상","자본·주주환원","업황·가격","인수·사업재편","기타·미확인"}
+    if external_event in allowed and external_event!="기타·미확인":
+        return external_event
+    text=" ".join([
+        str(cat.get("best_text") or ""),
+        " ".join(str(x.get("report_nm") or "") for x in (cat.get("dart") or [])[:3]),
+        " ".join(str(x.get("title") or "") for x in (cat.get("external_news") or [])[:3]),
+    ]).lower()
+    rules=[
+        ("승인·임상",("fda","임상","승인","허가","nda","bnda")),
+        ("수주·공급계약",("공급계약","수주","계약 체결","mou","납품","공급 계약")),
+        ("실적·가이던스",("영업이익","매출","실적","가이던스","전망","흑자","적자")),
+        ("자본·주주환원",("자사주","배당","소각","유상증자","무상증자","전환사채","cb")),
+        ("인수·사업재편",("인수","합병","m&a","분할","매각","지분 취득")),
+        ("기술·제품·양산",("특허","양산","신제품","출시","기술 확보","개발 완료","인증")),
+        ("정책·규제",("정책","법안","관세","규제","정부","지원책")),
+        ("업황·가격",("업황","가격 상승","가격 인상","수요","공급 부족","hbm","반도체","원전","로봇","전력")),
+    ]
+    for name,words in rules:
+        if any(w in text for w in words):
+            return name
+    return "기타·미확인"
+
+
+def compact_external_report(report, completed_at=None, model=None):
+    if not radar_clean_report:
+        return None
+    clean=radar_clean_report(report)
+    if not clean:return None
+    text=clean.get("text") or ""
+    event=None
+    m=re.search(r"(?m)^\s*재료분류\s*[:：]\s*([^\n]+)",text)
+    if m:event=m.group(1).strip().strip("*")
+    # Home shows only the 핵심 재료 section or a compact first paragraph.
+    sec=re.search(r"(?ms)(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*\*)?핵심 재료(?:\*\*)?\s*[:：]?\s*\n?(.*?)(?=\n\s*(?:#{1,4}\s*)?(?:\*\*)?(?:새로움과 반복|시장 연결|반대 근거·미확인)|\Z)",text)
+    body=(sec.group(1) if sec else text).strip()
+    body=re.sub(r"\s+"," ",body)
+    body=re.sub(r"\[[^\]]{0,40}\]"," ",body)
+    body=re.sub(r"\s+"," ",body).strip()
+    summary=(body[:190]+"…") if len(body)>190 else body
+    return {
+        "summary":summary or "인용 포함 외부 조사 보고서",
+        "event_type":event,
+        "citation_count":len(clean.get("citations") or []),
+        "source_count":len(clean.get("sources") or []),
+        "sources":(clean.get("sources") or [])[:3],
+        "completed_at":iso(completed_at),
+        "model":model,
+        "status":"CITED_REPORT"
+    }
+
+
+def build_rank_history(cur, current_time, codes):
+    out={code:{"rank_30s":None,"rank_5m":None,"best_today":None,"first_today":None,
+               "movement":"—","movement_kind":"FLAT"} for code in codes}
+    if not codes or not current_time or not table_exists(cur,"market_rank_snapshots"):
+        return out
+    day_start=current_time.astimezone(KST).replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+    queries=[
+        ("rank_30s",current_time-timedelta(seconds=20),current_time-timedelta(seconds=100)),
+        ("rank_5m",current_time-timedelta(minutes=4,seconds=30),current_time-timedelta(minutes=7)),
+    ]
+    for key,upper,lower in queries:
+        cur.execute("""SELECT DISTINCT ON(stock_code) stock_code,rank_no,snapshot_time
+                       FROM market_rank_snapshots
+                       WHERE stock_code=ANY(%s) AND snapshot_time<=%s AND snapshot_time>=%s
+                       ORDER BY stock_code,snapshot_time DESC""",(list(codes),upper,lower))
+        for code,rank_no,snapshot_time in cur.fetchall():
+            if code in out:out[code][key]=rank_no
+    cur.execute("""SELECT stock_code,MIN(rank_no),MIN(snapshot_time),COUNT(*)
+                   FROM market_rank_snapshots
+                   WHERE stock_code=ANY(%s) AND snapshot_time>=%s AND snapshot_time<=%s
+                   GROUP BY stock_code""",(list(codes),day_start,current_time))
+    for code,best,first_seen,count in cur.fetchall():
+        if code in out:
+            out[code]["best_today"]=best
+            out[code]["first_today"]=iso(first_seen)
+            out[code]["seen_today"]=int(count or 0)
+    return out
+
+
+def apply_rank_movement(row, history):
+    h=history.get(row.get("code")) or {}
+    current=row.get("rank")
+    prior=h.get("rank_30s")
+    five=h.get("rank_5m")
+    best=h.get("best_today")
+    movement="—";kind="FLAT";delta=None
+    if current is not None and prior is not None:
+        delta=int(prior)-int(current)
+        if delta>0:movement=f"▲{delta}";kind="UP"
+        elif delta<0:movement=f"▼{abs(delta)}";kind="DOWN"
+    elif current is not None:
+        # If it existed around 5 minutes ago, this is a re-entry; otherwise a new top-list appearance.
+        if five is not None:movement="RE";kind="REENTRY"
+        else:movement="NEW";kind="NEW"
+    row["rank_history"]={
+        **h,"delta_30s":delta,"movement":movement,"movement_kind":kind,
+        "current":current,"best_today":best
+    }
+    return row
+
+
 def material_digest(cat, flow_state, stock_name=None):
     news=cat.get("external_news") or []
     items=cat.get("items") or []
@@ -544,6 +654,7 @@ def material_digest(cat, flow_state, stock_name=None):
         "material_strength": strength,
         "material_class": mclass,
         "quality_note": cat.get("quality_note"),
+        "material_type": classify_material_type(cat),
     }
 
 def response_band(query_rank, trade_rank, trade_value=None):
@@ -886,6 +997,26 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 except Exception:
                     flow_map={}
 
+            # Cached cited OS/web research for home cards. Read-only; does not trigger a model call.
+            external_report_map={}
+            if radar_clean_report and table_exists(cur,"web_research_runs") and ranks:
+                try:
+                    rank_codes=[x[0] for x in ranks if x and x[0]]
+                    cur.execute("""SELECT DISTINCT ON(stock_code)
+                                          stock_code,completed_at,model,report
+                                   FROM web_research_runs
+                                   WHERE stock_code=ANY(%s) AND status='CITED_REPORT'
+                                     AND completed_at>now()-interval '7 days'
+                                   ORDER BY stock_code,completed_at DESC,id DESC""",(rank_codes,))
+                    for code,completed_at,model,report in cur.fetchall():
+                        compact=compact_external_report(report,completed_at,model)
+                        if compact:external_report_map[code]=compact
+                except Exception:
+                    external_report_map={}
+
+            rank_codes=[x[0] for x in ranks if x and x[0]]
+            rank_history_map=build_rank_history(cur,rank_time,rank_codes)
+
             rows = []
             for r in ranks:
                 code,name,rank_no,rank_change,chg,cap,sector,theme = r
@@ -930,6 +1061,11 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 row["material_digest"].update(material_synthesis(
                     row["material_digest"],rank_no,tv.get("rank"),chg,flow
                 ))
+                row["external_research"]=external_report_map.get(code)
+                if row["external_research"]:
+                    event=row["external_research"].get("event_type")
+                    row["material_digest"]["material_type"]=classify_material_type(cat,event)
+                apply_rank_movement(row,rank_history_map)
                 rows.append(row)
 
             sector_groups = build_sector_groups(rows)
@@ -976,6 +1112,10 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 x["material_digest"].update(material_synthesis(
                     x["material_digest"],None,tv.get("rank"),tv.get("change_rate"),flow
                 ))
+                x["external_research"]=external_report_map.get(code)
+                if x["external_research"]:
+                    x["material_digest"]["material_type"]=classify_material_type(cat,x["external_research"].get("event_type"))
+                x["rank_history"]={"movement":"—","movement_kind":"FLAT","current":None,"rank_30s":None,"rank_5m":None,"best_today":None}
                 if is_etf_like(name):
                     etf_trade_rows.append(x)
                 else:
@@ -1041,6 +1181,24 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 f"재료 품질: 직접 재료 후보 {material_stats['direct']}개, 테마형 {material_stats['sector']}개, "
                 f"약한 언급/미확인 {material_stats['weak']}개."
             )
+            home_strength=sorted(sector_groups,key=lambda g:(g.get("theme_strength") or 0),reverse=True)
+            strongest=home_strength[0] if home_strength else None
+            fastest=sorted(sector_groups,key=lambda g:(g.get("recent_turnover_krw") or 0),reverse=True)
+            fastest=fastest[0] if fastest and (fastest[0].get("recent_turnover_krw") or 0)>0 else None
+            top_up=sum(1 for x in rows[:12] if (x.get("rank_history") or {}).get("movement_kind")=="UP")
+            top_new=sum(1 for x in rows[:12] if (x.get("rank_history") or {}).get("movement_kind") in ("NEW","REENTRY"))
+            cited=sum(1 for x in rows[:12] if x.get("external_research"))
+            brief_bits=[]
+            if strongest:brief_bits.append(f"테마강도 {strongest['name']} {strongest.get('theme_strength','-')}")
+            if fastest and (not strongest or fastest.get("name")!=strongest.get("name")):
+                brief_bits.append(f"최근대금 {fastest['name']} +{int((fastest.get('recent_turnover_krw') or 0)/100000000):,}억")
+            if top_up:brief_bits.append(f"순위상승 {top_up}종목")
+            if top_new:brief_bits.append(f"신규·재진입 {top_new}종목")
+            if cited:brief_bits.append(f"OS검증 {cited}종목")
+            home_brief={"headline":" · ".join(brief_bits) if brief_bits else "시장 관측 축적 중",
+                        "strongest_theme":strongest.get("name") if strongest else None,
+                        "top_up":top_up,"top_new":top_new,"os_verified":cited}
+
             latest_market=max([x for x in (rank_time,trade_time) if x],default=None)
             market_age_sec=int((datetime.now(timezone.utc)-latest_market).total_seconds()) if latest_market else None
             session=market_session_state()
@@ -1140,6 +1298,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "sector_rankings": sector_groups,
         "materials": material_rows,
         "material_stats": material_stats,
+        "home_brief": home_brief,
         "market_snapshot": market_snapshot,
         "mimosa_rows": mimosa_rows,
         "mimosa_strategies": strategy_lists,
