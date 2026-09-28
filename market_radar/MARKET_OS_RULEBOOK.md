@@ -125,3 +125,69 @@ Kiwoom 주식체결 0B는 현재 **live scoring에 직접 넣지 않는다.** �
 - MFE/MAE는 outcome 시각 이전 bucket만 사용한다.
 - 누락 tick이 감지되면 gap으로 보존하며 값을 보간하지 않는다.
 - 0B가 불충분하면 SOR → 보수적 3분봉 fallback 순으로 사용한다.
+
+
+## Interaction Lab
+
+Market OS는 개별 축의 절대 성과만 보지 않고, 사전등록된 상호작용을 shadow-learning으로 검증한다.
+
+핵심 질문은 다음과 같다.
+
+```text
+같은 Trigger라도
+어떤 Market Stance에서,
+어떤 Setup 구조일 때,
+0B 체결상태가 어떻게 붙었는가?
+```
+
+### 사전등록 조합
+
+- STANCE × SETUP
+- SETUP × TRIGGER
+- STANCE × TRIGGER
+- STANCE × SETUP × TRIGGER
+- STANCE × TRIGGER × MICRO_STATE
+- SETUP × TRIGGER × MICRO_STATE
+- STANCE × SETUP × TRIGGER × MICRO_STATE
+
+임의로 모든 변수를 조합하지 않는다. 위 조합만 계산해 다중탐색과 사후적 규칙 만들기를 제한한다.
+
+### MICRO_STATE
+
+0B 15초 구간이 gap-free일 때만 사용한다.
+
+- STRONG_CONFIRM: 체결강도 120+ AND 관측 매수체결 65%+
+- POSITIVE: 체결강도 100+ AND 관측 매수체결 55%+
+- MIXED: 강·약 조건 사이
+- NEGATIVE: 체결강도 100 미만 AND 관측 매수체결 45% 미만
+- WEAK_CONFIRM: 체결강도 80 미만 AND 관측 매수체결 45% 미만
+- NO_DATA: 자료 부족
+
+이 임계값은 강의의 공식 수치가 아니라 **운영 휴리스틱**이다.
+
+### 부모조건 대비 Δ
+
+복합조건의 절대 평균만 보면 장 전체가 좋거나 나쁜 효과와 섞일 수 있다. 그래서 복합조건을 더 단순한 부모조건과 비교한다.
+
+예:
+
+```text
+DEFENSIVE × BREAKOUT_TEST
+        ↓ parent
+
+DEFENSIVE × Setup80-100 × BREAKOUT_TEST
+        ↓ child
+
+Δ평균수익률
+Δ양(+)비율
+ΔMFE
+ΔMAE
+```
+
+이 Δ는 인과효과를 증명하지 않는다. 같은 장세·Trigger 안에서 조건을 더 붙였을 때 관측 분포가 어떻게 달라졌는지 보는 비교지표다.
+
+### 복잡도별 신뢰 문턱
+
+상호작용 차수가 높을수록 더 많은 독립 episode, 종목 다양성, 거래일 수를 요구한다. 4-way interaction은 단일축보다 훨씬 엄격한 문턱을 통과해야 한다.
+
+또한 live 후보에 고차 interaction의 과거 성과를 표시하는 것은 **형성 이상 + 부모조건도 형성 이상**인 경우로 제한한다. 자동으로 Radar/Setup 점수를 바꾸지는 않는다.
