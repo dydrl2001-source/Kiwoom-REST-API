@@ -508,3 +508,130 @@ stance를 조건에 포함하지 않는 일반 규칙은 EXPANDABLE / SELECTIVE 
 
 따라서 `COLLECTING → COMPARABLE → CONSISTENT → ACCEPT_CANDIDATE` 또는 `MORE_DATA / REJECT`로 이동한 이력을 사후 감사할 수 있다.
 
+## Adoption Review Dossier v1.7 — Evidence Before Rule Change
+
+`ACCEPT_CANDIDATE`는 live 규칙 변경 신호가 아니다. 기존 CONTROL을 대체할 가능성을 사람이 검토할 수 있다는 뜻일 뿐이다. 따라서 다음 단계는 코드 변경이 아니라 **증거를 고정한 심사 dossier**다.
+
+### 생성 시점과 revision
+
+Dossier는 Shadow Decision Gate가 `ACCEPT_CANDIDATE`로 **진입한 전이 이벤트당 정확히 1개** 생성한다.
+
+- 단순히 N이나 평균값이 조금 변했다고 새 revision을 만들지 않는다.
+- Decision이 ACCEPT에서 내려가면 현재 `PENDING` dossier는 `STALE_DECISION`으로 닫는다.
+- 이후 다시 `ACCEPT_CANDIDATE`로 진입하면 새로운 Decision 전이 이벤트에 연결된 다음 revision을 생성한다.
+- 증거 revision은 기존 내용을 덮어쓰지 않는다.
+- 아직 심사 중인 이전 revision이 새 ACCEPT 전이로 대체되는 경우 `SUPERSEDED`로 보존한다.
+
+각 dossier는 `source_decision_event_id`와 content hash를 저장해 어떤 Decision 전이와 어떤 증거 snapshot을 검토했는지 감사 가능하게 한다.
+
+### Dossier 구성
+
+심사 문서에는 최소 다음을 고정한다.
+
+1. **Shadow rule identity**
+   - candidate key
+   - condition
+   - source horizon
+   - prospective 승인 시각
+   - action
+
+2. **Decision Gate 근거**
+   - 현재 Decision 상태
+   - primary cohort
+   - 30m / close 방향
+   - 시간분할 결과
+   - stance 재현성
+   - reason codes
+
+3. **Promotion source**
+   - 최초 가설 방향
+   - 누적 N / 종목 수 / 거래일 수
+   - quality
+   - walk-forward
+   - EARLY / RECENT 성과
+
+4. **CONTROL vs CHALLENGER**
+   - 5m / 30m / close / D+1
+   - FOCUS / REVIEW cohort
+   - membership changes
+   - 평균 차이
+   - 양(+) 비율 차이
+   - MAE 차이
+
+5. **Impact surface**
+   - 실제 tier가 바뀐 episode 수
+   - DISCOVER→PREP, PREP→FOCUS 등의 transition 수
+   - 영향받은 market stance 분포
+   - 현재 assessment universe 내부 실험이라는 범위
+
+6. **Counterexamples**
+   - promotion rule: challenger가 올렸지만 이후 outcome이 약했던 사례
+   - suppression rule: challenger가 내렸지만 이후 outcome이 좋았던 사례
+
+7. **Known limits**
+   - randomized causal experiment가 아님
+   - 기존 assessment universe 밖의 종목은 포함하지 않음
+   - 시장구조 drift 가능성
+   - D+1은 보조 근거
+   - 운영 threshold 자체도 재검증 대상
+
+8. **Rollback criteria**
+   - Decision이 `REJECT`로 하락
+   - RECENT 30m 또는 close가 HARMFUL
+   - 전체 30m / close BENEFICIAL 조건 붕괴
+   - 비교 가능한 stance에서 HARMFUL
+   - look-ahead / data-quality 통제가 잘못된 것으로 확인
+
+### 반례 우선 심사
+
+Dossier는 좋은 사례만 보여주지 않는다.
+
+`PROMOTE_ONE_TIER`에서는 실제로 tier를 올렸지만 이후 30m/close outcome이 가장 약했던 사례를 반례로 먼저 저장한다.
+
+`SUPPRESS_ONE_TIER`에서는 tier를 낮췄지만 이후 outcome이 가장 좋았던 사례를 반례로 저장한다.
+
+이는 challenger를 정당화하기 위한 문서가 아니라 **교체하지 말아야 할 이유를 먼저 찾는 문서**다.
+
+### 사람의 심사 상태
+
+허용되는 review state:
+
+- `PENDING`
+- `APPROVED_DRY_RUN`
+- `REJECTED`
+- `SUPERSEDED`
+- `STALE_DECISION`
+
+명시적 명령:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh dossier <dossier_id>
+bash market_radar/local/shadow_rule_admin.sh review <dossier_id> approve-dry-run --confirm
+bash market_radar/local/shadow_rule_admin.sh review <dossier_id> reject --confirm
+```
+
+`approve-dry-run`은 현재 Shadow Decision이 여전히 `ACCEPT_CANDIDATE`이고 `review_eligible=true`일 때만 가능하다.
+
+### APPROVED_DRY_RUN의 의미
+
+`APPROVED_DRY_RUN`은 다음 단계를 만들 수 있다는 사람의 승인이다.
+
+이 상태에서도:
+
+- versioned ruleset 생성 안 함
+- live Market OS threshold 변경 안 함
+- 실제 watch tier 변경 안 함
+- 주문/포지션/비중 변경 안 함
+
+따라서 v1.7의 끝은 **HUMAN_APPROVED_DRY_RUN**이며, 실제 versioned ruleset과 dry-run execution은 별도 후속 단계에서만 설계한다.
+
+### 저장 구조
+
+현재 dossier:
+- `market_os_adoption_dossiers`
+
+심사/상태 변경 이력:
+- `market_os_adoption_dossier_events`
+
+모든 revision은 immutable evidence snapshot을 유지한다.
+
