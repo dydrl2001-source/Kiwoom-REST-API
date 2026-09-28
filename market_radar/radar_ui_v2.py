@@ -32,10 +32,21 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .analysis{display:grid;grid-template-columns:1.3fr .7fr;gap:8px}.analysis-main{font-size:14px}.analysis-line{padding:7px 0;border-bottom:1px solid #eef2f7}.analysis-line:last-child{border:0}
 .legend{display:flex;flex-wrap:wrap;gap:5px}.pill{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border-radius:999px;background:var(--chip);font-size:10px;color:#4d5d73}
 .good{color:var(--green)}.bad{color:var(--blue)}.hot{color:var(--red)}.warn{color:var(--amber)}.muted{color:var(--muted)}
-.sector-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.sector-card{background:#fff;border:1px solid var(--line);border-top:3px solid #7b67da;border-radius:11px;overflow:hidden;box-shadow:0 3px 14px rgba(42,53,79,.03)}
-.sector-head{display:flex;justify-content:space-between;align-items:center;padding:9px 10px;border-bottom:1px solid #edf1f6}.sector-head strong{font-size:14px}.sector-meta{font-size:10px;color:var(--muted)}
-.stock-list{display:grid;grid-template-columns:1fr 1fr}.stock-mini{padding:8px 9px;border-right:1px solid #f0f3f7;border-bottom:1px solid #f0f3f7;min-height:62px}.stock-mini:nth-child(2n){border-right:0}
-.stock-mini .name{font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stock-mini .num{display:flex;justify-content:space-between;margin-top:4px;font-size:11px}.rank-badge{font-size:9px;color:#fff;background:#7b8799;border-radius:4px;padding:1px 4px}
+.sector-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.sector-card{background:#fff;border:1px solid var(--line);border-top:4px solid #7b67da;border-radius:11px;overflow:hidden;box-shadow:0 3px 14px rgba(42,53,79,.03)}
+.sector-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:10px;border-bottom:1px solid #edf1f6}.sector-head strong{font-size:14px}.sector-meta{font-size:10px;color:var(--muted)}.sector-money{font-size:11px;font-weight:850;margin-top:3px}.sector-reason{padding:8px 10px;background:#f8fafc;border-top:1px solid #edf1f6;font-size:10px;line-height:1.55;color:#4d5d73}.sector-reason b{color:#2a3850}.sector-reason.supported{background:#eef9f5}.sector-reason.partial{background:#fff8e9}.sector-reason.unconfirmed{background:#f5f7fa}.sector-evidence{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}.sector-evidence-lines{margin-top:5px;padding-top:4px;border-top:1px dashed #dfe6ef}.sector-evidence-line{margin:3px 0;color:#52627a}.sector-evidence-line b{color:#2d3c55}
+.stock-list{display:grid;grid-template-columns:1fr 1fr}.stock-mini{padding:8px 9px;border-right:1px solid #f0f3f7;border-bottom:1px solid #f0f3f7;min-height:88px}.stock-mini:nth-child(2n){border-right:0}
+.stock-mini .name{font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stock-mini .num{display:flex;justify-content:space-between;margin-top:4px;font-size:11px}.stock-money{font-weight:800;margin-top:4px}.stock-burst{font-size:9px;color:#697992;margin-top:2px}.moneybar{height:3px;background:#edf1f7;border-radius:99px;overflow:hidden;margin-top:5px}.moneybar i{display:block;height:100%;background:#7184d8;border-radius:99px}.rank-badge{font-size:9px;color:#fff;background:#7b8799;border-radius:4px;padding:1px 4px}
+.sector-chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:800;white-space:nowrap}.sector-chip i{width:7px;height:7px;border-radius:50%;display:block}.surge-sector-bar{display:flex;gap:6px;flex-wrap:wrap;padding:9px 10px;background:#fff;border:1px solid var(--line);border-radius:11px;margin-bottom:7px}.surge-sector-bar .sector-chip{cursor:default}
+.sector-card.sc0{border-top-color:#5d6fd7}.sector-card.sc1{border-top-color:#1d9b83}.sector-card.sc2{border-top-color:#dd8b35}.sector-card.sc3{border-top-color:#b85d8f}.sector-card.sc4{border-top-color:#3f8fc0}.sector-card.sc5{border-top-color:#8a62c8}.sector-card.sc6{border-top-color:#6b8e45}.sector-card.sc7{border-top-color:#c25a52}
+.sector-chip.sc0{background:#e9edff;color:#4053a5}.sector-chip.sc1{background:#e2f5ef;color:#116b5a}.sector-chip.sc2{background:#fff0df;color:#915515}.sector-chip.sc3{background:#f9e8f1;color:#91466f}.sector-chip.sc4{background:#e5f3fa;color:#2f7295}.sector-chip.sc5{background:#f0e9fa;color:#684595}.sector-chip.sc6{background:#edf4e4;color:#567431}.sector-chip.sc7{background:#fbe9e7;color:#92453f}
+.sector-chip.sc0 i{background:#5d6fd7}.sector-chip.sc1 i{background:#1d9b83}.sector-chip.sc2 i{background:#dd8b35}.sector-chip.sc3 i{background:#b85d8f}.sector-chip.sc4 i{background:#3f8fc0}.sector-chip.sc5 i{background:#8a62c8}.sector-chip.sc6 i{background:#6b8e45}.sector-chip.sc7 i{background:#c25a52}
+.sector-pulse{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-bottom:9px}.sector-pulse-card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 10px;position:relative;overflow:hidden}.sector-pulse-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#7b8799}.sector-pulse-card.sc0:before{background:#5d6fd7}.sector-pulse-card.sc1:before{background:#1d9b83}.sector-pulse-card.sc2:before{background:#dd8b35}.sector-pulse-card.sc3:before{background:#b85d8f}.sector-pulse-card.sc4:before{background:#3f8fc0}.sector-pulse-card.sc5:before{background:#8a62c8}.sector-pulse-card.sc6:before{background:#6b8e45}.sector-pulse-card.sc7:before{background:#c25a52}.sector-pulse-card .sp-name{font-weight:850;font-size:12px}.sector-pulse-card .sp-count{font-size:19px;font-weight:900;margin-top:2px}.sector-pulse-card .sp-money{font-size:10px;color:var(--muted);margin-top:2px}.sector-pulse-card .sp-reason{font-size:9px;color:#52627a;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.theme-strength{margin-top:6px}.theme-strength-top{display:flex;justify-content:space-between;align-items:center;font-size:10px}.theme-strength-top b{font-size:12px}.theme-strength-bar{height:6px;background:#edf1f7;border-radius:99px;overflow:hidden;margin-top:4px}.theme-strength-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#7b8ce0,#19a287)}.theme-components{font-size:9px;color:#718098;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.signal-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:999px;font-size:9px;font-weight:850;margin-top:3px}.signal-top{background:#ffeded;color:#a73f46}.signal-bottom{background:#e8f1ff;color:#315fa7}.signal-badge small{font-size:8px;font-weight:700;opacity:.8}
+
+
+.surge-row td:first-child{position:relative;padding-left:13px}.surge-row.sc0 td:first-child:before,.surge-row.sc1 td:first-child:before,.surge-row.sc2 td:first-child:before,.surge-row.sc3 td:first-child:before,.surge-row.sc4 td:first-child:before,.surge-row.sc5 td:first-child:before,.surge-row.sc6 td:first-child:before,.surge-row.sc7 td:first-child:before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:4px;border-radius:4px}.surge-row.sc0 td:first-child:before{background:#5d6fd7}.surge-row.sc1 td:first-child:before{background:#1d9b83}.surge-row.sc2 td:first-child:before{background:#dd8b35}.surge-row.sc3 td:first-child:before{background:#b85d8f}.surge-row.sc4 td:first-child:before{background:#3f8fc0}.surge-row.sc5 td:first-child:before{background:#8a62c8}.surge-row.sc6 td:first-child:before{background:#6b8e45}.surge-row.sc7 td:first-child:before{background:#c25a52}
+
 .tblwrap{overflow:auto;max-height:660px}.tbl{width:100%;border-collapse:collapse;min-width:980px}.tbl th,.tbl td{padding:8px 8px;border-bottom:1px solid #edf1f6;text-align:right;vertical-align:middle;white-space:nowrap}.tbl th{position:sticky;top:0;background:#f8fafc;color:var(--muted);font-size:10px;z-index:2}.tbl .left{text-align:left}.tbl .wrap{white-space:normal;min-width:220px;text-align:left}
 .stockname{font-weight:850}.sub{font-size:10px;color:var(--muted)}
 .material-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.research-card{background:#fff;border:1px solid var(--line);border-left:4px solid #9aa8bb;border-radius:11px;padding:11px;box-shadow:0 3px 14px rgba(42,53,79,.03)}
@@ -52,7 +63,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 @media(max-width:700px){
  .app{padding:10px 8px 82px}.head{margin-bottom:6px}.brand{font-size:20px}.statusbar{grid-template-columns:1fr 1fr;gap:6px}.stat{min-height:61px;padding:8px}
  .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.sector-grid{grid-template-columns:1fr 1fr;gap:6px}.stock-list{grid-template-columns:1fr}.stock-mini{border-right:0}
- .material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
+ .material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.sector-pulse{grid-template-columns:1fr 1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
  .bottom button{border:0;background:transparent;color:#78869b;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px}.bottom button.active{color:#1c2b45;font-weight:900}.bottom b{font-size:16px;line-height:1}
 }
 </style></head>
@@ -84,10 +95,12 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
   <div class="panel pad analysis-main" id="analysis"></div>
   <div class="panel pad"><div class="legend" id="quickSignals"></div><div class="sub" style="margin-top:8px">※ 매수·매도 신호가 아니라 현재 상태를 설명하는 레이더입니다.</div></div>
  </div>
- <div class="section-title"><h2>실시간 섹터 보드</h2><span>조회순위 집중 기준</span></div>
+ <div class="section-title"><h2>실시간 테마·섹터 보드</h2><span>테마 강도 · 급부상 종목수 · 거래대금 · 상승 이유</span></div>
+ <div id="homeSectorPulse" class="sector-pulse"></div>
  <div class="sector-grid" id="homeSectors"></div>
- <div class="section-title"><h2>급부상 종목</h2><span>조회 + 거래대금 + 재료</span></div>
- <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th>조회</th><th class="left">종목</th><th>등락</th><th>대금순위</th><th>거래대금</th><th class="left">섹터</th><th class="left">흐름</th><th class="left">재료 요약</th><th class="left">미모사</th></tr></thead><tbody id="homeStocks"></tbody></table></div></div>
+ <div class="section-title"><h2>급부상 종목</h2><span>현재 상위 12종목 · 섹터별 개수와 같은 색상 표시</span></div>
+ <div id="homeSectorMix" class="surge-sector-bar"></div>
+ <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th>조회</th><th class="left">종목</th><th>등락</th><th>대금순위</th><th>거래대금</th><th class="left">섹터</th><th class="left">흐름</th><th class="left">재료 요약</th><th class="left">차트·고점/바닥</th></tr></thead><tbody id="homeStocks"></tbody></table></div></div>
 </section>
 
 <section class="view" id="view-index">
@@ -107,7 +120,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 </section>
 
 <section class="view" id="view-sector">
- <div class="section-title"><h2>섹터별 실시간 순위</h2><span>조회상위 종목의 섹터 집중도</span></div>
+ <div class="section-title"><h2>섹터별 실시간 순위</h2><span>왜 오르는지 · 어디서 거래대금이 터지는지</span></div>
  <div class="sector-grid" id="sectorBoard"></div>
  <div class="section-title"><h2>공식 업종 데이터</h2><span>키움 업종 등락·거래대금</span></div>
  <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th class="left">업종</th><th>등락</th><th>거래대금</th><th>상승</th><th>하락</th></tr></thead><tbody id="officialSectors"></tbody></table></div></div>
@@ -168,6 +181,53 @@ const klass=v=>Number(v)>0?"hot":Number(v)<0?"bad":"";
 const money=v=>v==null?"-":fmt(Number(v)/1e8)+"억";
 const pct=v=>v==null?"-":(Number(v)*100).toFixed(1)+"%";
 let DATA=null;
+function sectorName(x){return x?.market_theme||x?.official_sector||x?.sector||"미분류"}
+function sectorClass(name){
+ let h=0;for(const c of String(name||"미분류"))h=((h*31)+c.charCodeAt(0))>>>0;
+ return "sc"+(h%8);
+}
+function sectorChip(name,extra=""){
+ const n=name||"미분류",c=sectorClass(n);
+ return '<span class="sector-chip '+c+'"><i></i>'+esc(n)+(extra?' · '+esc(extra):'')+'</span>';
+}
+function recentMoney(x){
+ if(x?.recent_turnover_krw==null)return "";
+ const sec=x.recent_turnover_seconds==null?"최근":Math.round(Number(x.recent_turnover_seconds))+"초";
+ return sec+" +"+money(x.recent_turnover_krw);
+}
+function signalBadge(x){
+ const s=x?.reversal_signal;if(!s)return "";
+ const cls=s.kind==="TOP_WARNING"?"signal-top":"signal-bottom";
+ const icon=s.kind==="TOP_WARNING"?"▼":"▲";
+ return '<span class="signal-badge '+cls+'" title="'+esc((s.reasons||[]).join(" · "))+'">'+icon+' '+esc(s.label||"관찰")+' '+esc(s.score??"-")+'</span>';
+}
+function renderSectorMix(rows){
+ const top=(rows||[]).slice(0,12),groups={};
+ top.forEach(x=>{const n=sectorName(x),g=groups[n]||(groups[n]={name:n,count:0,money:0,recent:0});g.count++;g.money+=Number(x.trade_value_krw||0);g.recent+=Number(x.recent_turnover_krw||0)});
+ const xs=Object.values(groups).sort((a,b)=>(b.count-a.count)||(b.recent-a.recent)||(b.money-a.money));
+ return xs.map(g=>{const src=(DATA?.sector_rankings||[]).find(x=>x.name===g.name)||{};return sectorChip(g.name,"강도 "+(src.theme_strength??"-")+" · "+g.count+"개 · "+money(g.money)+(g.recent>0?" / 최근 +"+money(g.recent):""));}).join("")||'<span class="muted">급부상 섹터 집계 대기</span>';
+}
+function strengthBlock(g){
+ const score=Number(g?.theme_strength||0),label=g?.theme_strength_label||"대기",c=g?.theme_strength_components||{};
+ const title='관심 '+fmt(c.interest,1)+' · 돈 '+fmt(c.money,1)+' · 확산 '+fmt(c.breadth,1)+' · 가격 '+fmt(c.price,1)+' · 급부상 '+fmt(c.surge,1)+' · 재료 '+fmt(c.material,1);
+ return '<div class="theme-strength" title="'+esc(title)+'"><div class="theme-strength-top"><span>테마 강도</span><b>'+esc(score)+'/100 · '+esc(label)+'</b></div>'+
+   '<div class="theme-strength-bar"><i style="width:'+Math.max(0,Math.min(100,score))+'%"></i></div>'+
+   '<div class="theme-components">'+esc(title)+'</div></div>';
+}
+
+function renderSectorPulse(sectors,rows){
+ const top=(rows||[]).slice(0,12),counts={};
+ top.forEach(x=>{const n=sectorName(x);counts[n]=(counts[n]||0)+1});
+ return (sectors||[]).slice(0,8).map(g=>{
+   const n=g.name||"미분류",c=sectorClass(n),why=g.reason||{};
+   const cnt=counts[n]||0,recent=g.recent_turnover_known?money(g.recent_turnover_krw):"비교대기";
+   return '<div class="sector-pulse-card '+c+'"><div class="sp-name">'+esc(n)+'</div>'+
+     '<div class="sp-count">'+cnt+'개 <span class="'+klass(g.avg_change_rate)+'" style="font-size:12px">'+esc(rate(g.avg_change_rate))+'</span></div>'+
+     '<div class="sp-money">누적 '+esc(money(g.trade_value_krw))+' · 최근 '+esc(recent)+'</div>'+
+     strengthBlock(g)+
+     '<div class="sp-reason">'+esc(why.label||"공통재료 미확인")+' · '+esc(why.summary||"")+'</div></div>';
+ }).join("")||'<div class="panel pad muted">섹터 흐름 집계 대기</div>';
+}
 
 function setView(name){
  document.querySelectorAll(".view").forEach(x=>x.classList.toggle("active",x.id==="view-"+name));
@@ -186,10 +246,30 @@ async function sendFeedback(category,stock,predicted,verdict,btn){
 
 
 function digest(x){return x?.material_digest||x?.digest||{}}
-function sectorCards(list,limit=8){
+function sectorCards(list,limit=8,showStrength=false){
  return (list||[]).slice(0,limit).map(g=>{
-   const stocks=(g.stocks||[]).slice(0,6).map(x=>'<div class="stock-mini"><div class="name">'+esc(x.name||x.code)+'</div><div class="num"><span class="rank-badge">#'+esc(x.rank??"-")+'</span><span class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</span></div></div>').join("");
-   return '<div class="sector-card"><div class="sector-head"><div><strong>'+esc(g.name)+'</strong><div class="sector-meta">조회상위 '+esc(g.count)+'종목 · 평균 #'+esc(g.avg_rank==null?"-":Number(g.avg_rank).toFixed(1))+'</div></div><div class="'+klass(g.avg_change_rate)+'"><b>'+esc(rate(g.avg_change_rate))+'</b></div></div><div class="stock-list">'+stocks+'</div></div>';
+   const xs=(g.stocks||[]).slice(0,6),maxMoney=Math.max(1,...xs.map(x=>Number(x.trade_value_krw||0)));
+   const stocks=xs.map(x=>{
+     const width=Math.max(2,Math.min(100,Number(x.trade_value_krw||0)/maxMoney*100));
+     return '<div class="stock-mini"><div class="name">'+esc(x.name||x.code)+'</div>'+
+       '<div class="num"><span class="rank-badge">조회 #'+esc(x.rank??"-")+'</span><span class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</span></div>'+
+       '<div class="stock-money">'+esc(money(x.trade_value_krw))+' <span class="sub">대금 #'+esc(x.trade_rank??"-")+'</span></div>'+
+       '<div class="stock-burst">'+esc(recentMoney(x)||"최근구간 대금 비교대기")+'</div>'+
+       '<div class="moneybar"><i style="width:'+width.toFixed(1)+'%"></i></div></div>';
+   }).join("");
+   const why=g.reason||{},reasonClass=why.level==="SUPPORTED"?"supported":why.level==="PARTIAL"?"partial":"unconfirmed";
+   const evidence=(why.evidence||[]).slice(0,3).map(x=>'<span class="pill">'+esc(x.name||x.code)+' · '+esc(x.assessment||"재료")+'</span>').join("");
+   const evidenceLines=(why.evidence||[]).slice(0,3).map(x=>'<div class="sector-evidence-line"><b>'+esc(x.name||x.code)+'</b> · '+esc(x.summary||x.assessment||"재료 확인")+'</div>').join("");
+   const recent=g.recent_turnover_known?(' · 최근 '+money(g.recent_turnover_krw)):'';
+   const hotCount=((DATA?.query_ranking)||[]).slice(0,12).filter(x=>sectorName(x)===g.name).length;
+   return '<div class="sector-card '+sectorClass(g.name)+'"><div class="sector-head"><div><strong>'+esc(g.name)+'</strong> '+(hotCount?'<span class="sector-chip '+sectorClass(g.name)+'"><i></i>급부상 '+hotCount+'개</span>':'')+
+     '<div class="sector-meta">조회상위 '+esc(g.count)+'종목 · 상승 '+esc(g.positive??0)+'/'+esc(g.change_n??g.count)+'</div>'+
+     '<div class="sector-money">누적 '+esc(money(g.trade_value_krw))+esc(recent)+'</div>'+(showStrength?strengthBlock(g):'')+'</div>'+
+     '<div class="'+klass(g.avg_change_rate)+'"><b>'+esc(rate(g.avg_change_rate))+'</b></div></div>'+
+     '<div class="stock-list">'+stocks+'</div>'+
+     '<div class="sector-reason '+reasonClass+'"><b>왜 움직이나 · '+esc(why.label||"분석 대기")+'</b><div>'+esc(why.summary||"섹터 재료 분석 대기")+'</div>'+
+     (evidence?'<div class="sector-evidence">'+evidence+'</div>':'')+
+     (evidenceLines?'<div class="sector-evidence-lines">'+evidenceLines+'</div>':'')+'</div></div>';
  }).join("")||'<div class="panel pad muted">섹터 데이터 대기 중</div>';
 }
 function stockRow(x,mode){
@@ -202,15 +282,20 @@ function stockRow(x,mode){
  '<td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td>'+
  (mode==="query"?'<td>'+esc(money(x.trade_value_krw))+'</td>':'<td>'+esc(money(x.trade_value_krw))+'</td><td>'+esc(q??"-")+'</td>')+
  '<td>'+esc(x.trade_to_cap_pct==null?"-":Number(x.trade_to_cap_pct).toFixed(1)+"%")+'</td>'+
- '<td class="left">'+esc(x.official_sector||x.market_theme||x.sector||"미분류")+'</td>'+
+ '<td class="left">'+sectorChip(sectorName(x))+'</td>'+
  '<td class="left"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td>'+
  '<td class="wrap"><b>'+esc(d.summary||"재료 미확인")+'</b><div class="sub">'+esc(d.assessment||"")+'</div></td>'+
- '<td class="left"><b>'+esc(c.state_ko||x.chart_state||"대기")+'</b><div class="sub">'+esc(c.minute_trend||"")+'</div></td></tr>';
+ '<td class="left"><b>'+esc(c.state_ko||x.chart_state||"대기")+'</b><div class="sub">'+esc(c.minute_trend||"")+'</div>'+signalBadge(x)+'</td></tr>';
 }
 function renderHomeStocks(rows){
  return (rows||[]).slice(0,12).map(x=>{
-   const d=digest(x),m=x.mimosa||{};
-   return '<tr><td>#'+esc(x.rank??"-")+'</td><td class="left"><b>'+esc(x.name||x.code)+'</b></td><td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td><td>'+esc(x.trade_rank??"-")+'</td><td>'+esc(money(x.trade_value_krw))+'</td><td class="left">'+esc(x.official_sector||x.market_theme||"미분류")+'</td><td class="left"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td><td class="wrap">'+esc(d.summary||"직접 재료 미확인")+'</td><td class="left">'+esc(m.state_ko||x.chart_state||"대기")+'</td></tr>';
+   const d=digest(x),m=x.mimosa||{},sector=sectorName(x),recent=recentMoney(x);
+   return '<tr class="surge-row '+sectorClass(sector)+'"><td>#'+esc(x.rank??"-")+'</td><td class="left"><b>'+esc(x.name||x.code)+'</b></td>'+
+   '<td class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</td><td>'+esc(x.trade_rank??"-")+'</td>'+
+   '<td><b>'+esc(money(x.trade_value_krw))+'</b>'+(recent?'<div class="sub">'+esc(recent)+'</div>':'')+'</td>'+
+   '<td class="left">'+sectorChip(sector)+'</td><td class="left"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td>'+
+   '<td class="wrap">'+esc(d.summary||"직접 재료 미확인")+'<div class="sub">'+esc(d.assessment||"")+'</div></td>'+
+   '<td class="left">'+esc(m.state_ko||x.chart_state||"대기")+signalBadge(x)+'</td></tr>';
  }).join("")||'<tr><td colspan="9" class="muted">장중 실시간 데이터 대기 중</td></tr>';
 }
 function evidence(c){
@@ -329,15 +414,24 @@ function render(d){
  document.getElementById("mimosaSub").textContent=d.system.chartfeed?.status?"차트 "+d.system.chartfeed.status:"";
  document.getElementById("analysis").innerHTML=(d.analysis?.lines||[]).map(x=>'<div class="analysis-line">'+esc(x)+'</div>').join("")||'<span class="muted">시장 분석 대기</span>';
  const sig=[];
+ const strongestTheme=[...(d.sector_rankings||[])].sort((a,b)=>Number(b.theme_strength||0)-Number(a.theme_strength||0))[0];
+ if(strongestTheme)sig.push("테마강도 "+strongestTheme.name+" "+(strongestTheme.theme_strength??"-"));
  if((d.sector_rankings||[])[0])sig.push("조회집중 "+d.sector_rankings[0].name);
  const noMat=(d.query_ranking||[]).filter(x=>x.flow_state==="돈 선행 / 재료 미확인").length;
  if(noMat)sig.push("돈선행 "+noMat+"종목");
  if((d.material_stats?.direct||0)>0)sig.push("직접재료 "+d.material_stats.direct+"종목");
  if((d.material_stats?.spreading||0)>0)sig.push("확산 "+d.material_stats.spreading+"종목");
+ const topWarn=(d.query_ranking||[]).slice(0,12).filter(x=>x.reversal_signal?.kind==="TOP_WARNING").length;
+ const bottomWatch=(d.query_ranking||[]).slice(0,12).filter(x=>x.reversal_signal?.kind==="BOTTOM_WATCH").length;
+ if(topWarn)sig.push("고점경계 "+topWarn+"종목");
+ if(bottomWatch)sig.push("바닥감시 "+bottomWatch+"종목");
  if(d.regime_metrics?.rank_turnover_5m!=null)sig.push("교체율 "+pct(d.regime_metrics.rank_turnover_5m));
  document.getElementById("quickSignals").innerHTML=sig.map(x=>'<span class="pill">'+esc(x)+'</span>').join("");
- document.getElementById("homeSectors").innerHTML=sectorCards(d.sector_rankings,8);
- document.getElementById("sectorBoard").innerHTML=sectorCards(d.sector_rankings,20);
+ const homeThemes=[...(d.sector_rankings||[])].sort((a,b)=>(Number(b.theme_strength||0)-Number(a.theme_strength||0))||(Number(b.recent_turnover_krw||0)-Number(a.recent_turnover_krw||0)));
+ document.getElementById("homeSectorPulse").innerHTML=renderSectorPulse(homeThemes,d.query_ranking);
+ document.getElementById("homeSectors").innerHTML=sectorCards(homeThemes,8,true);
+ document.getElementById("sectorBoard").innerHTML=sectorCards(d.sector_rankings,20,false);
+ document.getElementById("homeSectorMix").innerHTML=renderSectorMix(d.query_ranking);
  document.getElementById("homeStocks").innerHTML=renderHomeStocks(d.query_ranking);
  document.getElementById("queryRows").innerHTML=(d.query_ranking||[]).map(x=>stockRow(x,"query")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
  document.getElementById("tradeRows").innerHTML=(d.trade_ranking||[]).map(x=>stockRow(x,"trade")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
