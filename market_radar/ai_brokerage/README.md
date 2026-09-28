@@ -124,3 +124,106 @@ Shadow 검증은 prospective 원칙을 유지합니다. worker 시작 이전의 
 ### Important limitation
 
 현재 v1의 slippage는 **실제 호가 스프레드가 아니라 proxy**입니다. 실제 최우선 호가·잔량이 수집되면 execution model의 입력을 교체하고 v1 proxy 결과와 분리해 버전 관리해야 합니다.
+
+
+## Execution v2 — Official 10-Level Order Book + TCA
+
+Execution v2 separates **signal quality** from **execution quality**.
+
+### Official Kiwoom order-book source
+
+Read-only collector:
+
+- API ID: `ka10004`
+- Method: `POST`
+- URL: `/api/dostk/mrkcond`
+- request: `stk_cd`
+- SOR request example: `005930_AL`
+
+Important official response identifiers used by the collector:
+
+- best ask: `sel_fpr_bid`
+- best ask quantity: `sel_fpr_req`
+- ask levels 2–10: `sel_{n}th_pre_bid`, `sel_{n}th_pre_req`
+- best bid: `buy_fpr_bid`
+- best bid quantity: `buy_fpr_req`
+- bid levels 2–10: `buy_{n}th_pre_bid`, `buy_{n}th_pre_req`
+- total ask quantity: `tot_sel_req`
+- total bid quantity: `tot_buy_req`
+- provider book-time field: `bid_req_base_tm`
+
+The collector calls no order endpoint. It targets only recent AI Brokerage / Paper / Shadow names.
+
+### BOOK_V2 fill model
+
+When a fresh order book exists:
+
+1. calculate best ask / best bid / midpoint / spread
+2. haircut displayed quantity before using it
+3. BUY walks asks from best price upward
+4. SELL walks bids from best price downward
+5. stop when requested shares are filled or 10 levels are exhausted
+6. record VWAP, fill ratio, levels used, remaining shares
+7. compute implementation shortfall against arrival midpoint
+
+A crossed book is rejected. A spread above the configured maximum is rejected.
+
+### PROXY_V1 fallback
+
+If a fresh order book is absent and fallback is enabled, the previous turnover/volatility model is used.
+
+BOOK_V2 and PROXY_V1 must never be pooled as if they had equal execution fidelity. Dashboard metrics expose BOOK_V2 coverage explicitly.
+
+### Implementation Shortfall / TCA
+
+For BOOK_V2:
+
+- entry IS = adverse distance from arrival mid to entry VWAP
+- exit IS = adverse distance from arrival mid to exit VWAP
+- round-trip IS = entry IS + exit IS
+- return drag = Paper return − Shadow net return
+
+The dashboard exposes:
+
+- BOOK_V2 coverage
+- median entry / exit / round-trip IS
+- median Paper→Shadow return drag
+- fill ratio
+- complete vs partial exits
+- execution / liquidity rejects
+
+### Portfolio Risk Budget
+
+Before a Shadow entry is simulated, the proposed risk is checked against:
+
+- total portfolio risk cap
+- theme risk cap
+- strategy-family risk cap
+- maximum simultaneous positions
+
+The simulator may scale requested shares down when only part of the risk budget remains.
+
+A hard-cap breach rejects the Shadow entry.
+
+### Defaults
+
+Defaults are research settings, not claims of optimality:
+
+- account equity: KRW 100,000,000
+- risk per trade: 0.50%
+- max position: 10%
+- max total portfolio risk: 2.0%
+- max theme risk: 0.8%
+- max strategy-family risk: 1.2%
+- max open positions: 5
+- displayed book liquidity haircut: 50%
+- book max age: 30 seconds
+- proxy fallback: enabled
+
+Fees and sell tax default to zero until the actual account/broker cost assumptions are explicitly entered.
+
+### Core rule
+
+> A good strategy with poor execution is not a good trade.
+
+Execution v2 therefore reports the strategy result and the execution cost separately.
