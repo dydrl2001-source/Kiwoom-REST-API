@@ -1374,6 +1374,17 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 if r:
                     kiwoom = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
 
+            orderbook = {"status":"NOT_CONFIGURED","updated_at":None,"mode":None,
+                         "target_count":0,"saved_count":0,"note":None}
+            if table_exists(cur,"orderbook_feed_status"):
+                cur.execute("""SELECT status,updated_at,mode,target_count,saved_count,note
+                               FROM orderbook_feed_status WHERE id=1""")
+                r=cur.fetchone()
+                if r:
+                    orderbook={"status":r[0],"updated_at":iso(r[1]),"mode":r[2],
+                               "target_count":int(r[3] or 0),"saved_count":int(r[4] or 0),
+                               "note":r[5]}
+
             newsfeed = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
             if table_exists(cur, "news_feed_status"):
                 cur.execute("SELECT status,last_success_at,note FROM news_feed_status WHERE id=1")
@@ -1729,6 +1740,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             ai_strategy_performance=build_ai_strategy_performance(cur)
             ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             shadow_execution=build_shadow_execution_lab(cur)
+            shadow_execution["orderbook_feed"]=orderbook
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1946,7 +1958,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
     payload={
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research, "deepresearch": deepresearch},
+        "system": {"telegram": telegram, "kiwoom": kiwoom, "orderbook": orderbook, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research, "deepresearch": deepresearch},
         "regime": regime,
         "regime_metrics": regime_metrics,
         "rank_time": iso(rank_time),
