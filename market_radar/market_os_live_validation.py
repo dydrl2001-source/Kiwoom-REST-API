@@ -5,6 +5,7 @@ Kiwoom/OpenAI, mutate credentials, place orders, or change rule thresholds.
 """
 from __future__ import annotations
 from datetime import datetime,timezone,time as dtime,timedelta
+import json
 from zoneinfo import ZoneInfo
 import os
 
@@ -219,3 +220,7 @@ def payload():
         "flow_quality":quality,"realtime":realtime,"coverage":coverage,
         "notice":"읽기 전용 진단. API 호출·키 변경·주문·AI 호출 없음."
     }
+
+
+if __name__=="__main__":
+    print(json.dumps(payload(),ensure_ascii=False,default=str,indent=2),flush=True)
