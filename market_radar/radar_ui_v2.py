@@ -50,6 +50,8 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .home-brief{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:linear-gradient(90deg,#17253c,#263b5d);color:#fff;border-radius:11px;padding:10px 12px;margin-top:8px;box-shadow:0 4px 14px rgba(20,35,58,.12)}.home-brief b{font-size:13px}.home-brief span{font-size:10px;color:#dce6f7}
 .home-market-tools{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-top:7px}.home-market-tools .legend{flex:1}.market-detail{margin:0;background:#fff;border:1px solid var(--line);border-radius:9px;padding:7px 9px;min-width:150px}.market-detail summary{font-weight:800;font-size:10px;color:#596a83}.market-detail .analysis-line{font-size:10px;padding:5px 0}.home-candidates{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.home-candidate{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px;border-top:3px solid #7081da;min-width:0}.home-candidate .hc-top{display:flex;justify-content:space-between;gap:7px;align-items:flex-start}.home-candidate .hc-name{font-weight:900;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.home-candidate .hc-score{font-size:20px;font-weight:900}.home-candidate .hc-meta{font-size:9px;color:var(--muted);margin-top:3px}.home-candidate .hc-money{font-size:10px;font-weight:800;margin-top:6px}.home-candidate .hc-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
 .paper-lab{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}.paper-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #edf1f6}.paper-head b{font-size:13px}.paper-badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;background:#eef1f5;color:#647386;font-size:9px;font-weight:850}.paper-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;border-bottom:1px solid #edf1f6}.paper-kpi{padding:10px 12px;border-right:1px solid #edf1f6}.paper-kpi:last-child{border-right:0}.paper-kpi .pk{font-size:9px;color:var(--muted)}.paper-kpi .pv{font-size:18px;font-weight:900;margin-top:2px}.paper-open-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;padding:10px}.paper-position{border:1px solid #dce4ef;border-radius:9px;padding:9px;border-top:3px solid #6779d7;min-width:0}.paper-position .pp-name{font-size:12px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.paper-position .pp-ret{font-size:20px;font-weight:900}.paper-position .pp-meta{font-size:9px;color:var(--muted);line-height:1.55}.paper-position .pp-prices{font-size:10px;font-weight:800;margin-top:6px}.paper-path{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.paper-reason{font-size:9px;color:#607086;line-height:1.5;margin-top:6px}.paper-closed{border-top:1px solid #edf1f6}.paper-closed summary{padding:9px 12px;font-size:10px;font-weight:850;color:#596a83}.paper-table-wrap{overflow:auto;max-height:260px}.paper-table{width:100%;border-collapse:collapse;min-width:780px;font-size:9px}.paper-table th,.paper-table td{padding:7px 8px;border-top:1px solid #edf1f6;text-align:right;white-space:nowrap}.paper-table th:first-child,.paper-table td:first-child{text-align:left}.paper-table th{background:#f8fafc;color:var(--muted)}
+.paper-feedback{margin-top:8px;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}.pf-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid #edf1f6}.pf-head b{font-size:12px}.pf-state{display:inline-flex;padding:3px 7px;border-radius:999px;font-size:9px;font-weight:900}.pf-sample{background:#eef1f5;color:#667487}.pf-keep{background:#e7f5ef;color:#176f55}.pf-review{background:#fff0df;color:#965d18}.pf-overall{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #edf1f6}.pf-kpi{padding:9px 10px;border-right:1px solid #edf1f6}.pf-kpi:last-child{border-right:0}.pf-kpi .k{font-size:8px;color:var(--muted)}.pf-kpi .v{font-size:14px;font-weight:900;margin-top:2px}.pf-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:10px;padding:10px}.pf-box{border:1px solid #e3e9f1;border-radius:9px;overflow:hidden}.pf-box-head{padding:7px 9px;background:#f8fafc;font-size:10px;font-weight:850;color:#596a83}.pf-check{padding:8px 9px;border-top:1px solid #eef2f7}.pf-check:first-of-type{border-top:0}.pf-check-title{display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:10px;font-weight:850}.pf-check p{font-size:9px;line-height:1.5;color:#66758a;margin:4px 0 0}.pf-type{display:grid;grid-template-columns:minmax(0,1fr) 34px 58px 58px;gap:6px;align-items:center;padding:7px 9px;border-top:1px solid #eef2f7;font-size:9px}.pf-type:first-of-type{border-top:0}.pf-type b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pf-band{font-size:9px;padding:6px 9px;border-top:1px solid #eef2f7;display:flex;justify-content:space-between;gap:8px}.pf-note{padding:8px 11px;border-top:1px solid #edf1f6;font-size:9px;color:#778499}
+
 
 .material-legend{display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin:5px 0 7px}.material-legend .legend-label{font-size:9px;color:var(--muted);font-weight:800;margin-right:2px}
 .leader-desk{display:grid;grid-template-columns:1.02fr 1.28fr 1fr;gap:10px;align-items:start;margin-bottom:10px}.leader-panel{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 4px 18px rgba(31,52,82,.035)}.leader-panel-head{display:flex;justify-content:space-between;align-items:end;gap:8px;padding:10px 11px;border-bottom:1px solid #edf1f6}.leader-panel-head b{font-size:13px}.leader-panel-head span{font-size:9px;color:var(--muted)}.leader-panel-body{padding:8px}
@@ -85,10 +87,10 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 .broker-candidates{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.broker-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px;border-top:4px solid #97a4b8}.broker-card.entry{border-top-color:#15966d}.broker-card.ready{border-top-color:#3f6fd8}.broker-card.watch{border-top-color:#d99120}.broker-card.blocked{border-top-color:#e35353}.broker-top{display:flex;justify-content:space-between;gap:8px}.broker-name{font-size:14px;font-weight:900}.broker-state{display:inline-flex;padding:3px 7px;border-radius:999px;background:#eef1f5;font-size:9px;font-weight:900}.broker-conv{font-size:24px;font-weight:900;text-align:right}.broker-strategy{margin-top:7px;padding:7px 8px;border-radius:8px;background:#f6f8fb;font-size:10px}.broker-deskline{display:grid;grid-template-columns:72px 1fr 34px;gap:6px;align-items:center;margin-top:5px;font-size:9px}.broker-bar{height:5px;background:#edf1f6;border-radius:99px;overflow:hidden}.broker-bar i{display:block;height:100%;background:#7184d8;border-radius:99px}.broker-block{margin-top:7px;padding:7px 8px;background:#fff0f1;border-radius:8px;color:#9c3d49;font-size:9px;line-height:1.5}.broker-foot{margin-top:7px;font-size:9px;color:#748196}
 .broker-principle{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.broker-principle div{border-left:3px solid #dbe3ee;padding-left:9px}.broker-principle b{display:block;font-size:11px}.broker-principle span{font-size:9px;color:var(--muted)}
 .bottom{display:none}
-@media(max-width:1100px){.broker-cycle{grid-template-columns:repeat(3,1fr)}.broker-desks{grid-template-columns:repeat(2,1fr)}.leader-desk{grid-template-columns:1fr 1fr}.leader-desk .leader-panel:last-child{grid-column:1/-1}.home-candidates{grid-template-columns:repeat(3,minmax(0,1fr))}.paper-open-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid,.deep-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
+@media(max-width:1100px){.broker-cycle{grid-template-columns:repeat(3,1fr)}.broker-desks{grid-template-columns:repeat(2,1fr)}.leader-desk{grid-template-columns:1fr 1fr}.leader-desk .leader-panel:last-child{grid-column:1/-1}.home-candidates{grid-template-columns:repeat(3,minmax(0,1fr))}.paper-open-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.pf-grid{grid-template-columns:1fr}.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid,.deep-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
 @media(max-width:700px){
  .app{padding:10px 8px 82px}.head{margin-bottom:6px}.brand{font-size:20px}.statusbar{grid-template-columns:1fr 1fr;gap:6px}.stat{min-height:61px;padding:8px}
- .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.leader-desk{grid-template-columns:1fr}.leader-desk .leader-panel:last-child{grid-column:auto}.home-market-tools{display:block}.market-detail{margin-top:6px}.home-candidates{grid-template-columns:1fr}.paper-summary{grid-template-columns:1fr 1fr}.paper-open-grid{grid-template-columns:1fr}.sector-grid{grid-template-columns:1fr;gap:7px}.stock-list{grid-template-columns:1fr 1fr}.stock-mini{border-right:1px solid #f0f3f7}
+ .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.leader-desk{grid-template-columns:1fr}.leader-desk .leader-panel:last-child{grid-column:auto}.home-market-tools{display:block}.market-detail{margin-top:6px}.home-candidates{grid-template-columns:1fr}.paper-summary{grid-template-columns:1fr 1fr}.paper-open-grid{grid-template-columns:1fr}.pf-overall{grid-template-columns:1fr 1fr}.pf-grid{grid-template-columns:1fr}.sector-grid{grid-template-columns:1fr;gap:7px}.stock-list{grid-template-columns:1fr 1fr}.stock-mini{border-right:1px solid #f0f3f7}
  .broker-hero{grid-template-columns:1fr}.broker-mode{align-items:flex-start;text-align:left}.broker-cycle,.broker-desks,.broker-registry,.broker-candidates,.broker-principle{grid-template-columns:1fr}.material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.sector-pulse{grid-template-columns:1fr 1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
  .bottom button{border:0;background:transparent;color:#78869b;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px}.bottom button.active{color:#1c2b45;font-weight:900}.bottom b{font-size:16px;line-height:1}
 }
@@ -139,6 +141,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div id="homeCandidates" class="home-candidates"></div>
  <div class="section-title"><h2>Paper Lab · 자동 가상매매</h2><span>레이더 규칙 검증용 · 1단위 · 실계좌 주문 없음</span></div>
  <div id="homePaperLab" class="paper-lab"></div>
+ <div id="homePaperFeedback" class="paper-feedback"></div>
 </section>
 
 <section class="view" id="view-brokerage">
@@ -146,11 +149,10 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
   <div>
    <div class="broker-eyebrow">AI BROKERAGE OS · PAPER-FIRST</div>
    <h2>감으로 고르는 종목이 아니라<br>근거가 통과한 전략만 다음 단계로</h2>
-   <p>시장·재료·수급·차트·전략·리스크를 한 점수로 뭉개지 않습니다. 여섯 Desk가 각자 다른 질문을 던지고, 전략 조건과 리스크 게이트를 모두 통과한 경우에만 PAPER 실행 후보가 됩니다.</p>
+   <p>시장·재료·수급·차트·전략·리스크를 한 점수로 뭉개지 않습니다. 여섯 Desk가 각자 다른 질문을 던지고, 전략 조건과 Risk Gate를 모두 통과한 경우에만 PAPER 실행 후보가 됩니다.</p>
   </div>
   <div class="broker-mode"><strong id="brokerMode">PAPER ONLY</strong><span id="brokerStatus">실계좌 주문 경로 없음</span></div>
  </div>
-
  <div class="section-title"><h2>하루의 운영 루프</h2><span>관찰 → 교차검증 → 전략선택 → 거부권 → 가상실행 → 복기</span></div>
  <div class="broker-cycle">
   <div class="broker-step"><i>01 OBSERVE</i><b>시장 읽기</b><span>장세·섹터·관심·거래대금</span></div>
@@ -160,7 +162,6 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
   <div class="broker-step"><i>05 PAPER</i><b>가상 실행</b><span>실제 주문 전 forward-test 축적</span></div>
   <div class="broker-step"><i>06 REVIEW</i><b>성과 귀속</b><span>어떤 전략·장세·판단이 맞았는지 기록</span></div>
  </div>
-
  <div class="section-title"><h2>6개 Desk</h2><span>한 AI의 자신감보다 서로 다른 책임의 분리</span></div>
  <div class="broker-desks">
   <div class="broker-desk"><b>Market Desk · 시장부</b><p>현재 장세의 추세·수급 분포·심리와 데이터 신선도를 판단합니다.</p></div>
@@ -170,13 +171,10 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
   <div class="broker-desk"><b>Strategy Desk · 전략부</b><p>전략 이름을 추천하는 대신 현재 regime·chart·material gate를 실제 Registry와 대조합니다.</p></div>
   <div class="broker-desk"><b>Risk Desk · 리스크부</b><p>포지션 수, 일일 손실, 시세 freshness, 중복 보유를 보고 최종 거부권을 가집니다.</p></div>
  </div>
-
  <div class="section-title"><h2>Strategy Factory</h2><span>50개 슬롯을 보유하되 검증되지 않은 전략은 ACTIVE처럼 표시하지 않음</span></div>
  <div id="brokerRegistry" class="broker-registry"></div>
-
  <div class="section-title"><h2>오늘의 6-Desk 회의 결과</h2><span>WATCH · READY · PAPER_ENTRY · BLOCKED를 이유와 함께 공개</span></div>
  <div id="brokerCandidates" class="broker-candidates"></div>
-
  <div class="section-title"><h2>우리의 기준</h2><span>자동화보다 중요한 것은 무엇을 자동화하느냐</span></div>
  <div class="broker-principle">
   <div><b>예측보다 검증</b><span>AI가 시장을 맞힌다고 가정하지 않고, 확인 가능한 근거와 조건을 남깁니다.</span></div>
@@ -481,7 +479,7 @@ function renderAIBrokerage(broker){
    const cls=x.state==="PAPER_ENTRY"?"entry":x.state==="READY"?"ready":x.state==="WATCH"?"watch":x.state==="BLOCKED"?"blocked":"";
    const st=x.selected_strategy||{};
    const desks=(x.desks||[]).map(d=>{
-     const raw=Number(d.score||0),conf=Number(d.confidence||0),bar=Math.max(0,Math.min(100,(raw+1)*50));
+     const raw=Number(d.score||0),bar=Math.max(0,Math.min(100,(raw+1)*50));
      const signed=(raw>0?"+":"")+Math.round(raw*100);
      return '<div class="broker-deskline"><b>'+esc(labels[d.desk]||d.desk)+'</b><div class="broker-bar"><i style="width:'+bar.toFixed(0)+'%"></i></div><span>'+esc(signed)+'</span></div>';
    }).join("");
@@ -519,6 +517,35 @@ function renderPaperLab(lab){
  const rows=closed.slice(0,10).map(t=>'<tr><td><b>'+esc(t.name||t.code)+'</b><div class="sub">'+esc(t.primary_type||'')+'</div></td><td>'+esc(t.opened_at?new Date(t.opened_at).toLocaleTimeString("ko-KR"):'—')+'</td><td>'+esc(t.closed_at?new Date(t.closed_at).toLocaleTimeString("ko-KR"):'—')+'</td><td class="'+retClass(t.return_pct)+'">'+esc(t.return_pct==null?'자료없음':obsPct(t.return_pct))+'</td><td>'+esc(obsPct(t.mfe_pct))+'</td><td>'+esc(obsPct(t.mae_pct))+'</td><td class="left">'+esc(t.exit_reason||'—')+'</td></tr>').join('');
  const recent='<details class="paper-closed"><summary>최근 가상 청산 '+closed.length+'건 보기'+(sum.small_sample?' · 소표본':'')+'</summary><div class="paper-table-wrap"><table class="paper-table"><thead><tr><th>종목</th><th>진입</th><th>청산</th><th>관찰수익</th><th>MFE</th><th>MAE</th><th class="left">청산 이유</th></tr></thead><tbody>'+(rows||'<tr><td colspan="7" class="muted">아직 완료된 가상매매가 없습니다.</td></tr>')+'</tbody></table></div></details>';
  return head+summary+positions+recent+'<div class="sub" style="padding:8px 12px;border-top:1px solid #edf1f6">수수료·세금·슬리피지·호가체결을 반영하지 않은 규칙 검증용 가격경로입니다. 실제 주문이나 매매 지시가 아닙니다.</div>';
+}
+function renderPaperFeedback(fb){
+ const root=fb||{},p=root.payload||{},o=p.overall||{},checks=p.checks||[],types=p.types||[],bands=p.score_bands||[];
+ const state=p.state||root.status||"SAMPLE_BUILDING",label=p.label||"표본 축적";
+ const stateClass=state==="STABLE"?"pf-keep":state==="REVIEW"?"pf-review":"pf-sample";
+ const kpis=[
+   ["완료 표본",String(o.n??0)+"건"],
+   ["중앙 관찰수익",o.median_return_pct==null?"—":obsPct(o.median_return_pct)],
+   ["양(+) 관측",o.positive_pct==null?"—":fmt(o.positive_pct,0)+"%"],
+   ["되돌림",o.giveback_pct==null?"—":fmt(o.giveback_pct,0)+"%"],
+   ["초기 실패",o.immediate_failure_pct==null?"—":fmt(o.immediate_failure_pct,0)+"%"]
+ ];
+ const head='<div class="pf-head"><div><b>Paper Lab 자동 피드백</b><div class="sub">결과를 분석하지만 실시간 규칙은 자동 변경하지 않습니다.</div></div><span class="pf-state '+stateClass+'">'+esc(label)+'</span></div>';
+ const overall='<div class="pf-overall">'+kpis.map(x=>'<div class="pf-kpi"><div class="k">'+esc(x[0])+'</div><div class="v">'+esc(x[1])+'</div></div>').join('')+'</div>';
+ let checkHtml='<div class="pf-box"><div class="pf-box-head">규칙 검증</div>';
+ if(!checks.length)checkHtml+='<div class="pf-check"><p>피드백 계산 대기</p></div>';
+ else checkHtml+=checks.slice(0,5).map(c=>{
+   const cls=c.status==="KEEP"?"pf-keep":c.status==="REVIEW_CANDIDATE"?"pf-review":"pf-sample";
+   return '<div class="pf-check"><div class="pf-check-title"><span>'+esc(c.rule||"규칙")+'</span><span class="pf-state '+cls+'">'+esc(c.label||c.status||"")+'</span></div><p>'+esc(c.message||"")+'</p></div>';
+ }).join('');
+ checkHtml+='</div>';
+ let typeHtml='<div class="pf-box"><div class="pf-box-head">후보 유형별 · n / 중앙값 / 양(+)비율</div>';
+ if(!types.length)typeHtml+='<div class="pf-check"><p>유형별 표본 축적 중</p></div>';
+ else typeHtml+=types.slice(0,6).map(t=>'<div class="pf-type"><b>'+esc(t.key)+'</b><span>n='+esc(t.n)+'</span><span class="'+retClass(t.median_return_pct)+'">'+esc(t.median_return_pct==null?'—':obsPct(t.median_return_pct))+'</span><span>'+esc(t.positive_pct==null?'—':fmt(t.positive_pct,0)+'%')+'</span></div>').join('');
+ if(bands.length){
+   typeHtml+='<div class="pf-box-head">진입 관찰도 구간</div>'+bands.map(b=>'<div class="pf-band"><span>'+esc(b.key)+' · n='+esc(b.n)+'</span><span class="'+retClass(b.median_return_pct)+'">'+esc(b.median_return_pct==null?'—':obsPct(b.median_return_pct))+'</span></div>').join('');
+ }
+ typeHtml+='</div>';
+ return head+overall+'<div class="pf-grid">'+checkHtml+typeHtml+'</div><div class="pf-note">'+esc(p.note||root.note||"규칙 변경은 수동 검토 후 별도 버전으로만 적용")+'</div>';
 }
 function evidence(c){
  let out="";
@@ -664,6 +691,7 @@ function render(d){
  document.getElementById("homeStocks").innerHTML=renderHomeStocks(d.query_ranking);
  document.getElementById("homeCandidates").innerHTML=renderHomeCandidates(d.home_candidates);
  document.getElementById("homePaperLab").innerHTML=renderPaperLab(d.paper_lab);
+ document.getElementById("homePaperFeedback").innerHTML=renderPaperFeedback(d.paper_feedback);
  renderAIBrokerage(d.ai_brokerage);
  document.getElementById("queryRows").innerHTML=(d.query_ranking||[]).map(x=>stockRow(x,"query")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
  document.getElementById("tradeRows").innerHTML=(d.trade_ranking||[]).map(x=>stockRow(x,"trade")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';

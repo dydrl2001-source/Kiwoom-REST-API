@@ -2,7 +2,7 @@
 # Read-only diagnostics, not another model call. No keys/report text are printed.
 set -eu
 cd "$(dirname "$0")"
-docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker candidate-tracker paper-trade-engine
+docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker candidate-tracker paper-trade-engine paper-feedback-engine
 curl --fail --silent --show-error --max-time 8 http://localhost:8080/health
 printf '\n'
 docker compose exec -T radar-api python - <<'PY'
@@ -48,7 +48,13 @@ try:
     print('PAPER_OPEN:',len(p.get('open',[])))
     print('PAPER_CLOSED_30D:',p.get('summary',{}).get('closed'))
     print('PAPER_MEDIAN_RETURN:',p.get('summary',{}).get('median_return_pct'))
-    print('No orders, model calls or data deletion were performed by this diagnostic.')
+    pf=dash.get('paper_feedback',{})
+    pp=pf.get('payload',{})
+    print('PAPER_FEEDBACK_STATUS:',pf.get('status'))
+    print('PAPER_FEEDBACK_LABEL:',pp.get('label'))
+    print('PAPER_FEEDBACK_SAMPLE:',pp.get('overall',{}).get('n'))
+    print('PAPER_FEEDBACK_CHECKS:',len(pp.get('checks',[])))
+    print('No orders, model calls, threshold changes or data deletion were performed by this diagnostic.')
 except HTTPError as e:
     print('FLOW_HTTP_STATUS:',e.code);sys.exit(1)
 except Exception:

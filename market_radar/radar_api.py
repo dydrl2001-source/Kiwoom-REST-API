@@ -620,6 +620,32 @@ def build_paper_lab(cur):
             "note":"자동 가상진입/청산 실험. 실제 주문·포지션 크기·수수료·슬리피지를 포함하지 않음"}
 
 
+def build_paper_feedback(cur):
+    empty={
+        "status":"NOT_INITIALIZED","rule_version":"paper-v1-observation",
+        "closed_count":0,"payload":{
+            "state":"SAMPLE_BUILDING","label":"표본 축적",
+            "overall":{"n":0},"types":[],"score_bands":[],"exit_reasons":[],
+            "checks":[{"rule":"전체","status":"SAMPLE_BUILDING","label":"표본 축적",
+                       "message":"Paper Lab 완료 표본을 기다리는 중.","evidence":{"n":0}}],
+            "gates":{"min_type_samples":20,"min_rule_samples":30},
+            "note":"자동 피드백은 규칙 변경 후보만 제시하고 실제 임계값은 변경하지 않음"
+        }
+    }
+    if not table_exists(cur,"radar_paper_feedback_status"):
+        return empty
+    try:
+        cur.execute("""SELECT status,updated_at,rule_version,closed_count,payload,note
+                       FROM radar_paper_feedback_status WHERE id=1""")
+        r=cur.fetchone()
+        if not r:return empty
+        return {"status":r[0],"updated_at":iso(r[1]),"rule_version":r[2],
+                "closed_count":int(r[3] or 0),"payload":r[4] or {},
+                "note":r[5] or ""}
+    except Exception:
+        return empty
+
+
 def build_home_candidates(cur, rows):
     """Read the current local candidate tracker for a compact Home Top5."""
     if not table_exists(cur,"radar_candidate_episodes"):
@@ -1410,6 +1436,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc),sector_groups)
             home_candidates=build_home_candidates(cur,rows)
             paper_lab=build_paper_lab(cur)
+            paper_feedback=build_paper_feedback(cur)
 
             # AI Brokerage v1: explainable PAPER-only decisions for current Top candidates.
             ai_brokerage={
@@ -1706,6 +1733,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "telegram_recent": recent_telegram,
         "home_candidates": home_candidates,
         "paper_lab": paper_lab,
+        "paper_feedback": paper_feedback,
         "ai_brokerage": ai_brokerage,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
