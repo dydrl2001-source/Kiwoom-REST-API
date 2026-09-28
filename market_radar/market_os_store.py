@@ -531,6 +531,10 @@ def learning_payload():
         "status":None,"segments":[],"interactions":[],"validation_candidates":[],
         "validation_summary":{"promote_review":0,"suppress_review":0,"hold":0,
                               "stable":0,"weakening":0,"reversal":0,"insufficient":0},
+        "promotion_registry":[],
+        "promotion_summary":{"hypothesis":0,"forming":0,"validated":0,"stable":0,
+                             "promotion_candidate":0,"shadow_rule":0},
+        "promotion_events":[],
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
@@ -597,6 +601,50 @@ def learning_payload():
                 x["start_day"]=r["start_day"].isoformat() if r["start_day"] else None
                 x["end_day"]=r["end_day"].isoformat() if r["end_day"] else None
                 walk_forward_rows.append(x)
+        if exists(cur,"market_os_promotion_registry"):
+            cur.execute("""SELECT candidate_key,segment_type,segment_value,horizon,interaction_depth,
+                                  current_stage,direction,review_action,manual_review_state,active,
+                                  first_seen_at,last_seen_at,stage_since,last_transition_at,
+                                  samples,distinct_stocks,distinct_days,quality,walk_forward_status,
+                                  avg_return_pct,median_return_pct,positive_rate,
+                                  edge_avg_return_pct,edge_positive_rate_pp,edge_mae_pct,
+                                  early_avg_return_pct,recent_avg_return_pct,reason_codes,
+                                  shadow_rule_id,manual_note
+                           FROM market_os_promotion_registry
+                           WHERE rule_version=%s AND active=TRUE
+                           ORDER BY CASE current_stage
+                               WHEN 'SHADOW_RULE' THEN 1
+                               WHEN 'PROMOTION_CANDIDATE' THEN 2
+                               WHEN 'STABLE' THEN 3
+                               WHEN 'VALIDATED' THEN 4
+                               WHEN 'FORMING' THEN 5
+                               ELSE 6 END,
+                               samples DESC,segment_type,segment_value""",(RULE_VERSION,))
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("first_seen_at","last_seen_at","stage_since","last_transition_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["promotion_registry"].append(x)
+            for stage,key in (
+                ("HYPOTHESIS","hypothesis"),("FORMING","forming"),
+                ("VALIDATED","validated"),("STABLE","stable"),
+                ("PROMOTION_CANDIDATE","promotion_candidate"),("SHADOW_RULE","shadow_rule")
+            ):
+                learning["promotion_summary"][key]=sum(
+                    x["current_stage"]==stage for x in learning["promotion_registry"]
+                )
+        if exists(cur,"market_os_promotion_events"):
+            cur.execute("""SELECT e.event_id,e.candidate_key,e.event_time,e.event_type,
+                                  e.from_stage,e.to_stage,e.direction,e.review_action,e.reason_codes,
+                                  r.segment_type,r.segment_value,r.horizon
+                           FROM market_os_promotion_events e
+                           LEFT JOIN market_os_promotion_registry r
+                             ON r.candidate_key=e.candidate_key
+                           ORDER BY e.event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["promotion_events"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
