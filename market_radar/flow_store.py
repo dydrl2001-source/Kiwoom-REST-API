@@ -5,7 +5,7 @@ from datetime import datetime,timezone,timedelta
 import json
 import os
 import re
-from flow_core import quote, metrics, group_rows, rotation_series, candidate_watchlist, segment, dt, event_from_report, report_sections, SPEC, VERSION
+from flow_core import quote, metrics, group_rows, rotation_series, candidate_watchlist, segment, dt, event_from_report, report_sections, SPEC, VERSION, KST
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS radar_flow_quotes (
@@ -161,7 +161,165 @@ def theme_memberships(cur,codes):
     return out
 
 
-def desk_payload():
+
+def candidate_tracking_payload(current_candidates, now, sample_time):
+    """Enrich current candidates with persistence history.
+
+    History contains only prior local observation candidates. It is not a
+    backtest, fill simulation, recommendation record or model probability.
+    """
+    base={'status':'NOT_INITIALIZED','current_count':len(current_candidates),
+          'recent_dropouts':[],'theme_persistence':[],'state_counts':{}}
+    current_time=dt(sample_time) or now
+    current_codes={x.get('code') for x in current_candidates if x.get('code')}
+    with db(True) as c,c.cursor() as cur:
+        if not exists(cur,'radar_candidate_history'):
+            return base
+        cur.execute("""SELECT updated_at,status,last_sample_time,candidate_count,rows_written,note
+                       FROM radar_candidate_tracker_status WHERE id=1""")
+        tracker=cur.fetchone() if exists(cur,'radar_candidate_tracker_status') else None
+        base['status']=tracker['status'] if tracker else 'READY_NO_STATUS'
+        if tracker:
+            base['tracker']={
+                'updated_at':tracker['updated_at'].isoformat() if tracker['updated_at'] else None,
+                'last_sample_time':tracker['last_sample_time'].isoformat() if tracker['last_sample_time'] else None,
+                'candidate_count':tracker['candidate_count'],'rows_written':tracker['rows_written']
+            }
+
+        cur.execute("""SELECT snapshot_time,stock_code,stock_name,attention_score,label,primary_type,
+                              market_theme,price_krw,change_pct,interval_turnover_krw,
+                              burst_multiple,event_type,chart_state
+                       FROM radar_candidate_history
+                       WHERE snapshot_time >= %s
+                       ORDER BY stock_code,snapshot_time""",(now-timedelta(minutes=60),))
+        recent=cur.fetchall()
+
+        first_today={}
+        if current_codes:
+            day_start=now.astimezone(KST).replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+            cur.execute("""SELECT DISTINCT ON(stock_code)
+                              stock_code,snapshot_time,attention_score,price_krw
+                           FROM radar_candidate_history
+                           WHERE stock_code=ANY(%s) AND snapshot_time >= %s
+                           ORDER BY stock_code,snapshot_time""",(list(current_codes),day_start))
+            first_today={r['stock_code']:r for r in cur.fetchall()}
+
+    grouped=defaultdict(list)
+    for r in recent:
+        grouped[r['stock_code']].append(r)
+
+    state_counts=defaultdict(int)
+    for x in current_candidates:
+        code=x.get('code')
+        h=[r for r in grouped.get(code,[]) if r['snapshot_time'] < current_time-timedelta(seconds=1)]
+        h.sort(key=lambda r:r['snapshot_time'])
+        chain=1
+        chain_start=current_time
+        prev=current_time
+        for r in reversed(h):
+            gap=(prev-r['snapshot_time']).total_seconds()
+            if 0 <= gap <= 75:
+                chain+=1;chain_start=r['snapshot_time'];prev=r['snapshot_time']
+            else:
+                break
+        prior_gap=(current_time-h[-1]['snapshot_time']).total_seconds() if h else None
+        returned=bool(h and prior_gap is not None and prior_gap>120)
+        first=first_today.get(code)
+        first_seen=first['snapshot_time'] if first else current_time
+        is_new=not bool(first)
+
+        def hits(minutes):
+            cutoff=current_time-timedelta(minutes=minutes)
+            return 1+sum(1 for r in h if r['snapshot_time']>=cutoff)
+
+        target=current_time-timedelta(minutes=5)
+        near=[r for r in h if 240 <= (current_time-r['snapshot_time']).total_seconds() <= 420]
+        prior5=min(near,key=lambda r:abs((r['snapshot_time']-target).total_seconds())) if near else None
+        delta5=(x.get('attention_score')-prior5['attention_score']) if prior5 else None
+
+        if is_new:
+            state='신규'
+        elif returned:
+            state='재진입'
+        elif chain>=5 and delta5 is not None and delta5>=10:
+            state='강화'
+        elif chain>=5 and delta5 is not None and delta5<=-10:
+            state='약화'
+        elif chain>=5:
+            state='연속 유지'
+        else:
+            state='유지'
+        state_counts[state]+=1
+
+        series=[{'time':r['snapshot_time'].isoformat(),'value':r['attention_score']} for r in h[-19:]]
+        series.append({'time':current_time.isoformat(),'value':x.get('attention_score')})
+        x['tracking']={
+            'state':state,'first_seen_at':first_seen.isoformat(),
+            'consecutive_hits':chain,
+            'continuous_minutes':round(max(0,(current_time-chain_start).total_seconds())/60,1),
+            'hits_5m':hits(5),'hits_15m':hits(15),'hits_30m':hits(30),
+            'score_delta_5m':delta5,
+            'max_score_30m':max([x.get('attention_score') or 0]+[
+                r['attention_score'] for r in h
+                if r['snapshot_time']>=current_time-timedelta(minutes=30)]),
+            'score_series':series
+        }
+
+    # Candidates that were present recently but do not meet the current top-watch criteria.
+    dropouts=[]
+    for code,h in grouped.items():
+        if code in current_codes or not h:continue
+        last=h[-1];age=(current_time-last['snapshot_time']).total_seconds()
+        if 0 <= age <= 300:
+            dropouts.append({
+                'code':code,'name':last['stock_name'],'last_seen_at':last['snapshot_time'].isoformat(),
+                'age_sec':round(age),'last_score':last['attention_score'],
+                'primary_type':last['primary_type'],'market_theme':last['market_theme'],
+                'last_change_pct':last['change_pct'],
+                'note':'현재 관찰후보 기준 미충족; 하락·매도 신호를 뜻하지 않음'
+            })
+    dropouts.sort(key=lambda x:(x['age_sec'],-x['last_score']))
+    base['recent_dropouts']=dropouts[:10]
+
+    # Theme persistence is based on the top observation-candidate history, not all market stocks.
+    themes=defaultdict(list)
+    for r in recent:
+        if r['market_theme']:
+            themes[r['market_theme']].append(r)
+    current_theme_counts=defaultdict(int)
+    for x in current_candidates:
+        if x.get('market_theme'):current_theme_counts[x['market_theme']]+=1
+    theme_rows=[]
+    for name,h in themes.items():
+        last=max(r['snapshot_time'] for r in h)
+        h30=[r for r in h if r['snapshot_time']>=current_time-timedelta(minutes=30)]
+        h15=[r for r in h if r['snapshot_time']>=current_time-timedelta(minutes=15)]
+        h5=[r for r in h if r['snapshot_time']>=current_time-timedelta(minutes=5)]
+        prev5=[r for r in h if current_time-timedelta(minutes=10)<=r['snapshot_time']<current_time-timedelta(minutes=5)]
+        avg5=sum(r['attention_score'] for r in h5)/len(h5) if h5 else None
+        avgprev=sum(r['attention_score'] for r in prev5)/len(prev5) if prev5 else None
+        d=(avg5-avgprev) if avg5 is not None and avgprev is not None else None
+        current_count=current_theme_counts.get(name,0)
+        if current_count and d is not None and d>=5:st='후보군 강화'
+        elif current_count and d is not None and d<=-5:st='후보군 약화'
+        elif current_count:st='후보군 지속'
+        elif 0 <= (current_time-last).total_seconds() <= 300:st='최근 후보군 이탈'
+        else:st='과거 관찰'
+        theme_rows.append({
+            'theme':name,'state':st,'current_candidates':current_count,
+            'distinct_stocks_30m':len({r['stock_code'] for r in h30}),
+            'hits_5m':len(h5),'hits_15m':len(h15),'hits_30m':len(h30),
+            'avg_score_5m':round(avg5,1) if avg5 is not None else None,
+            'score_change_5m':round(d,1) if d is not None else None,
+            'last_seen_at':last.isoformat()
+        })
+    theme_rows.sort(key=lambda x:(-x['current_candidates'],-x['hits_15m'],-(x['avg_score_5m'] or 0)))
+    base['theme_persistence']=theme_rows[:10]
+    base['state_counts']=dict(state_counts)
+    base['meaning']='후보 노출 지속성 기록; 수익확률·매수신호·체결성과가 아님'
+    return base
+
+def desk_payload(include_tracking=True):
     now=datetime.now(timezone.utc)
     with db(True) as c,c.cursor() as cur:
         history,newest=latest_history(cur)
@@ -204,12 +362,16 @@ def desk_payload():
     by_sector,_=group_rows(rows,history,'sector')
     rotation=rotation_series(rows,history,10)
     candidates=candidate_watchlist(rows,rotation,12)
+    tracking=candidate_tracking_payload(candidates,now,newest) if include_tracking else {
+        'status':'SKIPPED_FOR_SNAPSHOT','current_count':len(candidates),
+        'recent_dropouts':[],'theme_persistence':[],'state_counts':{}
+    }
     recent=sum(r['recent_trade'] for r in rows)
     theme_mapped=sum(1 for r in rows if r.get('market_theme'))
     return {'generated_at':now.isoformat(),'sample_time':newest.isoformat() if newest else None,
             'refresh_target_seconds':30,'status':'RECENT_TRADES' if recent else 'NO_RECENT_TRADE_OR_WAITING',
             'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
-            'theme_rotation':rotation,'watch_candidates':candidates,
+            'theme_rotation':rotation,'watch_candidates':candidates,'candidate_tracking':tracking,
             'automation':automation,'coverage':{**coverage,'theme_mapped_stocks':theme_mapped,'observed_stocks':len(rows)},
             'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '
