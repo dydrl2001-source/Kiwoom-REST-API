@@ -114,6 +114,35 @@ ALTER TABLE market_os_learning_segments ADD COLUMN IF NOT EXISTS distinct_stocks
 ALTER TABLE market_os_learning_segments ADD COLUMN IF NOT EXISTS distinct_days INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE market_os_learning_segments ADD COLUMN IF NOT EXISTS sample_basis TEXT NOT NULL DEFAULT 'RAW';
 
+CREATE TABLE IF NOT EXISTS market_os_interaction_edges (
+    segment_type             TEXT NOT NULL,
+    segment_value            TEXT NOT NULL,
+    horizon                  TEXT NOT NULL,
+    parent_type              TEXT NOT NULL,
+    parent_value             TEXT NOT NULL,
+    sample_basis             TEXT NOT NULL,
+    child_samples            INTEGER NOT NULL,
+    child_stocks             INTEGER NOT NULL,
+    child_days               INTEGER NOT NULL,
+    comparator_samples       INTEGER NOT NULL,
+    comparator_stocks        INTEGER NOT NULL,
+    comparator_days          INTEGER NOT NULL,
+    child_avg_return_pct     DOUBLE PRECISION,
+    comparator_avg_return_pct DOUBLE PRECISION,
+    delta_avg_return_pct     DOUBLE PRECISION,
+    child_positive_rate      DOUBLE PRECISION,
+    comparator_positive_rate DOUBLE PRECISION,
+    delta_positive_rate_pp   DOUBLE PRECISION,
+    child_avg_mfe_pct        DOUBLE PRECISION,
+    comparator_avg_mfe_pct   DOUBLE PRECISION,
+    delta_mfe_pct            DOUBLE PRECISION,
+    child_avg_mae_pct        DOUBLE PRECISION,
+    comparator_avg_mae_pct   DOUBLE PRECISION,
+    delta_mae_pct            DOUBLE PRECISION,
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(segment_type,segment_value,horizon)
+);
+
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
     updated_at          TIMESTAMPTZ NOT NULL,
@@ -539,6 +568,32 @@ def _micro_state(strength,buy_share):
     return "MIXED"
 
 
+def _segment_depth(kind):
+    return {
+        "STANCE_TRIGGER":2,"TIER_SESSION":2,"STANCE_SETUP":2,"SETUP_TRIGGER":2,
+        "STANCE_SETUP_TRIGGER":3,
+        "STANCE_TRIGGER_MICRO":3,"SETUP_TRIGGER_MICRO":3,
+        "STANCE_SETUP_TRIGGER_MICRO":4,
+    }.get(kind,1)
+
+
+def _parent_key(kind,value):
+    p=value.split(" | ")
+    try:
+        if kind=="STANCE_TRIGGER":return ("STANCE",p[0])
+        if kind=="TIER_SESSION":return ("TIER",p[0])
+        if kind=="STANCE_SETUP":return ("STANCE",p[0])
+        if kind=="SETUP_TRIGGER":return ("SETUP",p[0])
+        if kind=="STANCE_SETUP_TRIGGER":return ("STANCE_TRIGGER",p[0]+" | "+p[2])
+        if kind=="STANCE_TRIGGER_MICRO":return ("STANCE_TRIGGER",p[0]+" | "+p[1])
+        if kind=="SETUP_TRIGGER_MICRO":return ("SETUP_TRIGGER",p[0]+" | "+p[1])
+        if kind=="STANCE_SETUP_TRIGGER_MICRO":
+            return ("STANCE_SETUP_TRIGGER",p[0]+" | "+p[1]+" | "+p[2])
+    except IndexError:
+        return None
+    return None
+
+
 def _learning_dims(r):
     """Return pre-registered single and interaction dimensions.
 
@@ -598,19 +653,64 @@ def refresh_segments():
             dims=_learning_dims(r)
             for kind,value in dims.items():
                 groups[(kind,value,horizon)].append(r)
+
         cur.execute("DELETE FROM market_os_learning_segments")
-        payload=[]
+        segment_payload=[]
         for (kind,value,horizon),vals in groups.items():
             a=_aggregate(vals)
             if not a:continue
-            payload.append((kind,value,horizon,a["samples"],a["distinct_stocks"],a["distinct_days"],
+            segment_payload.append((kind,value,horizon,a["samples"],a["distinct_stocks"],a["distinct_days"],
                             _sample_basis(horizon),a["avg_return_pct"],a["median_return_pct"],
                             a["positive_rate"],a["avg_mfe_pct"],a["avg_mae_pct"]))
         cur.executemany("""INSERT INTO market_os_learning_segments(
               segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,sample_basis,
               avg_return_pct,median_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct,updated_at)
-              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",payload)
-        return len(payload)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",segment_payload)
+
+        # Compare each pre-registered interaction to the complement inside its
+        # parent condition. Parent aggregate includes the child, so using the
+        # complement avoids mechanically diluting the observed conditional gap.
+        cur.execute("DELETE FROM market_os_interaction_edges")
+        edge_payload=[]
+        for (kind,value,horizon),child_vals in groups.items():
+            if _segment_depth(kind)<2:continue
+            parent=_parent_key(kind,value)
+            if not parent:continue
+            parent_vals=groups.get((parent[0],parent[1],horizon)) or []
+            if not parent_vals:continue
+            child_ids={(r["stock_code"],r["snapshot_time"]) for r in child_vals}
+            comparator=[r for r in parent_vals if (r["stock_code"],r["snapshot_time"]) not in child_ids]
+            child=_aggregate(child_vals);comp=_aggregate(comparator)
+            if not child or not comp:continue
+            d_avg=(child["avg_return_pct"]-comp["avg_return_pct"]
+                   if child["avg_return_pct"] is not None and comp["avg_return_pct"] is not None else None)
+            d_pos=((child["positive_rate"]-comp["positive_rate"])*100
+                   if child["positive_rate"] is not None and comp["positive_rate"] is not None else None)
+            d_mfe=(child["avg_mfe_pct"]-comp["avg_mfe_pct"]
+                   if child["avg_mfe_pct"] is not None and comp["avg_mfe_pct"] is not None else None)
+            d_mae=(child["avg_mae_pct"]-comp["avg_mae_pct"]
+                   if child["avg_mae_pct"] is not None and comp["avg_mae_pct"] is not None else None)
+            edge_payload.append((
+                kind,value,horizon,parent[0],parent[1],_sample_basis(horizon),
+                child["samples"],child["distinct_stocks"],child["distinct_days"],
+                comp["samples"],comp["distinct_stocks"],comp["distinct_days"],
+                child["avg_return_pct"],comp["avg_return_pct"],d_avg,
+                child["positive_rate"],comp["positive_rate"],d_pos,
+                child["avg_mfe_pct"],comp["avg_mfe_pct"],d_mfe,
+                child["avg_mae_pct"],comp["avg_mae_pct"],d_mae
+            ))
+        cur.executemany("""INSERT INTO market_os_interaction_edges(
+              segment_type,segment_value,horizon,parent_type,parent_value,sample_basis,
+              child_samples,child_stocks,child_days,comparator_samples,comparator_stocks,comparator_days,
+              child_avg_return_pct,comparator_avg_return_pct,delta_avg_return_pct,
+              child_positive_rate,comparator_positive_rate,delta_positive_rate_pp,
+              child_avg_mfe_pct,comparator_avg_mfe_pct,delta_mfe_pct,
+              child_avg_mae_pct,comparator_avg_mae_pct,delta_mae_pct,updated_at)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
+              edge_payload)
+        return len(segment_payload)
+
+
 
 
 def update_status(status,note,last_snapshot=None,last_outcome=False):
