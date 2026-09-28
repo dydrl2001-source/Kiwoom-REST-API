@@ -111,11 +111,12 @@
    if(histctx.length){
      const hc=el('div',null,'mos-note');
      for(const s of histctx){
-       const line=el('div',(s.segment_type+' · '+s.horizon+' · N'+s.samples+' · 평균 '+pct(s.avg_return_pct)+' · 양(+) '+(s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%')),'mos-micro');
+       const edge=s.edge_avg_return_pct==null?'':(' · 부모대비 '+(s.edge_avg_return_pct>=0?'+':'')+fmt(s.edge_avg_return_pct,2)+'%p');
+       const line=el('div',(s.segment_type+' · '+s.horizon+' · N'+s.samples+' / '+(s.distinct_stocks??'—')+'종목 / '+(s.distinct_days??'—')+'일 · '+s.quality+' · 평균 '+pct(s.avg_return_pct)+edge),'mos-micro');
        hc.append(line);
      }
      box.append(hc);
-   }else box.append(el('div','동일 조건의 확정 표본이 아직 20개 미만입니다. 현재 판단에는 역사 성과를 반영하지 않습니다.','mos-note'));
+   }else box.append(el('div','같은 조건이 여러 종목·여러 거래일에서 충분히 반복되기 전에는 역사 성과를 현재 판단에 붙이지 않습니다.','mos-note'));
    box.append(el('h4','Invalidation / Risk'));box.append(el('div',(x.risk_flags||[]).length?(x.risk_flags||[]).join(' · '):'현재 등록된 위험 플래그 없음','mos-risk'));
    if(r.research){box.append(el('h4','Catalyst evidence'),el('div',(x.catalyst_note||'인용 포함 보고서')+' · '+stamp(r.research.completed_at),'mos-note'));const sec=r.research.sections||{};if(sec['핵심 재료'])box.append(el('div',sec['핵심 재료'].text,'mos-research'));}
    else box.append(el('h4','Catalyst evidence'),el('div',x.catalyst_note||'종합 검증 대기','mos-note'));
@@ -166,6 +167,12 @@
    body.append(el('div','Data Quality','mos-section-title'),dq);
    if((fq.cap_unresolved_pct??0)>20)body.append(el('div','시가총액 단위는 별도 참조 검증 중입니다. 거래대금·0B 학습의 READY 판정과 분리합니다.','mos-note'));
    body.append(el('div','자동 피드백 후보','mos-section-title'));const fb=el('div',null,'mos-feedback');for(const n of learn.notes||[]){const a=el('article');a.dataset.kind=n.kind;a.append(el('h4',(n.kind==='STRENGTH'?'강한 조건 후보 · ':'약한 조건 후보 · ')+n.title),el('div',n.text,'mos-micro'));fb.append(a);}if(!(learn.notes||[]).length)fb.append(el('div','표본 20개 이상이 쌓인 뒤 조건별 강·약 피드백을 냅니다. 아직 규칙을 자동 수정하지 않습니다.','mos-empty'));body.append(fb);
+   body.append(el('div','Interaction Lab','mos-section-title'));
+   body.append(el('div','시장 레짐 × Setup × Trigger × 0B를 미리 정한 조합만 비교합니다. Δ는 더 단순한 부모조건 대비 차이이며, 형성/충분 등급 전에는 탐색 가설로만 봅니다.','mos-note'));
+   const inter=(learn.interactions||[]).filter(x=>x.samples>=5).slice(0,100),iscroll=el('div',null,'mos-scroll'),itable=el('table',null,'mos-learn-table'),ith=el('tr');
+   ['상호작용','구간','N','종목','일수','품질','평균','Δ평균','Δ양(+)','ΔMAE','부모조건'].forEach(v=>ith.append(el('th',v)));const ithead=el('thead');ithead.append(ith);const itb=el('tbody');
+   for(const s of inter){const tr=el('tr'),base=s.baseline||{};const cond=el('td');cond.append(el('div',s.segment_type+' · '+s.segment_value),el('div','depth '+(s.interaction_depth||2)+' · '+(s.sample_basis||''),'mos-micro'));tr.append(cond,el('td',s.horizon),el('td',s.samples),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',s.quality),el('td',pct(s.avg_return_pct),s.avg_return_pct>0?'mos-up':s.avg_return_pct<0?'mos-down':''),el('td',s.edge_avg_return_pct==null?'—':((s.edge_avg_return_pct>=0?'+':'')+fmt(s.edge_avg_return_pct,2)+'%p'),s.edge_avg_return_pct>0?'mos-up':s.edge_avg_return_pct<0?'mos-down':''),el('td',s.edge_positive_rate_pp==null?'—':((s.edge_positive_rate_pp>=0?'+':'')+fmt(s.edge_positive_rate_pp,1)+'%p')),el('td',s.edge_mae_pct==null?'—':((s.edge_mae_pct>=0?'+':'')+fmt(s.edge_mae_pct,2)+'%p'),s.edge_mae_pct>0?'mos-up':s.edge_mae_pct<0?'mos-down':''),el('td',base.segment_type?(base.segment_type+' · '+base.segment_value):'—'));itb.append(tr);}
+   if(!inter.length){const tr=el('tr'),td=el('td','상호작용 표본이 아직 없습니다.','mos-empty');td.colSpan=11;tr.append(td);itb.append(tr);}itable.append(ithead,itb);iscroll.append(itable);body.append(iscroll);
    body.append(el('div','조건별 실제 결과','mos-section-title'));body.append(el('div','반복 스냅샷을 독립 표본으로 세지 않습니다. 5m는 종목별 5분 비중첩, 30m는 30분 비중첩, 종가·D+1은 종목/일자당 1회만 학습합니다.','mos-note'));const scroll=el('div',null,'mos-scroll'),table=el('table',null,'mos-learn-table'),th=el('tr');['조건','구간','N','종목','일수','품질','평균','중앙값','양(+)','MFE','MAE'].forEach(v=>th.append(el('th',v)));const thead=el('thead');thead.append(th);const tb=el('tbody');for(const s of segs.filter(x=>x.samples>=5).slice(0,120)){const tr=el('tr');const cond=el('td');cond.append(el('div',s.segment_type+' · '+s.segment_value),el('div',s.sample_basis||'','mos-micro'));tr.append(cond,el('td',s.horizon),el('td',s.samples),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',s.quality),el('td',pct(s.avg_return_pct),s.avg_return_pct>0?'mos-up':s.avg_return_pct<0?'mos-down':''),el('td',pct(s.median_return_pct)),el('td',s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%'),el('td',pct(s.avg_mfe_pct)),el('td',pct(s.avg_mae_pct)));tb.append(tr);}table.append(thead,tb);scroll.append(table);body.append(scroll);wrap.append(body);content.replaceChildren(wrap);
  }
 
