@@ -35,7 +35,9 @@ SECTOR_CONTEXT={
 }
 
 def compact_name(name):
-    return re.sub(r"[\s㈜()주식회사]+","",str(name or "")).lower()
+    s=str(name or "").lower()
+    s=s.replace("주식회사","").replace("㈜","")
+    return re.sub(r"[\s()]+","",s)
 
 def normalize(text):
     return re.sub(r"\s+"," ",str(text or "")).strip().lower()
