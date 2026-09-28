@@ -9,6 +9,7 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 from market_os_rule_engine import VERSION
+from market_os_store import _quality,_segment_depth,_enrich_edges
 
 db=os.environ['DATABASE_URL']
 with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor() as cur:
@@ -75,6 +76,17 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                                 samples DESC,segment_type,segment_value
                        LIMIT 80""")
         rows=cur.fetchall()
+        segments=[]
+        for r in rows:
+            s=dict(r)
+            s["avg_return_pct"]=float(r["avg_return"]) if r["avg_return"] is not None else None
+            s["median_return_pct"]=float(r["median_return"]) if r["median_return"] is not None else None
+            s["positive_rate"]=float(r["positive_pct"])/100 if r["positive_pct"] is not None else None
+            s["avg_mfe_pct"]=float(r["avg_mfe"]) if r["avg_mfe"] is not None else None
+            s["avg_mae_pct"]=float(r["avg_mae"]) if r["avg_mae"] is not None else None
+            s["quality"]=_quality(s["samples"],s["distinct_stocks"],s["distinct_days"],_segment_depth(s["segment_type"]))
+            segments.append(s)
+        interactions=_enrich_edges(segments)
         print('\n[SEGMENTS N>=5]')
         if not rows:
             print('표본 5개 이상 구간 없음')
@@ -83,6 +95,37 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                   f"N={r['samples']} stocks={r['distinct_stocks']} days={r['distinct_days']} basis={r['sample_basis']} "
                   f"avg={r['avg_return']}% med={r['median_return']}% pos={r['positive_pct']}% "
                   f"MFE={r['avg_mfe']}% MAE={r['avg_mae']}%")
+
+        print('\n[INTERACTION LAB]')
+        shown=0
+        for s in interactions:
+            if s["samples"]<5:continue
+            b=s.get("baseline") or {}
+            edge=s.get("edge_avg_return_pct")
+            pos=s.get("edge_positive_rate_pp")
+            mae=s.get("edge_mae_pct")
+            print(f"{s['horizon']} | d{s.get('interaction_depth',2)} {s['segment_type']}={s['segment_value']} | "
+                  f"N={s['samples']} stocks={s['distinct_stocks']} days={s['distinct_days']} q={s['quality']} | "
+                  f"avg={s['avg_return_pct']:.3f}% "
+                  f"dAvg={(f'{edge:+.3f}pp' if edge is not None else '—')} "
+                  f"dPos={(f'{pos:+.1f}pp' if pos is not None else '—')} "
+                  f"dMAE={(f'{mae:+.3f}pp' if mae is not None else '—')} | "
+                  f"parent={b.get('segment_type','—')}:{b.get('segment_value','—')}")
+            shown+=1
+            if shown>=40:break
+        if not shown:
+            print('상호작용 표본 5개 이상 없음')
+
+        print('\n[INTERACTION REVIEW READY]')
+        ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
+        if not ready:
+            print('아직 형성 등급 이상의 30m/close 상호작용 없음')
+        else:
+            for s in ready[:20]:
+                print(f"{s['horizon']} {s['segment_type']}={s['segment_value']} "
+                      f"N={s['samples']} stocks={s['distinct_stocks']} days={s['distinct_days']} "
+                      f"quality={s['quality']} dAvg={s.get('edge_avg_return_pct'):+.3f}pp "
+                      f"dPos={s.get('edge_positive_rate_pp'):+.1f}pp")
 
         cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
                               avg_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct
@@ -109,5 +152,6 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                           f"avg={r['avg_return_pct']:.3f}% positive={(r['positive_rate'] or 0)*100:.1f}%")
 
 print('\nSampling: 5m=non-overlap 5m, 30m=non-overlap 30m, close/D+1=one per stock-day.')
+print('Interaction policy: only pre-registered regime/setup/trigger/micro combinations are tested; no arbitrary combination search.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
