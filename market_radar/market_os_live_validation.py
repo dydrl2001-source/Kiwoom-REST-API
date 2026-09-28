@@ -198,11 +198,19 @@ def _coverage(cur):
             out["trade_latest_stocks"]=int(cur.fetchone()["n"] or 0)
     if exists(cur,"market_os_assessment_snapshots"):
         cur.execute("""SELECT COUNT(*) AS n,COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
-                              COUNT(*) FILTER(WHERE watch_tier='PREP') AS prep
+                              COUNT(*) FILTER(WHERE watch_tier='PREP') AS prep,
+                              COUNT(*) FILTER(WHERE micro_tick_count_15s>0) AS micro15
                        FROM market_os_assessment_snapshots
                        WHERE snapshot_time>now()-interval '15 minutes'""")
         r=cur.fetchone();out.update({"recent_assessments":int(r["n"] or 0),
-                                    "recent_focus":int(r["focus"] or 0),"recent_prep":int(r["prep"] or 0)})
+                                    "recent_focus":int(r["focus"] or 0),"recent_prep":int(r["prep"] or 0),
+                                    "recent_micro15_assessments":int(r["micro15"] or 0)})
+    if exists(cur,"market_os_assessment_outcomes"):
+        cur.execute("""SELECT horizon,COUNT(*) AS n
+                       FROM market_os_assessment_outcomes
+                       WHERE calculated_at>now()-interval '1 day'
+                       GROUP BY horizon""")
+        out["outcomes_today"]={r["horizon"]:int(r["n"] or 0) for r in cur.fetchall()}
     return out
 
 
