@@ -227,3 +227,92 @@ Fees and sell tax default to zero until the actual account/broker cost assumptio
 > A good strategy with poor execution is not a good trade.
 
 Execution v2 therefore reports the strategy result and the execution cost separately.
+
+
+## Capacity Model — Execution-adjusted Strategy Capacity
+
+Capacity Model asks a different question from strategy win rate:
+
+> **How much capital can this strategy absorb before execution erodes the observed edge?**
+
+It deliberately separates two concepts.
+
+### 1. Point-in-time Book Capacity
+
+At each Shadow entry, the 10-level order book is walked using the configured displayed-liquidity haircut.
+
+The engine stores the maximum immediately executable size whose estimated implementation shortfall remains below the configured threshold.
+
+Default research threshold:
+
+- max book-capacity IS: 30 bp
+
+Stored fields include:
+
+- entry book capacity shares
+- entry book capacity KRW
+- entry book capacity IS
+- entry spread
+
+This is an **instantaneous liquidity estimate**, not a long-run strategy capacity forecast.
+
+### 2. Empirical Strategy Capacity
+
+Completed BOOK_V2 Shadow trades are grouped by:
+
+`Strategy × Regime × Liquidity × Spread × Order Size`
+
+Current order-size research buckets:
+
+- O1: ≤ KRW 2.5m
+- O2: KRW 2.5m–5m
+- O3: KRW 5m–10m
+- O4: KRW 10m–20m
+- O5: ≥ KRW 20m
+
+A size bucket is supported only after minimum samples and execution-adjusted performance gates are met.
+
+Current default research gates:
+
+- minimum BOOK_V2 closed samples per strategy: 20
+- minimum samples per order-size bucket: 5
+- minimum positive ratio: 50%
+- minimum median Shadow net return: +0.10%
+- minimum Profit Factor: 1.10
+- maximum median Paper→Shadow drag: 0.50%p
+- maximum median round-trip IS: 40 bp
+- minimum distinct regimes: 2
+
+The reported Evidence Capacity is conservatively limited by both:
+
+1. the highest empirically supported order-size bucket, and
+2. the 25th percentile of observed point-in-time book capacity.
+
+No capacity value is automatically applied to live sizing.
+
+### Final Lifecycle Gate
+
+Paper performance is no longer sufficient for a final promotion candidate.
+
+A PAPER strategy can reach `PROMOTE_CANDIDATE_EXECUTION_ADJUSTED` only when:
+
+1. Paper lifecycle review says promotion candidate,
+2. Shadow sample is sufficient,
+3. BOOK_V2 coverage is sufficient,
+4. execution-adjusted median net return remains positive,
+5. execution-adjusted Profit Factor remains above the gate,
+6. implementation shortfall remains controlled,
+7. Paper→Shadow drag remains controlled, and
+8. strategy capacity has evidence support.
+
+Otherwise it stays pending or is blocked.
+
+Every lifecycle result continues to return `auto_apply=false`.
+
+### Capacity caveat
+
+The current Capacity Model measures capacity within the **observed 10-level book and sampled market regimes**.
+
+It does not claim institutional AUM capacity, hidden-liquidity availability, queue priority, market impact beyond displayed depth, or multi-day liquidation capacity.
+
+Those require additional data and models.
