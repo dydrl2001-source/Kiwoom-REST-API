@@ -59,6 +59,23 @@ services:
       mimosa-engine:
         condition: service_started
 
+  paper-trade-engine:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/paper_trade_engine.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      candidate-tracker:
+        condition: service_started
+      mimosa-engine:
+        condition: service_started
+
   market-regime:
     build:
       context: ../..
