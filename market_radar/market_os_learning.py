@@ -113,6 +113,11 @@ def db():
                            options="-c statement_timeout=20000 -c lock_timeout=3000")
 
 
+def table_exists(cur,name):
+    cur.execute("SELECT to_regclass(%s) AS name",("public."+name,))
+    return cur.fetchone()["name"] is not None
+
+
 def ensure_schema():
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(72419071)")
@@ -199,6 +204,23 @@ def capture_assessments():
         return cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(items),snap
 
 
+def _realtime_target(cur,code,target,window_seconds=90):
+    if not table_exists(cur,"market_realtime_minute_bars"):
+        return None
+    minute=target.replace(second=0,microsecond=0)
+    cur.execute("""SELECT minute_time,close_price,gap_count
+                   FROM market_realtime_minute_bars
+                   WHERE stock_code=%s AND minute_time>=%s AND minute_time<=%s
+                   ORDER BY minute_time LIMIT 1""",
+                (code,minute,minute+timedelta(seconds=window_seconds)))
+    r=cur.fetchone()
+    if not r:return None
+    px=safe_num(r["close_price"])
+    if px is None or px<=0:return None
+    flags=["REALTIME_GAPS"] if int(r["gap_count"] or 0)>0 else []
+    return px,r["minute_time"],"KIWOOM_0B_1M",flags
+
+
 def _sor_target(cur,code,target,window_seconds=150):
     cur.execute("""SELECT batch_time,payload FROM radar_flow_quotes
                    WHERE stock_code=%s AND batch_time>=%s AND batch_time<=%s
@@ -227,6 +249,19 @@ def _minute_target(cur,code,target,window_minutes=6):
 def _mfe_mae(cur,code,start,end,reference):
     if not reference or end<=start:
         return None,None,[]
+    if table_exists(cur,"market_realtime_minute_bars"):
+        cur.execute("""SELECT MAX(high_price) AS hi,MIN(low_price) AS lo,COUNT(*) AS n,
+                              COALESCE(SUM(gap_count),0) AS gaps
+                       FROM market_realtime_minute_bars
+                       WHERE stock_code=%s AND minute_time>=%s AND minute_time<=%s""",(code,start,end))
+        rr=cur.fetchone()
+        if rr and rr["n"] and int(rr["gaps"] or 0)==0:
+            hi=safe_num(rr["hi"]);lo=safe_num(rr["lo"])
+            return ((hi/reference-1)*100 if hi else None,
+                    (lo/reference-1)*100 if lo else None,
+                    ["MFE_MAE_KIWOOM_0B"])
+    if not table_exists(cur,"market_minute_bars"):
+        return None,None,["MFE_MAE_NO_BARS"]
     cur.execute("""SELECT MAX(high_price) AS hi,MIN(low_price) AS lo,COUNT(*) AS n
                    FROM market_minute_bars
                    WHERE stock_code=%s AND interval_min=3
@@ -276,10 +311,15 @@ def _resolve_one(cur,a,horizon,now):
         minutes=5 if horizon=="5m" else 30
         target=at+timedelta(minutes=minutes)
         if now<target+timedelta(seconds=30):return None
-        resolved=_sor_target(cur,code,target)
-        if not resolved:
-            resolved=_minute_target(cur,code,target)
-            if resolved:flags.append("OUTCOME_KRX_FALLBACK")
+        rt=_realtime_target(cur,code,target)
+        if rt:
+            px,ot,source,q=rt;flags+=q
+            resolved=(px,ot,source)
+        else:
+            resolved=_sor_target(cur,code,target)
+            if not resolved:
+                resolved=_minute_target(cur,code,target)
+                if resolved:flags.append("OUTCOME_KRX_FALLBACK")
         if not resolved:return None
         px,ot,source=resolved
         mfe,mae,q=_mfe_mae(cur,code,at,ot,ref);flags+=q
