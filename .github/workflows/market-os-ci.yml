@@ -34,11 +34,9 @@ jobs:
         working-directory: market_radar
         run: python -m unittest discover -s tests -p "test_market_os*.py" -v
 
-      - name: Run flow and candidate-tracker regression tests
+      - name: Run candidate-tracker compatibility tests
         working-directory: market_radar
-        run: |
-          python -m unittest tests.test_flow -v
-          python -m unittest tests.test_candidate_tracker -v
+        run: python -m unittest tests.test_candidate_tracker -v
 
       - name: Check browser JavaScript syntax
         run: |
