@@ -240,33 +240,41 @@ def sector_reason_summary(group):
     for x in stocks:
         d=x.get("material_digest") or {}
         strength=int(d.get("material_strength") or 0)
+        identity=d.get("identity_quality") or "UNVERIFIED"
         if strength>=2:
             evidence.append({
                 "code":x.get("code"),"name":x.get("name"),
                 "summary":d.get("summary"),"assessment":d.get("assessment"),
-                "source_kind":d.get("source_kind"),"strength":strength
+                "source_kind":d.get("source_kind"),"strength":strength,
+                "material_type":d.get("material_type"),"identity_quality":identity
             })
-    evidence.sort(key=lambda x:(-x["strength"],x.get("name") or ""))
-    direct=[x for x in evidence if x["strength"]>=3]
+    evidence.sort(key=lambda x:(-x["strength"],0 if x["identity_quality"] in ("VERIFIED","CONTEXT_VERIFIED") else 1,x.get("name") or ""))
+    verified_direct=[x for x in evidence if x["strength"]>=3 and x["identity_quality"] in ("VERIFIED","CONTEXT_VERIFIED")]
+    name_direct=[x for x in evidence if x["strength"]>=3 and x["identity_quality"]=="NAME_MATCH"]
     sector=[x for x in evidence if x["strength"]==2]
     positive=int(group.get("positive") or 0)
     count=int(group.get("change_n") or group.get("count") or 0)
     breadth=f"{positive}/{count}종목 상승" if count else "상승폭 표본 부족"
     recent=group.get("recent_turnover_krw") or 0
 
-    if len(direct)>=2:
-        names=", ".join(x["name"] for x in direct[:3] if x.get("name"))
-        reason=f"복수 종목에서 직접 재료가 확인됨({names}). {breadth}이며 거래대금 동행 여부를 함께 확인하는 구간."
-        level="SUPPORTED"
-        label="복수 직접재료"
-    elif direct:
-        x=direct[0]
-        reason=f"{x.get('name')}: {x.get('summary') or '직접 재료 확인'}. 섹터 전체 공통 원인으로 단정하긴 어렵지만 {breadth}."
+    if len(verified_direct)>=2:
+        names=", ".join(x["name"] for x in verified_direct[:3] if x.get("name"))
+        reason=f"복수 종목에 신원 확인된 개별 재료가 있음({names}). {breadth}. 다만 서로 다른 사건일 수 있어 섹터 공통 원인으로 확정하지 않음."
         level="PARTIAL"
-        label="개별 직접재료"
+        label="복수 개별재료"
+    elif verified_direct:
+        x=verified_direct[0]
+        reason=f"{x.get('name')}: {x.get('summary') or '직접 재료 확인'}. {breadth}. 섹터 전체 공통 원인 여부는 미확인."
+        level="PARTIAL"
+        label="신원확인 직접재료"
+    elif name_direct:
+        x=name_direct[0]
+        reason=f"{x.get('name')} 관련 직접재료 후보가 있으나 종목명 일치 수준이라 동명이인·맥락 확인이 더 필요함. {breadth}."
+        level="UNCONFIRMED"
+        label="신원 추가확인"
     elif sector:
         x=sector[0]
-        reason=f"업종·테마형 재료가 관측됨: {x.get('summary') or x.get('assessment') or '테마 재료'}. {breadth}."
+        reason=f"업종·테마형 재료가 관측됨: {x.get('summary') or x.get('assessment') or '테마 재료'}. {breadth}. 공통 촉발 원인은 미확정."
         level="PARTIAL"
         label="테마형 재료"
     elif recent and recent>0:
@@ -280,9 +288,8 @@ def sector_reason_summary(group):
     return {
         "summary":reason,"level":level,"label":label,
         "evidence":evidence[:4],
-        "note":"섹터 구성종목의 뉴스·공시·Telegram·거래 관측을 묶은 설명이며 인과관계 확정이 아님"
+        "note":"섹터 구성종목의 뉴스·공시·Telegram·거래 관측 요약. 신원 검증과 공통 인과는 별개"
     }
-
 
 def theme_strength_for_groups(groups):
     """Operational 0-100 *current-theme observation strength*, not return probability.
@@ -620,7 +627,8 @@ def clean_material_text(text):
 
 NOISE_PATTERNS = [
     "상한가 및 상승종목","상승종목","급등주","오늘의 종목","관심종목","공략법","매매전략",
-    "장마감","마감시황","종목추천","추천주","vs ","수익률","급등일보","유튜브","youtube"
+    "장마감","마감시황","종목추천","추천주","vs ","수익률","급등일보","유튜브","youtube",
+    "상한가 및 급등","특징 상한가","특징주 정리","급등종목","테마주 정리","관련주 정리"
 ]
 DIRECT_PATTERNS = [
     "공시","공급계약","수주","계약 체결","mou","승인","허가","fda","임상","특허","양산",
@@ -873,6 +881,8 @@ def material_digest(cat, flow_state, stock_name=None):
         "material_strength": strength,
         "material_class": mclass,
         "quality_note": cat.get("quality_note"),
+        "identity_quality": cat.get("best_identity_quality") or "UNVERIFIED",
+        "identity_warning_count": len(cat.get("identity_warnings") or []) + int(cat.get("identity_rejected") or 0),
         "material_type": classify_material_type(cat),
     }
 
@@ -1211,6 +1221,15 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         current=h[0] if h else None
                         previous=h[1] if len(h)>1 else None
                         value,state,seconds=radar_flow_delta(current,previous) if current else (None,"NO_SAMPLE",None)
+                        exchange_at=None
+                        try:
+                            exchange_at=datetime.fromisoformat(current.get("exchange_at")) if current and current.get("exchange_at") else None
+                            if exchange_at and exchange_at.tzinfo is None:exchange_at=exchange_at.replace(tzinfo=timezone.utc)
+                        except Exception:
+                            exchange_at=None
+                        if state=="OK" and (not exchange_at or (datetime.now(timezone.utc)-exchange_at.astimezone(timezone.utc)).total_seconds()>120):
+                            value=None
+                            state="STALE_EXCHANGE"
                         flow_map[code]={
                             "recent_turnover_krw":value if state=="OK" else None,
                             "recent_turnover_seconds":seconds,
