@@ -91,6 +91,23 @@ class CoreTests(unittest.TestCase):
   bad=fc.candidate_watchlist([{**base,'chart':{'state':'BREAKOUT_FAIL'}}],{'series':[]})
   self.assertTrue(good)
   self.assertTrue((not bad) or good[0]['attention_score']>bad[0]['attention_score'])
+ def test_candidate_four_watch_types(self):
+  base={**sample(60,300),'recent_trade':True,'delta_state':'OK','interval_turnover_krw':200,
+        'five_min_turnover_krw':500,'query_rank':5,'trade_rank':7,'burst_multiple':3.5,
+        'market_theme':'AI 반도체','research_stale':False,'research_state':'CITED_SAVED'}
+  report={'text':'x','citations':[{'url':'https://example.org','start':0,'end':1}]}
+  rows=[{**base,'research':report,'event_type':'기술·제품·양산',
+         'chart':{'state':'BREAKOUT_HOLD','state_ko':'돌파 후 지지'},'strategy_signals':{}}]
+  out=fc.candidate_watchlist(rows,{'series':[{'name':'AI 반도체','change_pp':2.0}]})
+  self.assertTrue(out);self.assertIn('추세·돌파',out[0]['watch_types']);self.assertIn('재료+거래대금',out[0]['watch_types'])
+ def test_candidate_oversold_strategy_type(self):
+  row={**sample(60,300),'recent_trade':True,'delta_state':'OK','interval_turnover_krw':200,
+       'query_rank':8,'trade_rank':9,'burst_multiple':2.0,'market_theme':'반도체',
+       'chart':{'state':'PULLBACK_INTACT'},'research':None,'research_stale':False,
+       'event_type':None,'research_state':'ANALYSIS_PENDING',
+       'strategy_signals':{'OVERSOLD':{'state':'OVERSOLD_REBOUND_WATCH','state_ko':'과대낙폭 반등 감시'}}}
+  out=fc.candidate_watchlist([row],{'series':[]})
+  self.assertTrue(out);self.assertEqual(out[0]['primary_type'],'과대낙폭·낙주 반등')
  def test_report_not_headline_classifier(self):
   r={'text':'대한항공 기사에 HBM이 나옵니다.','citations':[{}]}
   self.assertIsNone(fc.event_from_report(r))
