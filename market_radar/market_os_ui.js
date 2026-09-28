@@ -78,12 +78,12 @@
    const main=el('div',null,'mos-main'),left=el('section',null,'mos-panel'),right=el('aside',null,'mos-panel mos-detail');
    const ph=el('div',null,'mos-panel-head');ph.append(el('h3','관심종목 Screener'),el('div','축별 점수는 독립 지표','mos-micro'));left.append(ph,filterBar());
    const scroll=el('div',null,'mos-scroll'),table=el('table',null,'mos-table'),thead=el('thead'),trh=el('tr');
-   ['종목','단계','등락','Radar','Theme','Setup','Catalyst','Trigger','학습','최근 구간','리스크'].forEach(x=>trh.append(el('th',x)));thead.append(trh);const tbody=el('tbody');table.append(thead,tbody);scroll.append(table);left.append(scroll);
+   ['종목','단계','등락','Radar','Theme','Setup','Catalyst','Trigger','학습','0B Micro','최근 구간','리스크'].forEach(x=>trh.append(el('th',x)));thead.append(trh);const tbody=el('tbody');table.append(thead,tbody);scroll.append(table);left.append(scroll);
    const xs=candidates();for(const x of xs){const r=rowData(x.code)||{},tr=el('tr');tr.dataset.selected=String(x.code===selected);tr.onclick=()=>{selected=x.code;renderContent();};
      const n=el('td');n.append(el('div',x.name,'mos-name'),el('div',x.code+' · '+(x.market_theme||'테마 미확인'),'mos-code'));tr.append(n);
      const tdTier=el('td');tdTier.append(el('span',tierKo(x.watch_tier),'mos-tier '+tierClass(x.watch_tier)));tr.append(tdTier);
-     const lc=(x.learning_context||[])[0];tr.append(el('td',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''),el('td',x.radar_score,'mos-axisnum'),el('td',x.theme_score,'mos-axisnum'),el('td',x.setup_score,'mos-axisnum'),el('td',x.catalyst_grade||'—'),el('td',x.trigger_state||'—'),el('td',lc?('N'+lc.samples+' · '+pct(lc.avg_return_pct)):'—',lc&&lc.avg_return_pct>0?'mos-up':lc&&lc.avg_return_pct<0?'mos-down':''),el('td',money(x.interval_turnover_krw)),el('td',(x.risk_flags||[]).length?String((x.risk_flags||[]).length):'—'));tbody.append(tr);}
-   if(!xs.length){const tr=el('tr'),td=el('td','현재 필터를 충족한 후보가 없습니다.','mos-empty');td.colSpan=11;tr.append(td);tbody.append(tr);}
+     const lc=(x.learning_context||[])[0],mic=x.microstructure||null;const microText=mic?((mic.strength==null?'강도—':'강도 '+fmt(mic.strength,0))+' · '+money(mic.trade_value_krw)):'—';tr.append(el('td',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''),el('td',x.radar_score,'mos-axisnum'),el('td',x.theme_score,'mos-axisnum'),el('td',x.setup_score,'mos-axisnum'),el('td',x.catalyst_grade||'—'),el('td',x.trigger_state||'—'),el('td',lc?('N'+lc.samples+' · '+pct(lc.avg_return_pct)):'—',lc&&lc.avg_return_pct>0?'mos-up':lc&&lc.avg_return_pct<0?'mos-down':''),el('td',microText,mic&&mic.gap_count===0?'mos-up':''),el('td',money(x.interval_turnover_krw)),el('td',(x.risk_flags||[]).length?String((x.risk_flags||[]).length):'—'));tbody.append(tr);}
+   if(!xs.length){const tr=el('tr'),td=el('td','현재 필터를 충족한 후보가 없습니다.','mos-empty');td.colSpan=12;tr.append(td);tbody.append(tr);}
    main.append(left,right);content.replaceChildren(main);renderDetail(right);
  }
 
@@ -94,6 +94,16 @@
    box.append(el('h4','Independent axes'),axis('Radar',x.radar_score),axis('Theme',x.theme_score),axis('Setup',x.setup_score));
    box.append(el('h4','Why now'));const why=el('div',null,'mos-reasons');for(const v of [...(x.axis_reasons?.radar||[]),...(x.axis_reasons?.theme||[]),...(x.axis_reasons?.setup||[])].slice(0,10))why.append(pill(v));box.append(why);
    box.append(el('h4','Market context'),el('div',(x.market_stance_label||x.market_stance)+' · '+(DATA?.market_regime?.stable_label||DATA?.market_regime?.candidate_label||'레짐 대기'),'mos-note'));
+   box.append(el('h4','0B Microstructure'));
+   const mic=x.microstructure||null;
+   if(mic){
+     const mbox=el('div',null,'mos-note');
+     const bs=mic.buy_share==null?'—':fmt(mic.buy_share*100,0)+'%';
+     mbox.append(el('div','실시간 1분 거래대금 '+money(mic.trade_value_krw)+' · Tick '+mic.tick_count+' · Gap '+mic.gap_count,'mos-micro'),
+                 el('div','체결강도 '+(mic.strength==null?'—':fmt(mic.strength,1))+' · 매수비율 '+(mic.buy_ratio==null?'—':fmt(mic.buy_ratio,1))+' · 관측 매수체결 비중 '+bs,'mos-micro'),
+                 el('div','0B는 아직 Radar/Setup 점수에 자동 반영하지 않고 검증용으로 병행합니다.','mos-micro'));
+     box.append(mbox);
+   }else box.append(el('div','Kiwoom 0B 실시간 관측 대기 · 기능을 켜기 전에는 기존 30초/3분 데이터만 사용합니다.','mos-note'));
    const histctx=x.learning_context||[];
    box.append(el('h4','Shadow learning'));
    if(histctx.length){
