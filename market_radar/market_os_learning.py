@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, time as dtime
 import json
+import hashlib
 import math
 import os
 import statistics
@@ -22,6 +23,13 @@ from psycopg.rows import dict_row
 from flow_store import desk_payload
 from flow_core import dt as parse_dt
 from market_os_rule_engine import VERSION as RULE_VERSION
+from market_os_store import (
+    _quality as store_quality,
+    _segment_depth as store_segment_depth,
+    _enrich_edges as store_enrich_edges,
+    _validation_candidates as store_validation_candidates,
+    _promotion_stage,
+)
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
@@ -170,6 +178,60 @@ CREATE TABLE IF NOT EXISTS market_os_walk_forward_windows (
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY(segment_type,segment_value,horizon,window_name)
 );
+
+CREATE TABLE IF NOT EXISTS market_os_promotion_registry (
+    candidate_key           TEXT PRIMARY KEY,
+    rule_version            TEXT NOT NULL,
+    segment_type            TEXT NOT NULL,
+    segment_value           TEXT NOT NULL,
+    horizon                 TEXT NOT NULL,
+    interaction_depth       INTEGER NOT NULL DEFAULT 1,
+    current_stage           TEXT NOT NULL,
+    direction               TEXT NOT NULL DEFAULT 'MIXED',
+    review_action           TEXT NOT NULL DEFAULT 'NONE',
+    manual_review_state     TEXT NOT NULL DEFAULT 'PENDING',
+    active                  BOOLEAN NOT NULL DEFAULT TRUE,
+    first_seen_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    stage_since             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_transition_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    samples                 INTEGER NOT NULL DEFAULT 0,
+    distinct_stocks         INTEGER NOT NULL DEFAULT 0,
+    distinct_days           INTEGER NOT NULL DEFAULT 0,
+    quality                 TEXT,
+    walk_forward_status     TEXT,
+    avg_return_pct          DOUBLE PRECISION,
+    median_return_pct       DOUBLE PRECISION,
+    positive_rate           DOUBLE PRECISION,
+    edge_avg_return_pct     DOUBLE PRECISION,
+    edge_positive_rate_pp   DOUBLE PRECISION,
+    edge_mae_pct            DOUBLE PRECISION,
+    early_avg_return_pct    DOUBLE PRECISION,
+    recent_avg_return_pct   DOUBLE PRECISION,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    shadow_rule_id          TEXT,
+    manual_note             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_promotion_stage
+    ON market_os_promotion_registry(rule_version,current_stage,active);
+CREATE INDEX IF NOT EXISTS idx_market_os_promotion_seen
+    ON market_os_promotion_registry(last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_promotion_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    candidate_key           TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type              TEXT NOT NULL,
+    from_stage              TEXT,
+    to_stage                TEXT NOT NULL,
+    direction               TEXT,
+    review_action           TEXT,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_promotion_events_candidate
+    ON market_os_promotion_events(candidate_key,event_time DESC);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -837,6 +899,186 @@ def refresh_segments():
 
 
 
+def _registry_key(segment_type,segment_value,horizon):
+    raw="|".join((RULE_VERSION,segment_type or "",segment_value or "",horizon or ""))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def refresh_promotion_registry():
+    """Persist current scientific lifecycle without ever enabling a shadow rule."""
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_learning_segments"):
+            return {"active":0,"transitions":0,"promotion_candidates":0}
+
+        cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
+                              sample_basis,avg_return_pct,median_return_pct,positive_rate,
+                              avg_mfe_pct,avg_mae_pct
+                       FROM market_os_learning_segments
+                       WHERE horizon IN ('30m','close','D+1')""")
+        segments=[]
+        for r in cur.fetchall():
+            s=dict(r)
+            s["quality"]=store_quality(
+                s["samples"],s["distinct_stocks"],s["distinct_days"],
+                store_segment_depth(s["segment_type"])
+            )
+            segments.append(s)
+
+        edge_rows=[]
+        if table_exists(cur,"market_os_interaction_edges"):
+            cur.execute("""SELECT segment_type,segment_value,horizon,parent_type,parent_value,sample_basis,
+                                  child_samples,child_stocks,child_days,
+                                  comparator_samples,comparator_stocks,comparator_days,
+                                  child_avg_return_pct,comparator_avg_return_pct,delta_avg_return_pct,
+                                  child_positive_rate,comparator_positive_rate,delta_positive_rate_pp,
+                                  child_avg_mfe_pct,comparator_avg_mfe_pct,delta_mfe_pct,
+                                  child_avg_mae_pct,comparator_avg_mae_pct,delta_mae_pct
+                           FROM market_os_interaction_edges
+                           WHERE horizon IN ('30m','close','D+1')""")
+            edge_rows=[dict(x) for x in cur.fetchall()]
+        store_enrich_edges(segments,edge_rows)
+
+        wf_rows=[]
+        if table_exists(cur,"market_os_walk_forward_windows"):
+            cur.execute("""SELECT segment_type,segment_value,horizon,window_name,start_day,end_day,
+                                  samples,distinct_stocks,distinct_days,avg_return_pct,median_return_pct,
+                                  positive_rate,avg_mfe_pct,avg_mae_pct,comparator_samples,
+                                  comparator_stocks,comparator_days,comparator_avg_return_pct,
+                                  comparator_positive_rate,comparator_avg_mae_pct,delta_avg_return_pct,
+                                  delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_walk_forward_windows
+                           WHERE horizon IN ('30m','close','D+1')""")
+            wf_rows=[dict(x) for x in cur.fetchall()]
+        validations=store_validation_candidates(segments,wf_rows)
+        validation_idx={(x["segment_type"],x["segment_value"],x["horizon"]):x for x in validations}
+
+        cur.execute("""UPDATE market_os_promotion_registry
+                       SET active=FALSE
+                       WHERE rule_version=%s""",(RULE_VERSION,))
+
+        transitions=0
+        promotion_candidates=0
+        for s in segments:
+            key_tuple=(s["segment_type"],s["segment_value"],s["horizon"])
+            validation=validation_idx.get(key_tuple)
+            lifecycle=_promotion_stage(s,validation)
+            if not lifecycle:
+                continue
+            candidate_key=_registry_key(*key_tuple)
+            cur.execute("""SELECT current_stage,direction,review_action,manual_review_state
+                           FROM market_os_promotion_registry
+                           WHERE candidate_key=%s""",(candidate_key,))
+            old=cur.fetchone()
+            old_stage=old["current_stage"] if old else None
+            effective_stage="SHADOW_RULE" if old_stage=="SHADOW_RULE" else lifecycle["stage"]
+            if effective_stage=="PROMOTION_CANDIDATE":
+                promotion_candidates+=1
+
+            wf=(validation or {}).get("walk_forward") or {}
+            early=wf.get("early") or {};recent=wf.get("recent") or {}
+            reason_codes=list(lifecycle.get("reason_codes") or [])
+            if old_stage=="SHADOW_RULE":
+                reason_codes.append("MANUAL_SHADOW_RULE_PRESERVED")
+
+            evidence={
+                "validation_status":(validation or {}).get("status"),
+                "validation_readiness":(validation or {}).get("readiness"),
+                "walk_forward_status":wf.get("status"),
+                "walk_forward_retention_ratio":wf.get("retention_ratio"),
+                "cumulative":{
+                    "samples":s.get("samples"),"distinct_stocks":s.get("distinct_stocks"),
+                    "distinct_days":s.get("distinct_days"),"quality":s.get("quality"),
+                    "avg_return_pct":s.get("avg_return_pct"),
+                    "median_return_pct":s.get("median_return_pct"),
+                    "positive_rate":s.get("positive_rate"),
+                    "edge_avg_return_pct":s.get("edge_avg_return_pct"),
+                    "edge_positive_rate_pp":s.get("edge_positive_rate_pp"),
+                    "edge_mae_pct":s.get("edge_mae_pct"),
+                },
+                "early":{
+                    "start_day":early.get("start_day"),"end_day":early.get("end_day"),
+                    "samples":early.get("samples"),"avg_return_pct":early.get("avg_return_pct"),
+                },
+                "recent":{
+                    "start_day":recent.get("start_day"),"end_day":recent.get("end_day"),
+                    "samples":recent.get("samples"),"avg_return_pct":recent.get("avg_return_pct"),
+                },
+            }
+            evidence_json=json.dumps(evidence,ensure_ascii=False,default=str)
+            reasons_json=json.dumps(reason_codes,ensure_ascii=False)
+
+            stage_changed=bool(old and old_stage!=effective_stage)
+            direction_changed=bool(old and old["direction"]!=lifecycle["direction"])
+            action_changed=bool(old and old["review_action"]!=lifecycle["review_action"])
+            event_type="DISCOVERED" if old is None else "STAGE_CHANGED" if stage_changed else "EVIDENCE_CHANGED"
+            log_event=old is None or stage_changed or direction_changed or action_changed
+
+            cur.execute("""INSERT INTO market_os_promotion_registry(
+                    candidate_key,rule_version,segment_type,segment_value,horizon,interaction_depth,
+                    current_stage,direction,review_action,active,samples,distinct_stocks,distinct_days,
+                    quality,walk_forward_status,avg_return_pct,median_return_pct,positive_rate,
+                    edge_avg_return_pct,edge_positive_rate_pp,edge_mae_pct,
+                    early_avg_return_pct,recent_avg_return_pct,reason_codes,evidence)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)
+                ON CONFLICT(candidate_key) DO UPDATE SET
+                    segment_type=excluded.segment_type,segment_value=excluded.segment_value,
+                    horizon=excluded.horizon,interaction_depth=excluded.interaction_depth,
+                    current_stage=CASE
+                        WHEN market_os_promotion_registry.current_stage='SHADOW_RULE'
+                        THEN 'SHADOW_RULE' ELSE excluded.current_stage END,
+                    direction=excluded.direction,review_action=excluded.review_action,
+                    active=TRUE,last_seen_at=now(),
+                    stage_since=CASE
+                        WHEN market_os_promotion_registry.current_stage=
+                             CASE WHEN market_os_promotion_registry.current_stage='SHADOW_RULE'
+                                  THEN 'SHADOW_RULE' ELSE excluded.current_stage END
+                        THEN market_os_promotion_registry.stage_since ELSE now() END,
+                    last_transition_at=CASE
+                        WHEN market_os_promotion_registry.current_stage=
+                             CASE WHEN market_os_promotion_registry.current_stage='SHADOW_RULE'
+                                  THEN 'SHADOW_RULE' ELSE excluded.current_stage END
+                        THEN market_os_promotion_registry.last_transition_at ELSE now() END,
+                    samples=excluded.samples,distinct_stocks=excluded.distinct_stocks,
+                    distinct_days=excluded.distinct_days,quality=excluded.quality,
+                    walk_forward_status=excluded.walk_forward_status,
+                    avg_return_pct=excluded.avg_return_pct,
+                    median_return_pct=excluded.median_return_pct,
+                    positive_rate=excluded.positive_rate,
+                    edge_avg_return_pct=excluded.edge_avg_return_pct,
+                    edge_positive_rate_pp=excluded.edge_positive_rate_pp,
+                    edge_mae_pct=excluded.edge_mae_pct,
+                    early_avg_return_pct=excluded.early_avg_return_pct,
+                    recent_avg_return_pct=excluded.recent_avg_return_pct,
+                    reason_codes=excluded.reason_codes,evidence=excluded.evidence""",
+                (candidate_key,RULE_VERSION,s["segment_type"],s["segment_value"],s["horizon"],
+                 s.get("interaction_depth",store_segment_depth(s["segment_type"])),
+                 effective_stage,lifecycle["direction"],lifecycle["review_action"],
+                 s["samples"],s["distinct_stocks"],s["distinct_days"],s["quality"],
+                 wf.get("status"),s.get("avg_return_pct"),s.get("median_return_pct"),
+                 s.get("positive_rate"),s.get("edge_avg_return_pct"),
+                 s.get("edge_positive_rate_pp"),s.get("edge_mae_pct"),
+                 early.get("avg_return_pct"),recent.get("avg_return_pct"),
+                 reasons_json,evidence_json))
+
+            if log_event:
+                cur.execute("""INSERT INTO market_os_promotion_events(
+                        candidate_key,event_type,from_stage,to_stage,direction,review_action,
+                        reason_codes,evidence)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)""",
+                    (candidate_key,event_type,old_stage,effective_stage,lifecycle["direction"],
+                     lifecycle["review_action"],reasons_json,evidence_json))
+                transitions+=1
+
+        cur.execute("""SELECT COUNT(*) AS n FROM market_os_promotion_registry
+                       WHERE rule_version=%s AND active=TRUE""",(RULE_VERSION,))
+        active=int(cur.fetchone()["n"])
+        return {
+            "active":active,
+            "transitions":transitions,
+            "promotion_candidates":promotion_candidates,
+        }
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(RULE_VERSION,))
@@ -857,9 +1099,15 @@ def cycle():
     captured,snap=capture_assessments()
     outcomes=resolve_outcomes()
     segments=refresh_segments()
-    update_status("OK",f"captured={captured} outcomes={outcomes} segments={segments}",
-                  last_snapshot=snap,last_outcome=bool(outcomes))
-    return captured,outcomes,segments
+    registry=refresh_promotion_registry()
+    update_status(
+        "OK",
+        f"captured={captured} outcomes={outcomes} segments={segments} "
+        f"registry_active={registry['active']} promotion_candidates={registry['promotion_candidates']} "
+        f"registry_transitions={registry['transitions']}",
+        last_snapshot=snap,last_outcome=bool(outcomes)
+    )
+    return captured,outcomes,segments,registry
 
 
 if __name__=="__main__":
@@ -867,9 +1115,14 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s=cycle()
-            if a or o:
-                print(f"learning cycle assessments={a} outcomes={o} segments={s}",flush=True)
+            a,o,s,r=cycle()
+            if a or o or r.get("transitions"):
+                print(
+                    f"learning cycle assessments={a} outcomes={o} segments={s} "
+                    f"registry={r['active']} candidates={r['promotion_candidates']} "
+                    f"transitions={r['transitions']}",
+                    flush=True
+                )
         except Exception as exc:
             print("market os learning error",type(exc).__name__,str(exc)[:400],flush=True)
             try:update_status("ERROR",type(exc).__name__)
