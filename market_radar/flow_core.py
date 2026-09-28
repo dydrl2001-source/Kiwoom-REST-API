@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 KST = ZoneInfo('Asia/Seoul')
 SPEC = 'https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/kiwoom/_data/kiwoom_api_spec.json'
 VERSION = 'sor-money-v2-validated'
+CANDIDATE_VERSION = 'attention-v2-strategy'
 # Editable business segments, not assertions about today's price catalyst.
 # Initial operational registry; unknowns retain official sector, never guessed from other companies.
 SEGMENTS = {
@@ -429,6 +430,7 @@ def candidate_watchlist(rows, theme_rotation, limit=12):
         label='관찰 우선' if score>=70 else ('조건 확인' if score>=55 else '추적')
         eligible.append({
             'code':r['code'],'name':r.get('name'),'attention_score':score,
+            'candidate_version':CANDIDATE_VERSION,
             'label':label,'style':primary_type,'primary_type':primary_type,
             'watch_types':watch_types,'reasons':list(dict.fromkeys(reasons))[:7],
             'risk_flags':list(dict.fromkeys(risks))[:6],
