@@ -29,7 +29,7 @@ PY
 fi
 
 echo '=== Update only market/read-only UI/research workers; keep PostgreSQL and Telegram intact ==='
-docker compose up -d --no-deps --build kiwoom-feed market-theme-feed news-feed chart-feed radar-api web-research-worker market-regime mimosa-engine market-os-learning
+docker compose up -d --no-deps --build kiwoom-feed market-theme-feed news-feed chart-feed radar-api web-research-worker market-regime mimosa-engine kiwoom-realtime market-os-learning
 ready=0
 for n in $(seq 1 30); do
  if curl --fail --silent --max-time 3 http://localhost:8080/health >/dev/null 2>&1; then ready=1;break;fi
@@ -41,4 +41,5 @@ bash check_flow_desk.sh
 echo 'Open the existing dashboard, refresh, and select [Market OS] or [30초 흐름].'
 echo 'First deltas need at least 2 new batches; speed baseline needs at least 5 earlier intervals.'
 echo 'Market OS learning is local DB shadow-learning; it does not add paid AI calls or place orders.'
+echo 'Kiwoom 0B worker is observation-only and remains disabled unless KIWOOM_REALTIME_ENABLED=1.'
 echo 'Auto research uses existing caps; 1/day still means 1/day, including old failed attempts.'
