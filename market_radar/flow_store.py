@@ -45,7 +45,7 @@ def save_batch(batch_time,raw_records,rank_map,trade_rank_map,stock_meta):
     batch_time=dt(batch_time)
     rows=[]
     for code,raw in raw_records.items():
-        data=quote(raw['response'],raw['received_at'],code)
+        data=quote(raw['response'],raw['received_at'],code,(stock_meta.get(code) or {}).get('listed_shares'))
         if not data:continue
         data.update({'batch_time':batch_time.isoformat(),'query_rank':rank_map.get(code),
                      'trade_rank':trade_rank_map.get(code),
