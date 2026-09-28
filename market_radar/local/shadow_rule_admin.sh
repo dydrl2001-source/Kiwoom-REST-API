@@ -5,32 +5,46 @@ cd "$(dirname "$0")"
 
 cmd="${1:-list}"
 id="${2:-}"
-confirm="${3:-}"
+arg="${3:-}"
+confirm="${4:-}"
+
+usage() {
+  echo "Usage:"
+  echo "  bash shadow_rule_admin.sh list"
+  echo "  bash shadow_rule_admin.sh dossier <dossier_id>"
+  echo "  bash shadow_rule_admin.sh approve <candidate_key> --confirm"
+  echo "  bash shadow_rule_admin.sh disable <shadow_rule_id> --confirm"
+  echo "  bash shadow_rule_admin.sh review <dossier_id> <approve-dry-run|reject> --confirm"
+}
 
 case "$cmd" in
   list)
     ;;
+  dossier)
+    if [ -z "$id" ]; then usage; exit 1; fi
+    ;;
   approve|disable)
-    if [ -z "$id" ] || [ "$confirm" != "--confirm" ]; then
-      echo "Usage:"
-      echo "  bash shadow_rule_admin.sh list"
-      echo "  bash shadow_rule_admin.sh approve <candidate_key> --confirm"
-      echo "  bash shadow_rule_admin.sh disable <shadow_rule_id> --confirm"
-      exit 1
+    if [ -z "$id" ] || [ "$arg" != "--confirm" ]; then usage; exit 1; fi
+    ;;
+  review)
+    if [ -z "$id" ] || { [ "$arg" != "approve-dry-run" ] && [ "$arg" != "reject" ]; } || [ "$confirm" != "--confirm" ]; then
+      usage; exit 1
     fi
     ;;
   *)
     echo "Unknown command: $cmd"
+    usage
     exit 1
     ;;
 esac
 
-docker compose exec -T radar-api python - "$cmd" "$id" <<'PY'
+docker compose exec -T radar-api python - "$cmd" "$id" "$arg" <<'PY'
 import json,os,sys
 import psycopg
 from psycopg.rows import dict_row
 
 cmd=sys.argv[1];ident=sys.argv[2] if len(sys.argv)>2 else ""
+arg=sys.argv[3] if len(sys.argv)>3 else ""
 db=os.environ["DATABASE_URL"]
 
 with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() as cur:
@@ -40,7 +54,8 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
 
     required=["market_os_promotion_registry","market_os_promotion_events",
               "market_os_shadow_rules","market_os_shadow_observations",
-              "market_os_shadow_decisions"]
+              "market_os_shadow_decisions","market_os_adoption_dossiers",
+              "market_os_adoption_dossier_events"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
@@ -77,7 +92,87 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"decision={r['decision_state'] or '—'} eligible={r['review_eligible'] or False} "
                   f"manual={r['manual_decision_state'] or 'PENDING'} | "
                   f"approved={r['approved_at']} last_eval={r['last_evaluated_at']}")
-        print("\nRead-only list. No live scores, thresholds or orders were changed.")
+        print("\n=== ADOPTION DOSSIERS ===")
+        cur.execute("""SELECT dossier_id,shadow_rule_id,revision,decision_state,review_state,
+                              generated_at,reviewed_at,content_hash
+                       FROM market_os_adoption_dossiers
+                       ORDER BY CASE review_state WHEN 'PENDING' THEN 1
+                                WHEN 'APPROVED_DRY_RUN' THEN 2 WHEN 'REJECTED' THEN 3
+                                ELSE 4 END,generated_at DESC""")
+        dossiers=cur.fetchall()
+        if not dossiers:print("none")
+        for d in dossiers:
+            print(f"{d['dossier_id']} | rev={d['revision']} | {d['review_state']} | "
+                  f"decision={d['decision_state']} | rule={d['shadow_rule_id']} | "
+                  f"generated={d['generated_at']} reviewed={d['reviewed_at']} "
+                  f"hash={d['content_hash'][:12]}")
+
+        print("\nRead-only list. No live scores, thresholds, rulesets or orders were changed.")
+        raise SystemExit(0)
+
+    if cmd=="dossier":
+        cur.execute("""SELECT dossier_id,shadow_rule_id,revision,content_hash,decision_state,
+                              review_state,generated_at,reviewed_at,reviewed_by,review_note,dossier
+                       FROM market_os_adoption_dossiers
+                       WHERE dossier_id=%s""",(ident,))
+        d=cur.fetchone()
+        if not d:
+            raise SystemExit("dossier_id not found")
+        print("DOSSIER:",d["dossier_id"])
+        print("Rule:",d["shadow_rule_id"],"revision:",d["revision"])
+        print("Decision:",d["decision_state"],"review:",d["review_state"])
+        print("Hash:",d["content_hash"])
+        print("Generated:",d["generated_at"],"Reviewed:",d["reviewed_at"],"By:",d["reviewed_by"])
+        print(json.dumps(d["dossier"],ensure_ascii=False,indent=2,default=str))
+        print("\nRead-only dossier view. No live scores, rulesets or orders were changed.")
+        raise SystemExit(0)
+
+    if cmd=="review":
+        cur.execute("""SELECT * FROM market_os_adoption_dossiers
+                       WHERE dossier_id=%s FOR UPDATE""",(ident,))
+        d=cur.fetchone()
+        if not d:
+            raise SystemExit("dossier_id not found")
+        if d["review_state"]!="PENDING":
+            raise SystemExit("Only PENDING dossier revisions can be reviewed. Current="+str(d["review_state"]))
+        cur.execute("""SELECT decision_state,review_eligible
+                       FROM market_os_shadow_decisions
+                       WHERE shadow_rule_id=%s FOR UPDATE""",(d["shadow_rule_id"],))
+        sd=cur.fetchone()
+        if not sd:
+            raise SystemExit("shadow decision missing")
+        if arg=="approve-dry-run":
+            if sd["decision_state"]!="ACCEPT_CANDIDATE" or not sd["review_eligible"]:
+                raise SystemExit("Dry-run approval requires current ACCEPT_CANDIDATE + review_eligible=true.")
+            target="APPROVED_DRY_RUN"
+            manual="APPROVED_DRY_RUN"
+            event="HUMAN_APPROVED_DRY_RUN"
+            note="Human approved dossier for a future versioned dry-run only; no live ruleset was created."
+        else:
+            target="REJECTED"
+            manual="REJECTED"
+            event="HUMAN_REJECTED_DOSSIER"
+            note="Human rejected this dossier revision; existing shadow observations remain preserved."
+        cur.execute("""UPDATE market_os_adoption_dossiers
+                       SET review_state=%s,reviewed_at=now(),reviewed_by='MANUAL_SCRIPT',
+                           review_note=%s
+                       WHERE dossier_id=%s""",(target,note,ident))
+        cur.execute("""UPDATE market_os_shadow_decisions
+                       SET manual_decision_state=%s
+                       WHERE shadow_rule_id=%s""",(manual,d["shadow_rule_id"]))
+        cur.execute("""INSERT INTO market_os_adoption_dossier_events(
+                dossier_id,event_type,from_review_state,to_review_state,note,evidence)
+            VALUES(%s,%s,'PENDING',%s,%s,%s::jsonb)""",
+            (ident,event,target,note,json.dumps({
+                "shadow_rule_id":d["shadow_rule_id"],
+                "revision":d["revision"],
+                "content_hash":d["content_hash"],
+                "live_activation":False,
+                "versioned_ruleset_created":False,
+            },ensure_ascii=False)))
+        print(target+":",ident)
+        print(note)
+        print("Live Market OS scores/tiers/rulesets/orders were NOT changed.")
         raise SystemExit(0)
 
     if cmd=="approve":
