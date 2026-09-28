@@ -350,6 +350,57 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"{r['from_review_state'] or '—'}->{r['to_review_state']} "
                       f"{r['note'] or ''}")
 
+        print('\n[VERSIONED RULESET DRY RUN v1.8]')
+        if not exists('market_os_versioned_rulesets'):
+            print('versioned ruleset table missing')
+        else:
+            cur.execute("""SELECT vr.ruleset_id,vr.version_label,vr.base_rule_version,
+                                  vr.source_dossier_id,vr.status,vr.spec_hash,vr.activated_at,
+                                  vr.stopped_at,vr.stale_at,vr.last_evaluated_at,
+                                  COUNT(o.*) AS observations,
+                                  COUNT(o.*) FILTER(WHERE o.changed) AS changed
+                           FROM market_os_versioned_rulesets vr
+                           LEFT JOIN market_os_ruleset_dry_run_observations o
+                             ON o.ruleset_id=vr.ruleset_id
+                           GROUP BY vr.ruleset_id
+                           ORDER BY vr.activated_at DESC""")
+            rows=cur.fetchall()
+            if not rows:
+                print('versioned ruleset 없음')
+            for r in rows:
+                print(f"{r['status']} {r['ruleset_id']} {r['version_label']} "
+                      f"base={r['base_rule_version']} dossier={r['source_dossier_id']} "
+                      f"obs={r['observations']} changed={r['changed']} "
+                      f"activated={r['activated_at']} last_eval={r['last_evaluated_at']} "
+                      f"hash={r['spec_hash'][:12]}")
+        if exists('market_os_ruleset_dry_run_summary'):
+            print('\n[RULESET CONTROL vs CANDIDATE]')
+            cur.execute("""SELECT ruleset_id,horizon,cohort,evidence_state,membership_changes,
+                                  control_samples,candidate_samples,
+                                  control_avg_return_pct,candidate_avg_return_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_ruleset_dry_run_summary
+                           ORDER BY ruleset_id,
+                                    CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                    WHEN 'D+1' THEN 3 ELSE 4 END,cohort""")
+            rows=cur.fetchall()
+            if not rows:
+                print('ruleset dry-run outcomes 대기')
+            for r in rows[:80]:
+                print(f"{r['ruleset_id']} {r['horizon']} {r['cohort']} {r['evidence_state']} "
+                      f"changes={r['membership_changes']} controlN={r['control_samples']} "
+                      f"candidateN={r['candidate_samples']} "
+                      f"dAvg={r['delta_avg_return_pct']} dPos={r['delta_positive_rate_pp']} "
+                      f"dMAE={r['delta_mae_pct']}")
+        if exists('market_os_ruleset_events'):
+            print('\n[RULESET EVENTS]')
+            cur.execute("""SELECT event_time,ruleset_id,event_type,from_status,to_status
+                           FROM market_os_ruleset_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            for r in cur.fetchall():
+                print(f"{r['event_time']} {r['ruleset_id']} {r['event_type']} "
+                      f"{r['from_status'] or '—'}->{r['to_status']}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -384,5 +435,6 @@ print('Promotion Registry v1.4: lifecycle is persisted with transition history; 
 print('Shadow Rule Lab v1.5: only manually approved rules are observed; pre-approval data is excluded and CONTROL/CHALLENGER share identical outcome paths.')
 print('Shadow Decision Gate v1.6: 30m+close, time-split stability, membership changes and stance reproduction are required before ACCEPT_CANDIDATE; no automatic live adoption.')
 print('Adoption Review Dossier v1.7: one immutable dossier revision is generated per ACCEPT_CANDIDATE transition; human review can only approve a future dry-run or reject it.')
+print('Versioned Ruleset v1.8: APPROVED_DRY_RUN still requires explicit dry-run-start; activation creates a new prospective boundary and source Decision invalidation => STALE_SOURCE.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
