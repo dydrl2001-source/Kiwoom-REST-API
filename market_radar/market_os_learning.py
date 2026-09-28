@@ -1738,10 +1738,13 @@ def refresh_ruleset_dry_run_summaries():
     with db() as c,c.cursor() as cur:
         if not table_exists(cur,"market_os_versioned_rulesets"):
             return 0
-        cur.execute("""SELECT ruleset_id,base_rule_version,source_shadow_rule_id,
-                              status,spec,activated_at
-                       FROM market_os_versioned_rulesets
-                       ORDER BY activated_at""")
+        cur.execute("""SELECT vr.ruleset_id,vr.base_rule_version,vr.source_shadow_rule_id,
+                              vr.status,vr.spec,vr.activated_at,
+                              ad.dossier AS source_dossier
+                       FROM market_os_versioned_rulesets vr
+                       LEFT JOIN market_os_adoption_dossiers ad
+                         ON ad.dossier_id=vr.source_dossier_id
+                       ORDER BY vr.activated_at""")
         for rs in cur.fetchall():
             cur.execute("""SELECT o.assessment_time,o.stock_code,
                                   o.control_tier,o.candidate_tier,a.market_stance,
@@ -1772,42 +1775,11 @@ def refresh_ruleset_dry_run_summaries():
                 "REVIEW":ruleset_impact_concentration(anchors,"REVIEW"),
                 "FOCUS":ruleset_impact_concentration(anchors,"FOCUS"),
             }
-            cur.execute("""SELECT horizon,cohort,membership_changes,
-                                  control_samples,control_stocks,control_days,
-                                  control_avg_return_pct,control_median_return_pct,
-                                  control_positive_rate,control_avg_mfe_pct,control_avg_mae_pct,
-                                  challenger_samples,challenger_stocks,challenger_days,
-                                  challenger_avg_return_pct,challenger_median_return_pct,
-                                  challenger_positive_rate,challenger_avg_mfe_pct,challenger_avg_mae_pct,
-                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct
-                           FROM market_os_shadow_experiment_summary
-                           WHERE shadow_rule_id=%s""",(rs["source_shadow_rule_id"],))
-            shadow_reference=[]
-            for sr in cur.fetchall():
-                shadow_reference.append({
-                    "horizon":sr["horizon"],"cohort":sr["cohort"],
-                    "membership_changes":sr["membership_changes"],
-                    "control":{
-                        "samples":sr["control_samples"],"distinct_stocks":sr["control_stocks"],
-                        "distinct_days":sr["control_days"],
-                        "avg_return_pct":sr["control_avg_return_pct"],
-                        "median_return_pct":sr["control_median_return_pct"],
-                        "positive_rate":sr["control_positive_rate"],
-                        "avg_mfe_pct":sr["control_avg_mfe_pct"],"avg_mae_pct":sr["control_avg_mae_pct"],
-                    },
-                    "challenger":{
-                        "samples":sr["challenger_samples"],"distinct_stocks":sr["challenger_stocks"],
-                        "distinct_days":sr["challenger_days"],
-                        "avg_return_pct":sr["challenger_avg_return_pct"],
-                        "median_return_pct":sr["challenger_median_return_pct"],
-                        "positive_rate":sr["challenger_positive_rate"],
-                        "avg_mfe_pct":sr["challenger_avg_mfe_pct"],
-                        "avg_mae_pct":sr["challenger_avg_mae_pct"],
-                    },
-                    "delta_avg_return_pct":sr["delta_avg_return_pct"],
-                    "delta_positive_rate_pp":sr["delta_positive_rate_pp"],
-                    "delta_mae_pct":sr["delta_mae_pct"],
-                })
+            # Effect retention must compare against the evidence frozen at
+            # dossier review time, never against a moving Shadow summary.
+            shadow_reference=list(
+                ((rs["source_dossier"] or {}).get("control_vs_challenger") or [])
+            )
             succession=ruleset_succession_decision(
                 {"spec":rs["spec"] or {}},summaries,slices,concentration,shadow_reference
             )
