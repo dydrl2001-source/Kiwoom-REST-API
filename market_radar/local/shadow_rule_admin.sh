@@ -12,18 +12,21 @@ usage() {
   echo "Usage:"
   echo "  bash shadow_rule_admin.sh list"
   echo "  bash shadow_rule_admin.sh dossier <dossier_id>"
+  echo "  bash shadow_rule_admin.sh ruleset <ruleset_id>"
   echo "  bash shadow_rule_admin.sh approve <candidate_key> --confirm"
   echo "  bash shadow_rule_admin.sh disable <shadow_rule_id> --confirm"
   echo "  bash shadow_rule_admin.sh review <dossier_id> <approve-dry-run|reject> --confirm"
+  echo "  bash shadow_rule_admin.sh dry-run-start <dossier_id> --confirm"
+  echo "  bash shadow_rule_admin.sh dry-run-stop <ruleset_id> --confirm"
 }
 
 case "$cmd" in
   list)
     ;;
-  dossier)
+  dossier|ruleset)
     if [ -z "$id" ]; then usage; exit 1; fi
     ;;
-  approve|disable)
+  approve|disable|dry-run-start|dry-run-stop)
     if [ -z "$id" ] || [ "$arg" != "--confirm" ]; then usage; exit 1; fi
     ;;
   review)
@@ -42,6 +45,7 @@ docker compose exec -T radar-api python - "$cmd" "$id" "$arg" <<'PY'
 import json,os,sys
 import psycopg
 from psycopg.rows import dict_row
+from market_os_ruleset import build_spec as build_versioned_ruleset
 
 cmd=sys.argv[1];ident=sys.argv[2] if len(sys.argv)>2 else ""
 arg=sys.argv[3] if len(sys.argv)>3 else ""
@@ -55,7 +59,9 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
     required=["market_os_promotion_registry","market_os_promotion_events",
               "market_os_shadow_rules","market_os_shadow_observations",
               "market_os_shadow_decisions","market_os_adoption_dossiers",
-              "market_os_adoption_dossier_events"]
+              "market_os_adoption_dossier_events","market_os_versioned_rulesets",
+              "market_os_ruleset_dry_run_observations","market_os_ruleset_dry_run_summary",
+              "market_os_ruleset_events"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
@@ -107,7 +113,54 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"generated={d['generated_at']} reviewed={d['reviewed_at']} "
                   f"hash={d['content_hash'][:12]}")
 
+        print("\n=== VERSIONED RULESET DRY RUNS ===")
+        cur.execute("""SELECT vr.ruleset_id,vr.version_label,vr.base_rule_version,
+                              vr.source_dossier_id,vr.source_shadow_rule_id,vr.status,
+                              vr.activated_at,vr.stopped_at,vr.stale_at,vr.last_evaluated_at,
+                              COUNT(o.*) AS observations,
+                              COUNT(o.*) FILTER(WHERE o.changed) AS changed
+                       FROM market_os_versioned_rulesets vr
+                       LEFT JOIN market_os_ruleset_dry_run_observations o
+                         ON o.ruleset_id=vr.ruleset_id
+                       GROUP BY vr.ruleset_id
+                       ORDER BY vr.activated_at DESC""")
+        rulesets=cur.fetchall()
+        if not rulesets:print("none")
+        for r in rulesets:
+            print(f"{r['ruleset_id']} | {r['status']} | {r['version_label']} | "
+                  f"base={r['base_rule_version']} dossier={r['source_dossier_id']} "
+                  f"obs={r['observations']} changed={r['changed']} "
+                  f"activated={r['activated_at']} last_eval={r['last_evaluated_at']}")
+
         print("\nRead-only list. No live scores, thresholds, rulesets or orders were changed.")
+        raise SystemExit(0)
+
+    if cmd=="ruleset":
+        cur.execute("""SELECT * FROM market_os_versioned_rulesets
+                       WHERE ruleset_id=%s""",(ident,))
+        rs=cur.fetchone()
+        if not rs:
+            raise SystemExit("ruleset_id not found")
+        print("RULESET:",rs["ruleset_id"])
+        print("Version:",rs["version_label"],"Status:",rs["status"])
+        print("Base:",rs["base_rule_version"],"Dossier:",rs["source_dossier_id"])
+        print("Activated:",rs["activated_at"],"Stopped:",rs["stopped_at"],"Stale:",rs["stale_at"])
+        print("Spec hash:",rs["spec_hash"])
+        print(json.dumps(rs["spec"],ensure_ascii=False,indent=2,default=str))
+        print("\n=== DRY RUN SUMMARY ===")
+        cur.execute("""SELECT * FROM market_os_ruleset_dry_run_summary
+                       WHERE ruleset_id=%s
+                       ORDER BY CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                WHEN 'D+1' THEN 3 ELSE 4 END,cohort""",(ident,))
+        rows=cur.fetchall()
+        if not rows:print("prospective outcomes 대기")
+        for x in rows:
+            print(f"{x['horizon']} {x['cohort']} {x['evidence_state']} "
+                  f"changes={x['membership_changes']} controlN={x['control_samples']} "
+                  f"candidateN={x['candidate_samples']} "
+                  f"dAvg={x['delta_avg_return_pct']} dPos={x['delta_positive_rate_pp']} "
+                  f"dMAE={x['delta_mae_pct']}")
+        print("\nRead-only ruleset view. No live scores, tiers or orders were changed.")
         raise SystemExit(0)
 
     if cmd=="dossier":
@@ -173,6 +226,81 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
         print(target+":",ident)
         print(note)
         print("Live Market OS scores/tiers/rulesets/orders were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="dry-run-start":
+        cur.execute("""SELECT * FROM market_os_adoption_dossiers
+                       WHERE dossier_id=%s FOR UPDATE""",(ident,))
+        d=cur.fetchone()
+        if not d:
+            raise SystemExit("dossier_id not found")
+        if d["review_state"]!="APPROVED_DRY_RUN":
+            raise SystemExit("Dry run requires APPROVED_DRY_RUN dossier. Current="+str(d["review_state"]))
+        cur.execute("""SELECT d.decision_state,d.review_eligible,d.manual_decision_state,
+                              r.enabled AS shadow_rule_enabled
+                       FROM market_os_shadow_decisions d
+                       JOIN market_os_shadow_rules r ON r.shadow_rule_id=d.shadow_rule_id
+                       WHERE d.shadow_rule_id=%s FOR UPDATE""",(d["shadow_rule_id"],))
+        sd=cur.fetchone()
+        if not sd:
+            raise SystemExit("shadow decision missing")
+        if sd["decision_state"]!="ACCEPT_CANDIDATE" or not sd["review_eligible"] or not sd["shadow_rule_enabled"]:
+            raise SystemExit("Dry run start requires current ACCEPT_CANDIDATE, review_eligible=true, enabled source Shadow Rule.")
+        cur.execute("""SELECT 1 FROM market_os_versioned_rulesets
+                       WHERE source_dossier_id=%s""",(ident,))
+        if cur.fetchone():
+            raise SystemExit("A versioned ruleset already exists for this dossier. Re-start is blocked to preserve the prospective boundary.")
+        built=build_versioned_ruleset(ident,d["content_hash"],d["dossier"] or {})
+        spec=built["spec"]
+        cur.execute("""INSERT INTO market_os_versioned_rulesets(
+                ruleset_id,version_label,base_rule_version,source_dossier_id,
+                source_shadow_rule_id,status,spec_hash,spec,activated_at,note)
+            VALUES(%s,%s,%s,%s,%s,'DRY_RUN_ACTIVE',%s,%s::jsonb,now(),
+                   'Human-started prospective dry run; live Market OS unchanged')""",
+            (built["ruleset_id"],built["version_label"],spec["base_rule_version"],
+             ident,d["shadow_rule_id"],built["content_hash"],
+             json.dumps(spec,ensure_ascii=False)))
+        cur.execute("""INSERT INTO market_os_ruleset_events(
+                ruleset_id,event_type,from_status,to_status,evidence)
+            VALUES(%s,'HUMAN_DRY_RUN_STARTED',NULL,'DRY_RUN_ACTIVE',%s::jsonb)""",
+            (built["ruleset_id"],json.dumps({
+                "dossier_id":ident,
+                "dossier_hash":d["content_hash"],
+                "prospective_only":True,
+                "live_activation":False,
+            },ensure_ascii=False)))
+        cur.execute("""UPDATE market_os_shadow_decisions
+                       SET manual_decision_state='DRY_RUN_ACTIVE'
+                       WHERE shadow_rule_id=%s""",(d["shadow_rule_id"],))
+        print("DRY_RUN_ACTIVE:",built["ruleset_id"])
+        print("Version:",built["version_label"])
+        print("Prospective boundary: activated_at=now(); earlier assessments are excluded.")
+        print("Live Market OS scores/tiers/rulesets/orders were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="dry-run-stop":
+        cur.execute("""SELECT * FROM market_os_versioned_rulesets
+                       WHERE ruleset_id=%s FOR UPDATE""",(ident,))
+        rs=cur.fetchone()
+        if not rs:
+            raise SystemExit("ruleset_id not found")
+        if rs["status"]!="DRY_RUN_ACTIVE":
+            raise SystemExit("Only DRY_RUN_ACTIVE rulesets can be stopped. Current="+str(rs["status"]))
+        cur.execute("""UPDATE market_os_versioned_rulesets
+                       SET status='DRY_RUN_STOPPED',stopped_at=now(),
+                           note='Manually stopped; prior dry-run evidence preserved'
+                       WHERE ruleset_id=%s""",(ident,))
+        cur.execute("""INSERT INTO market_os_ruleset_events(
+                ruleset_id,event_type,from_status,to_status,evidence)
+            VALUES(%s,'HUMAN_DRY_RUN_STOPPED','DRY_RUN_ACTIVE','DRY_RUN_STOPPED',
+                   %s::jsonb)""",
+            (ident,json.dumps({"live_activation":False},ensure_ascii=False)))
+        cur.execute("""UPDATE market_os_shadow_decisions
+                       SET manual_decision_state='DRY_RUN_STOPPED'
+                       WHERE shadow_rule_id=%s""",(rs["source_shadow_rule_id"],))
+        print("DRY_RUN_STOPPED:",ident)
+        print("All observations and summaries remain preserved.")
+        print("Live Market OS scores/tiers/orders were NOT changed.")
         raise SystemExit(0)
 
     if cmd=="approve":
