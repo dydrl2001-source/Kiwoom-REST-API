@@ -19,6 +19,8 @@ try:
     print('MONEY_UNITS:',d.get('unit_version'))
     print('THEME_GROUPS:',len(d.get('theme_groups',[])))
     print('CATALYST_GROUPS:',len(d.get('catalyst_groups',[])))
+    print('WATCH_CANDIDATES:',len(d.get('watch_candidates',[])))
+    print('TOP_ATTENTION_SCORE:',(d.get('watch_candidates') or [{}])[0].get('attention_score'))
     a=d.get('automation',{})
     print('AUTO_SELECTION:',a.get('automatic'))
     print('DAILY_LIMIT_UNCHANGED:',a.get('daily_limit'))
