@@ -2,7 +2,7 @@
 # Read-only diagnostics, not another model call. No keys/report text are printed.
 set -eu
 cd "$(dirname "$0")"
-docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker market-regime mimosa-engine market-os-learning
+docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker market-regime mimosa-engine kiwoom-realtime market-os-learning
 curl --fail --silent --show-error --max-time 8 http://localhost:8080/health
 printf '\n'
 docker compose exec -T radar-api python - <<'PY'
