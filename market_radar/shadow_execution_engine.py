@@ -27,6 +27,7 @@ MAX_POSITION_PCT=max(.5,min(50.0,float(os.getenv("SHADOW_MAX_POSITION_PCT","10")
 MAX_PARTICIPATION_PCT=max(.1,min(10.0,float(os.getenv("SHADOW_MAX_PARTICIPATION_PCT","2"))))
 COMMISSION_BPS=max(0.0,float(os.getenv("SHADOW_COMMISSION_BPS","0")))
 SELL_TAX_BPS=max(0.0,float(os.getenv("SHADOW_SELL_TAX_BPS","0")))
+MAX_REPLAY_MINUTES=max(0,min(60,int(os.getenv("SHADOW_MAX_REPLAY_MINUTES","5"))))
 
 SIZING=SizingPolicy(account_equity_krw=ACCOUNT_EQUITY,risk_per_trade_pct=RISK_PCT,
                     max_position_pct=MAX_POSITION_PCT)
@@ -80,6 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_shadow_strategy_time ON ai_shadow_trades(strategy
 
 CREATE TABLE IF NOT EXISTS ai_shadow_status(
   id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL,
   status TEXT NOT NULL,
   open_count INTEGER NOT NULL DEFAULT 0,
@@ -87,6 +89,7 @@ CREATE TABLE IF NOT EXISTS ai_shadow_status(
   rejected_count INTEGER NOT NULL DEFAULT 0,
   note TEXT
 );
+ALTER TABLE ai_shadow_status ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT now();
 """
 
 def db():
@@ -97,6 +100,11 @@ def schema():
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)",(72419070,))
         cur.execute(SCHEMA)
+        cur.execute("""INSERT INTO ai_shadow_status(
+                       id,started_at,updated_at,status,open_count,closed_count,rejected_count,note)
+                       VALUES(1,now(),now(),'STARTING',0,0,0,%s)
+                       ON CONFLICT(id) DO NOTHING""",
+                    ("shadow start boundary; no historical backfill",))
 
 def table_exists(cur,name):
     cur.execute("SELECT to_regclass(%s)",("public."+name,))
@@ -154,17 +162,26 @@ def volatility_bps(cur,code,at):
     rets=[abs(b/a-1.0)*10_000.0 for a,b in zip(xs[:-1],xs[1:]) if a>0]
     return statistics.median(rets) if rets else None
 
+def simulation_cutoff(cur,now=None):
+    now=now or datetime.now(timezone.utc)
+    cur.execute("SELECT started_at FROM ai_shadow_status WHERE id=1")
+    r=cur.fetchone()
+    started=(r["started_at"] if r and r["started_at"] else now)
+    replay=now-timedelta(minutes=MAX_REPLAY_MINUTES)
+    return max(started,replay)
+
 def open_new(cur):
     if not table_exists(cur,"radar_paper_trades") or not column_exists(cur,"radar_paper_trades","strategy_id"):
         return 0
+    cutoff=simulation_cutoff(cur)
     cur.execute("""SELECT p.id,p.stock_code,p.stock_name,p.opened_at,p.entry_price_krw,
                           p.strategy_id,p.strategy_name,p.strategy_family,p.regime_label
                    FROM radar_paper_trades p
                    LEFT JOIN ai_shadow_trades s ON s.paper_trade_id=p.id
                    WHERE s.id IS NULL
                      AND p.strategy_id IS NOT NULL
-                     AND p.opened_at>now()-interval '7 days'
-                   ORDER BY p.opened_at LIMIT 50""")
+                     AND p.opened_at>=%s
+                   ORDER BY p.opened_at LIMIT 50""",(cutoff,))
     opened=0
     for p in cur.fetchall():
         ref,recent,exchange=quote_pair(cur,p["stock_code"],p["opened_at"])
@@ -236,13 +253,13 @@ def update_status(cur):
                           COUNT(*) FILTER(WHERE status='REJECTED') AS rejected_n
                    FROM ai_shadow_trades""")
     r=cur.fetchone()
-    cur.execute("""INSERT INTO ai_shadow_status(id,updated_at,status,open_count,closed_count,rejected_count,note)
-                   VALUES(1,now(),'OK',%s,%s,%s,%s)
+    cur.execute("""INSERT INTO ai_shadow_status(id,started_at,updated_at,status,open_count,closed_count,rejected_count,note)
+                   VALUES(1,now(),now(),'OK',%s,%s,%s,%s)
                    ON CONFLICT(id) DO UPDATE SET updated_at=now(),status='OK',
                      open_count=excluded.open_count,closed_count=excluded.closed_count,
                      rejected_count=excluded.rejected_count,note=excluded.note""",
                 (int(r["open_n"] or 0),int(r["closed_n"] or 0),int(r["rejected_n"] or 0),
-                 f"shadow only; no orders; equity={ACCOUNT_EQUITY:.0f}; risk={RISK_PCT:.2f}%%; participation<={MAX_PARTICIPATION_PCT:.2f}%%; fees configurable"))
+                 f"shadow only; no orders; equity={ACCOUNT_EQUITY:.0f}; risk={RISK_PCT:.2f}%%; participation<={MAX_PARTICIPATION_PCT:.2f}%%; replay<={MAX_REPLAY_MINUTES}m; fees configurable"))
 
 def cycle():
     with db() as c,c.cursor() as cur:
