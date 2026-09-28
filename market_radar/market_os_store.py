@@ -44,27 +44,44 @@ def _current_session():
 
 def latest_microstructure(cur,codes):
     out={}
-    if not codes or not exists(cur,"market_realtime_minute_bars"):
-        return out
-    cur.execute("""SELECT DISTINCT ON(stock_code)
-                    stock_code,minute_time,close_price,volume,trade_value_krw,buy_volume,sell_volume,
-                    tick_count,gap_count,last_strength,last_buy_ratio,last_exchange,updated_at
-                   FROM market_realtime_minute_bars
-                   WHERE stock_code=ANY(%s) AND minute_time>now()-interval '5 minutes'
-                   ORDER BY stock_code,minute_time DESC""",(list(codes),))
+    if not codes:return out
     now=datetime.now(timezone.utc)
-    for r in cur.fetchall():
-        buy=float(r["buy_volume"] or 0);sell=float(r["sell_volume"] or 0);total=buy+sell
-        out[r["stock_code"]]={
-            "minute_time":r["minute_time"].isoformat() if r["minute_time"] else None,
-            "age_sec":max(0,int((now-r["updated_at"]).total_seconds())) if r["updated_at"] else None,
-            "close_price":float(r["close_price"]) if r["close_price"] is not None else None,
-            "volume":float(r["volume"] or 0),"trade_value_krw":float(r["trade_value_krw"] or 0),
-            "buy_volume":buy,"sell_volume":sell,"buy_share":buy/total if total else None,
-            "tick_count":int(r["tick_count"] or 0),"gap_count":int(r["gap_count"] or 0),
-            "strength":r["last_strength"],"buy_ratio":r["last_buy_ratio"],
-            "exchange":r["last_exchange"],"source":"KIWOOM_0B"
-        }
+    if exists(cur,"market_realtime_minute_bars"):
+        cur.execute("""SELECT DISTINCT ON(stock_code)
+                        stock_code,minute_time,close_price,volume,trade_value_krw,buy_volume,sell_volume,
+                        tick_count,gap_count,last_strength,last_buy_ratio,last_exchange,updated_at
+                       FROM market_realtime_minute_bars
+                       WHERE stock_code=ANY(%s) AND minute_time>now()-interval '5 minutes'
+                       ORDER BY stock_code,minute_time DESC""",(list(codes),))
+        for r in cur.fetchall():
+            buy=float(r["buy_volume"] or 0);sell=float(r["sell_volume"] or 0);total=buy+sell
+            out[r["stock_code"]]={
+                "minute_time":r["minute_time"].isoformat() if r["minute_time"] else None,
+                "age_sec":max(0,int((now-r["updated_at"]).total_seconds())) if r["updated_at"] else None,
+                "close_price":float(r["close_price"]) if r["close_price"] is not None else None,
+                "volume":float(r["volume"] or 0),"trade_value_krw":float(r["trade_value_krw"] or 0),
+                "buy_volume":buy,"sell_volume":sell,"buy_share":buy/total if total else None,
+                "tick_count":int(r["tick_count"] or 0),"gap_count":int(r["gap_count"] or 0),
+                "strength":r["last_strength"],"buy_ratio":r["last_buy_ratio"],
+                "exchange":r["last_exchange"],"source":"KIWOOM_0B"
+            }
+    if exists(cur,"market_realtime_5s_bars"):
+        cur.execute("""SELECT stock_code,SUM(trade_value_krw) AS tv,SUM(buy_volume) AS buy,
+                              SUM(sell_volume) AS sell,SUM(tick_count) AS ticks,SUM(gap_count) AS gaps,
+                              MAX(updated_at) AS updated_at
+                       FROM market_realtime_5s_bars
+                       WHERE stock_code=ANY(%s) AND bucket_time>=now()-interval '15 seconds'
+                       GROUP BY stock_code""",(list(codes),))
+        for r in cur.fetchall():
+            x=out.setdefault(r["stock_code"],{"source":"KIWOOM_0B"})
+            buy=float(r["buy"] or 0);sell=float(r["sell"] or 0);den=buy+sell
+            x.update({
+                "trade_value_15s_krw":float(r["tv"] or 0),
+                "buy_share_15s":buy/den if den else None,
+                "tick_count_15s":int(r["ticks"] or 0),
+                "gap_count_15s":int(r["gaps"] or 0),
+                "age_15s_sec":max(0,int((now-r["updated_at"]).total_seconds())) if r["updated_at"] else None
+            })
     return out
 
 
@@ -77,7 +94,10 @@ def learning_payload():
         "status":None,"segments":[],"notes":[],"daily_assessments":[],
     }
     with db() as c,c.cursor() as cur:
+        micro=latest_microstructure(cur,[x.get("code") for x in current.get("market_os_watchlist",[]) if x.get("code")])
         if not exists(cur,"market_os_learning_status"):
+            for x in current.get("market_os_watchlist",[]):
+                x["microstructure"]=micro.get(x.get("code"))
             current["learning"]=learning
             return current
         cur.execute("SELECT * FROM market_os_learning_status WHERE id=1")
@@ -118,7 +138,6 @@ def learning_payload():
                 {"date":r["d"].isoformat(),"count":r["n"],"focus":r["focus"],"prep":r["prep"]}
                 for r in cur.fetchall()
             ]
-        micro=latest_microstructure(cur,[x.get("code") for x in current.get("market_os_watchlist",[]) if x.get("code")])
 
     # Conservative, deterministic feedback. This is evidence for review, not an
     # automatic rewrite of thresholds.
@@ -178,13 +197,17 @@ def history_payload(code):
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT snapshot_time,stock_name,watch_tier,radar_score,theme_score,setup_score,
                                   catalyst_grade,trigger_state,market_stance,session_bucket,market_theme,
-                                  event_type,current_price_krw,change_pct,axis_reasons,risk_flags
+                                  event_type,current_price_krw,change_pct,
+                                  micro_trade_value_15s_krw,micro_buy_share_15s,micro_tick_count_15s,
+                                  micro_gap_count_15s,micro_strength,micro_buy_ratio,
+                                  axis_reasons,risk_flags
                            FROM market_os_assessment_snapshots
                            WHERE stock_code=%s AND rule_version=%s
                            ORDER BY snapshot_time DESC LIMIT 120""",(code,RULE_VERSION))
             for r in cur.fetchall():
                 x=dict(r);x["snapshot_time"]=r["snapshot_time"].isoformat()
                 if x.get("current_price_krw") is not None:x["current_price_krw"]=float(x["current_price_krw"])
+                if x.get("micro_trade_value_15s_krw") is not None:x["micro_trade_value_15s_krw"]=float(x["micro_trade_value_15s_krw"])
                 out["assessments"].append(x)
         if exists(cur,"market_os_assessment_outcomes"):
             cur.execute("""SELECT assessment_time,horizon,reference_price_krw,outcome_price_krw,
