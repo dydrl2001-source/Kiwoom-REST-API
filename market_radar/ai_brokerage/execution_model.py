@@ -132,18 +132,24 @@ def estimate_fill(
 
 def round_trip_result(entry: dict[str,Any], exit: dict[str,Any]) -> dict[str,Any]:
     ep=finite(entry.get("fill_price_krw")); xp=finite(exit.get("fill_price_krw"))
-    shares=min(int(entry.get("filled_shares") or 0),int(exit.get("filled_shares") or 0))
+    entry_shares=max(0,int(entry.get("filled_shares") or 0))
+    exit_shares=max(0,int(exit.get("filled_shares") or 0))
+    shares=min(entry_shares,exit_shares)
     if ep is None or xp is None or shares<=0:
         return {"status":"INCOMPLETE","shares":shares,"gross_return_pct":None,"net_return_pct":None}
     gross=(xp/ep-1.0)*100.0
-    entry_cost=float(entry.get("commission_krw") or 0)+float(entry.get("tax_krw") or 0)
-    exit_cost=float(exit.get("commission_krw") or 0)+float(exit.get("tax_krw") or 0)
+    raw_entry_cost=float(entry.get("commission_krw") or 0)+float(entry.get("tax_krw") or 0)
+    raw_exit_cost=float(exit.get("commission_krw") or 0)+float(exit.get("tax_krw") or 0)
+    entry_cost=raw_entry_cost*(shares/entry_shares) if entry_shares>0 else 0.0
+    exit_cost=raw_exit_cost*(shares/exit_shares) if exit_shares>0 else 0.0
     invested=ep*shares
     pnl=(xp-ep)*shares-entry_cost-exit_cost
     net=(pnl/invested*100.0) if invested>0 else None
     return {
         "status":"COMPLETE",
         "shares":shares,
+        "entry_filled_shares":entry_shares,
+        "exit_filled_shares":exit_shares,
         "gross_return_pct":gross,
         "net_return_pct":net,
         "gross_pnl_krw":(xp-ep)*shares,
