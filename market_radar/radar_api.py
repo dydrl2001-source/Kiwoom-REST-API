@@ -55,6 +55,7 @@ THEME_KEYWORDS = {
     "항공/여행": ["항공", "대한항공", "여객", "여행", "공항"],
     "정유/유가": ["정유", "유가", "WTI", "브렌트", "석유"],
     "화장품": ["화장품", "뷰티"],
+    "태양광/에너지": ["태양광", "솔라", "태양광 모듈", "폴리실리콘"],
     "금융": ["은행", "금융", "증권", "보험"],
 }
 
@@ -75,6 +76,8 @@ STOCK_THEME_HINTS = {
     "효성중공업":"전력/변압기/케이블","HD현대일렉트릭":"전력/변압기/케이블",
     "대한항공":"항공/여행",
     "현대차":"자동차/EV","기아":"자동차/EV",
+    "OCI홀딩스":"태양광/에너지","한화솔루션":"태양광/에너지",
+    "SK이노베이션":"2차전지/배터리",
 }
 
 def is_etf_like(name):
@@ -141,7 +144,8 @@ def stock_aliases(code, name):
         if x and str(x).strip():
             out.append(str(x).strip())
     if name:
-        compact = re.sub(r"[\s㈜()주식회사]+", "", str(name))
+        compact = str(name).replace("주식회사","").replace("㈜","")
+        compact = re.sub(r"[\s()]+", "", compact)
         if len(compact) >= 2 and compact not in out:
             out.append(compact)
     return out
@@ -657,7 +661,11 @@ def enrich_catalyst(cat, stock_name=None, official_sector=None):
     warnings=[]
     for d in cat.get("dart") or []:
         txt=d.get("report_nm") or ""
-        candidates.append((4,"DART","DART",txt,d,"VERIFIED"))
+        score,kind=evidence_strength(txt)
+        # DART verifies identity/source authenticity, not causal relevance.
+        # Generic filings remain weak; contract/earnings/approval text can score higher.
+        score=max(1,score)
+        candidates.append((score,kind if kind!="NONE" else "DART","DART",txt,d,"VERIFIED"))
     for n in cat.get("external_news") or []:
         txt=n.get("title") or ""
         q=identity_quality(stock_name,txt,"NEWS",official_sector)
