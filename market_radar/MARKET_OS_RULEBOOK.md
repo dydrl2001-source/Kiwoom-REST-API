@@ -193,3 +193,48 @@ child - parent complement
 상호작용 차수가 높을수록 더 많은 독립 episode, 종목 다양성, 거래일 수를 요구한다. 4-way interaction은 단일축보다 훨씬 엄격한 문턱을 통과해야 한다.
 
 또한 live 후보에 고차 interaction의 과거 성과를 표시하는 것은 **형성 이상 + 부모조건도 형성 이상**인 경우로 제한한다. 자동으로 Radar/Setup 점수를 바꾸지는 않는다.
+
+## Validation Gate v1.3 — Walk-forward Stability
+
+누적 표본에서 평균이 좋다는 사실만으로 live 규칙 후보를 승격하지 않는다. 같은 조건이 **시간을 나눠도 같은 방향으로 반복되는지**를 확인한 뒤에만 사람 검토 단계로 올린다.
+
+### 거래일 단위 분할
+
+- episode-anchor 표본을 거래일 기준으로 정렬한다.
+- 서로 다른 거래일이 4일 미만이면 walk-forward 판단을 하지 않는다.
+- 거래일 목록의 앞 절반을 `EARLY`, 뒤 절반을 `RECENT`로 사용한다.
+- 같은 거래일의 episode가 두 구간에 동시에 들어가는 것을 금지한다.
+- 상호작용의 parent-complement도 child와 **동일한 날짜 집합**에서 비교한다.
+
+### 승격 전 시간축 검증
+
+먼저 Validation Gate v1.2의 누적 조건을 통과해야 한다.
+
+- 대상 horizon: 30m / close / D+1
+- 평균·중앙값·양(+) 비율의 방향 일치
+- 단일축은 형성 이상
+- 상호작용은 child와 parent-complement 모두 형성 이상
+- 상호작용 Δ평균·Δ양(+)·ΔMAE 방향 일치
+
+그 다음 EARLY/RECENT를 다시 본다.
+
+- 두 기간 모두 최소 2거래일 이상이어야 한다.
+- interaction depth가 높을수록 각 기간의 N·종목 다양성 문턱을 높인다.
+- `STRENGTH` 후보는 두 기간 모두 평균 > 0, 중앙값 ≥ 0, 양(+) 비율 ≥ 50%를 요구한다.
+- `WEAKNESS` 후보는 두 기간 모두 평균 < 0, 중앙값 ≤ 0, 양(+) 비율 ≤ 50%를 요구한다.
+- 최근 효과가 누적 기준의 35%보다 작아지면 `WEAKENING`으로 보류한다.
+- 최근 평균 방향이 반대로 바뀌면 `REVERSAL`로 보류한다.
+- 상호작용은 EARLY/RECENT 각각에서도 parent-complement 대비 Δ평균·Δ양(+)·ΔMAE 방향이 유지되어야 한다.
+
+### 출력 상태
+
+- `STABLE`: 누적 조건과 시간분할 검증 모두 통과
+- `WEAKENING`: 방향은 유지하지만 최근 효과 크기가 너무 작아짐
+- `UNSTABLE`: 기간별 핵심지표 방향이 충분히 정렬되지 않음
+- `REVERSAL`: 최근 구간에서 효과 또는 interaction edge 방향이 반전
+- `INSUFFICIENT`: 기간별 표본·종목·거래일 또는 comparator가 부족
+
+`PROMOTE_REVIEW` / `SUPPRESS_REVIEW`는 walk-forward가 `STABLE`일 때만 유지한다. 나머지는 `HOLD`로 내려간다.
+
+이 검증은 **규칙 변경 권한이 없다.** live Radar / Theme / Setup / Catalyst / Trigger 점수와 주문 로직은 자동 수정하지 않는다.
+
