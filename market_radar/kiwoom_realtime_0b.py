@@ -72,6 +72,31 @@ CREATE TABLE IF NOT EXISTS market_realtime_minute_bars(
 CREATE INDEX IF NOT EXISTS idx_realtime_bar_code_time
  ON market_realtime_minute_bars(stock_code,minute_time DESC);
 
+CREATE TABLE IF NOT EXISTS market_realtime_5s_bars(
+  bucket_time TIMESTAMPTZ NOT NULL,
+  stock_code TEXT NOT NULL,
+  open_price NUMERIC,
+  high_price NUMERIC,
+  low_price NUMERIC,
+  close_price NUMERIC,
+  volume NUMERIC NOT NULL DEFAULT 0,
+  trade_value_krw NUMERIC NOT NULL DEFAULT 0,
+  buy_volume NUMERIC NOT NULL DEFAULT 0,
+  sell_volume NUMERIC NOT NULL DEFAULT 0,
+  tick_count INTEGER NOT NULL DEFAULT 0,
+  gap_count INTEGER NOT NULL DEFAULT 0,
+  last_strength DOUBLE PRECISION,
+  last_buy_ratio DOUBLE PRECISION,
+  last_cum_volume NUMERIC,
+  last_cum_turnover_raw TEXT,
+  last_exchange TEXT,
+  source TEXT NOT NULL DEFAULT 'KIWOOM_0B',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(bucket_time,stock_code)
+);
+CREATE INDEX IF NOT EXISTS idx_realtime_5s_code_time
+ ON market_realtime_5s_bars(stock_code,bucket_time DESC);
+
 CREATE TABLE IF NOT EXISTS kiwoom_realtime_status(
   id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
   updated_at TIMESTAMPTZ NOT NULL,
@@ -193,7 +218,10 @@ def seed_cumulative(codes):
 
 class Aggregator:
     def __init__(self):
-        self.pending={}
+        self.pending_minute={}
+        self.pending_5s={}
+        # Backward-compatible alias used by pure tests and simple diagnostics.
+        self.pending=self.pending_minute
         self.last_cum={}
         self.total_ticks=0
         self.total_gaps=0
@@ -202,6 +230,24 @@ class Aggregator:
         seeded=seed_cumulative(codes)
         for code,v in seeded.items():
             self.last_cum.setdefault(code,v)
+
+    @staticmethod
+    def _accumulate(store,key,time_key,ts,code,px,vol,signed_vol,gap,vals,cum):
+        p=store.get(key)
+        if p is None:
+            p={time_key:ts,"code":code,"open":px,"high":px,"low":px,"close":px,
+               "volume":0.0,"turnover":0.0,"buy_volume":0.0,"sell_volume":0.0,
+               "ticks":0,"gaps":0,"strength":None,"buy_ratio":None,"cum":None,
+               "cum_turnover_raw":None,"exchange":None}
+            store[key]=p
+        p["high"]=max(p["high"],px);p["low"]=min(p["low"],px);p["close"]=px
+        p["volume"]+=vol;p["turnover"]+=px*vol;p["ticks"]+=1;p["gaps"]+=gap
+        # Signed realtime volume is retained as an aggressor-side inference.
+        if signed_vol>0:p["buy_volume"]+=vol
+        elif signed_vol<0:p["sell_volume"]+=vol
+        p["strength"]=num(vals.get("228"));p["buy_ratio"]=num(vals.get("1032"))
+        p["cum"]=cum;p["cum_turnover_raw"]=str(vals.get("14") or "")[:48]
+        p["exchange"]=str(vals.get("9081") or "")[:20]
 
     def add(self,entry,received_at):
         if not isinstance(entry,dict) or str(entry.get("type"))!="0B":return
@@ -217,8 +263,6 @@ class Aggregator:
         if cum is not None:
             if prev is not None:
                 delta=cum-prev
-                # Same cumulative count is a duplicate. Negative means a session/reset,
-                # not negative trade activity.
                 if delta==0:return
                 if delta>0 and delta>vol+1e-9:gap=1
             self.last_cum[code]=cum
@@ -230,52 +274,64 @@ class Aggregator:
                 local=datetime.combine(local.date(),datetime.strptime(hhmmss,"%H%M%S").time(),tzinfo=KST)
             except ValueError:
                 pass
+
         minute=local.replace(second=0,microsecond=0).astimezone(timezone.utc)
-        key=(code,minute)
-        p=self.pending.get(key)
-        if p is None:
-            p={"minute":minute,"code":code,"open":px,"high":px,"low":px,"close":px,
-               "volume":0.0,"turnover":0.0,"buy_volume":0.0,"sell_volume":0.0,
-               "ticks":0,"gaps":0,"strength":None,"buy_ratio":None,"cum":None,
-               "cum_turnover_raw":None,"exchange":None}
-            self.pending[key]=p
-        p["high"]=max(p["high"],px);p["low"]=min(p["low"],px);p["close"]=px
-        p["volume"]+=vol;p["turnover"]+=px*vol;p["ticks"]+=1;p["gaps"]+=gap
-        # Kiwoom realtime tick volume convention uses sign for aggressor direction.
-        # We preserve this as an inference, while FID 228/1032 remain direct fields.
-        if signed_vol>0:p["buy_volume"]+=vol
-        elif signed_vol<0:p["sell_volume"]+=vol
-        p["strength"]=num(vals.get("228"));p["buy_ratio"]=num(vals.get("1032"))
-        p["cum"]=cum;p["cum_turnover_raw"]=str(vals.get("14") or "")[:48]
-        p["exchange"]=str(vals.get("9081") or "")[:20]
+        bucket5=local.replace(second=(local.second//5)*5,microsecond=0).astimezone(timezone.utc)
+        self._accumulate(self.pending_minute,(code,minute),"minute",minute,code,px,vol,signed_vol,gap,vals,cum)
+        self._accumulate(self.pending_5s,(code,bucket5),"bucket",bucket5,code,px,vol,signed_vol,gap,vals,cum)
         self.total_ticks+=1;self.total_gaps+=gap
 
     def flush(self):
-        if not self.pending:return 0
-        rows=list(self.pending.values());self.pending={}
+        if not self.pending_minute and not self.pending_5s:return 0
+        minute_rows=list(self.pending_minute.values())
+        five_rows=list(self.pending_5s.values())
+        self.pending_minute={};self.pending_5s={};self.pending=self.pending_minute
         with db() as c,c.cursor() as cur:
-            cur.executemany("""INSERT INTO market_realtime_minute_bars(
-              minute_time,stock_code,open_price,high_price,low_price,close_price,volume,trade_value_krw,
-              buy_volume,sell_volume,tick_count,gap_count,last_strength,last_buy_ratio,last_cum_volume,
-              last_cum_turnover_raw,last_exchange,updated_at)
-              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
-              ON CONFLICT(minute_time,stock_code) DO UPDATE SET
-                high_price=GREATEST(market_realtime_minute_bars.high_price,excluded.high_price),
-                low_price=LEAST(market_realtime_minute_bars.low_price,excluded.low_price),
-                close_price=excluded.close_price,
-                volume=market_realtime_minute_bars.volume+excluded.volume,
-                trade_value_krw=market_realtime_minute_bars.trade_value_krw+excluded.trade_value_krw,
-                buy_volume=market_realtime_minute_bars.buy_volume+excluded.buy_volume,
-                sell_volume=market_realtime_minute_bars.sell_volume+excluded.sell_volume,
-                tick_count=market_realtime_minute_bars.tick_count+excluded.tick_count,
-                gap_count=market_realtime_minute_bars.gap_count+excluded.gap_count,
-                last_strength=excluded.last_strength,last_buy_ratio=excluded.last_buy_ratio,
-                last_cum_volume=excluded.last_cum_volume,last_cum_turnover_raw=excluded.last_cum_turnover_raw,
-                last_exchange=excluded.last_exchange,updated_at=now()""",
-                [(r["minute"],r["code"],r["open"],r["high"],r["low"],r["close"],r["volume"],r["turnover"],
-                  r["buy_volume"],r["sell_volume"],r["ticks"],r["gaps"],r["strength"],r["buy_ratio"],r["cum"],
-                  r["cum_turnover_raw"],r["exchange"]) for r in rows])
-        return len(rows)
+            if minute_rows:
+                cur.executemany("""INSERT INTO market_realtime_minute_bars(
+                  minute_time,stock_code,open_price,high_price,low_price,close_price,volume,trade_value_krw,
+                  buy_volume,sell_volume,tick_count,gap_count,last_strength,last_buy_ratio,last_cum_volume,
+                  last_cum_turnover_raw,last_exchange,updated_at)
+                  VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
+                  ON CONFLICT(minute_time,stock_code) DO UPDATE SET
+                    high_price=GREATEST(market_realtime_minute_bars.high_price,excluded.high_price),
+                    low_price=LEAST(market_realtime_minute_bars.low_price,excluded.low_price),
+                    close_price=excluded.close_price,
+                    volume=market_realtime_minute_bars.volume+excluded.volume,
+                    trade_value_krw=market_realtime_minute_bars.trade_value_krw+excluded.trade_value_krw,
+                    buy_volume=market_realtime_minute_bars.buy_volume+excluded.buy_volume,
+                    sell_volume=market_realtime_minute_bars.sell_volume+excluded.sell_volume,
+                    tick_count=market_realtime_minute_bars.tick_count+excluded.tick_count,
+                    gap_count=market_realtime_minute_bars.gap_count+excluded.gap_count,
+                    last_strength=excluded.last_strength,last_buy_ratio=excluded.last_buy_ratio,
+                    last_cum_volume=excluded.last_cum_volume,last_cum_turnover_raw=excluded.last_cum_turnover_raw,
+                    last_exchange=excluded.last_exchange,updated_at=now()""",
+                    [(r["minute"],r["code"],r["open"],r["high"],r["low"],r["close"],r["volume"],r["turnover"],
+                      r["buy_volume"],r["sell_volume"],r["ticks"],r["gaps"],r["strength"],r["buy_ratio"],r["cum"],
+                      r["cum_turnover_raw"],r["exchange"]) for r in minute_rows])
+            if five_rows:
+                cur.executemany("""INSERT INTO market_realtime_5s_bars(
+                  bucket_time,stock_code,open_price,high_price,low_price,close_price,volume,trade_value_krw,
+                  buy_volume,sell_volume,tick_count,gap_count,last_strength,last_buy_ratio,last_cum_volume,
+                  last_cum_turnover_raw,last_exchange,updated_at)
+                  VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
+                  ON CONFLICT(bucket_time,stock_code) DO UPDATE SET
+                    high_price=GREATEST(market_realtime_5s_bars.high_price,excluded.high_price),
+                    low_price=LEAST(market_realtime_5s_bars.low_price,excluded.low_price),
+                    close_price=excluded.close_price,
+                    volume=market_realtime_5s_bars.volume+excluded.volume,
+                    trade_value_krw=market_realtime_5s_bars.trade_value_krw+excluded.trade_value_krw,
+                    buy_volume=market_realtime_5s_bars.buy_volume+excluded.buy_volume,
+                    sell_volume=market_realtime_5s_bars.sell_volume+excluded.sell_volume,
+                    tick_count=market_realtime_5s_bars.tick_count+excluded.tick_count,
+                    gap_count=market_realtime_5s_bars.gap_count+excluded.gap_count,
+                    last_strength=excluded.last_strength,last_buy_ratio=excluded.last_buy_ratio,
+                    last_cum_volume=excluded.last_cum_volume,last_cum_turnover_raw=excluded.last_cum_turnover_raw,
+                    last_exchange=excluded.last_exchange,updated_at=now()""",
+                    [(r["bucket"],r["code"],r["open"],r["high"],r["low"],r["close"],r["volume"],r["turnover"],
+                      r["buy_volume"],r["sell_volume"],r["ticks"],r["gaps"],r["strength"],r["buy_ratio"],r["cum"],
+                      r["cum_turnover_raw"],r["exchange"]) for r in five_rows])
+        return len(minute_rows)+len(five_rows)
 
 
 async def recv_json(ws):
