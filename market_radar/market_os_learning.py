@@ -42,6 +42,7 @@ from market_os_ruleset import evaluate as ruleset_evaluate, dry_run_summaries as
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
 SHADOW_LAB_ENABLED=os.getenv("MARKET_OS_SHADOW_LAB_ENABLED","1").strip().lower() in {"1","true","yes","on"}
+RULESET_DRY_RUN_ENABLED=os.getenv("MARKET_OS_RULESET_DRY_RUN_ENABLED","1").strip().lower() in {"1","true","yes","on"}
 KST=ZoneInfo("Asia/Seoul")
 
 SCHEMA=r"""
@@ -1616,6 +1617,8 @@ def refresh_adoption_dossiers():
 
 def capture_ruleset_dry_run_observations(limit_per_ruleset=800):
     """Evaluate active versioned candidate rulesets prospectively beside CONTROL."""
+    if not RULESET_DRY_RUN_ENABLED:
+        return {"inserted":0,"staled":0}
     inserted=0;staled=0
     with db() as c,c.cursor() as cur:
         if not table_exists(cur,"market_os_versioned_rulesets"):
@@ -1653,6 +1656,9 @@ def capture_ruleset_dry_run_observations(limit_per_ruleset=800):
                             "review_eligible":bool(rs["review_eligible"]),
                             "shadow_rule_enabled":bool(rs["shadow_rule_enabled"]),
                         },ensure_ascii=False)))
+                    cur.execute("""UPDATE market_os_shadow_decisions
+                                   SET manual_decision_state='DRY_RUN_STALE_SOURCE'
+                                   WHERE shadow_rule_id=%s""",(rs["source_shadow_rule_id"],))
                     staled+=1
                 continue
 
@@ -1693,6 +1699,8 @@ def capture_ruleset_dry_run_observations(limit_per_ruleset=800):
 
 def refresh_ruleset_dry_run_summaries():
     """Summarize versioned CONTROL vs CANDIDATE on resolved prospective outcomes."""
+    if not RULESET_DRY_RUN_ENABLED:
+        return 0
     written=0
     with db() as c,c.cursor() as cur:
         if not table_exists(cur,"market_os_versioned_rulesets"):
