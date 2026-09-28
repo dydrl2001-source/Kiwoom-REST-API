@@ -7,13 +7,14 @@ import secrets
 from pathlib import Path
 
 from fastapi import Header, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 import radar_api as base
 from web_research_engine import Config, ResearchError, enqueue, ensure_schema, status_payload
+from mobile_ui import MOBILE_HTML, MOBILE_MANIFEST, MOBILE_SW, MOBILE_ICON
 
 app = base.app
 
@@ -101,6 +102,29 @@ def root():
     html = getattr(base, "DASHBOARD_HTML_V2", None) or base.DASHBOARD_HTML
     script = '<script src="/assets/web-research.js" defer></script><script src="/assets/report-library.js" defer></script>'
     return HTMLResponse(html.replace("</body>", script + "</body>"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/mobile", response_class=HTMLResponse, include_in_schema=False)
+def mobile_root():
+    return HTMLResponse(MOBILE_HTML, headers={"Cache-Control":"no-store"})
+
+
+@app.get("/mobile/manifest.webmanifest", include_in_schema=False)
+def mobile_manifest():
+    return Response(MOBILE_MANIFEST, media_type="application/manifest+json",
+                    headers={"Cache-Control":"public,max-age=3600"})
+
+
+@app.get("/mobile/sw.js", include_in_schema=False)
+def mobile_service_worker():
+    return Response(MOBILE_SW, media_type="application/javascript",
+                    headers={"Cache-Control":"no-cache","Service-Worker-Allowed":"/mobile"})
+
+
+@app.get("/mobile/icon.svg", include_in_schema=False)
+def mobile_icon():
+    return Response(MOBILE_ICON, media_type="image/svg+xml",
+                    headers={"Cache-Control":"public,max-age=86400"})
 
 
 # Optional flow UI is independent of the original dashboard's rendering code.
