@@ -424,6 +424,61 @@ def _validation_candidates(segments,walk_forward_rows=None):
     return rows
 
 
+def _promotion_stage(segment,validation=None):
+    """Map current evidence to the registry lifecycle.
+
+    Automatic evidence may advance only through PROMOTION_CANDIDATE.
+    SHADOW_RULE is intentionally excluded and requires a separate manual action.
+    """
+    horizon=segment.get("horizon")
+    if horizon not in ("30m","close","D+1"):
+        return None
+
+    depth=segment.get("interaction_depth",_segment_depth(segment.get("segment_type")))
+    quality=segment.get("quality") or _quality(
+        segment.get("samples",0),segment.get("distinct_stocks",0),
+        segment.get("distinct_days",0),depth
+    )
+    qrank=_quality_rank(quality)
+    base={
+        "stage":"HYPOTHESIS","direction":"MIXED","review_action":"NONE",
+        "quality":quality,"reason_codes":[],
+    }
+    if qrank==0:
+        base["reason_codes"]=["EVIDENCE_EXPLORATORY"]
+        return base
+    if qrank==1:
+        base.update(stage="FORMING",reason_codes=["EVIDENCE_INITIAL"])
+        return base
+
+    cumulative=_validation_gate(segment)
+    if not cumulative or cumulative.get("status")=="HOLD":
+        base.update(
+            stage="FORMING",
+            direction=(cumulative or {}).get("direction","MIXED"),
+            reason_codes=(cumulative or {}).get("reason_codes",["CUMULATIVE_GATE_NOT_PASSED"])
+        )
+        return base
+
+    direction=cumulative.get("direction","MIXED")
+    review_action="PROMOTE" if direction=="STRENGTH" else "SUPPRESS" if direction=="WEAKNESS" else "NONE"
+    base.update(
+        stage="VALIDATED",direction=direction,review_action=review_action,
+        reason_codes=list(cumulative.get("reason_codes") or [])+["CUMULATIVE_GATE_PASSED"]
+    )
+    wf=(validation or {}).get("walk_forward") or {}
+    if wf.get("status")!="STABLE" or not wf.get("ready"):
+        base["reason_codes"]+=list(wf.get("reason_codes") or ["WALK_FORWARD_NOT_STABLE"])
+        return base
+
+    base.update(stage="STABLE")
+    base["reason_codes"]+=["WALK_FORWARD_STABLE"]
+    if qrank>=3 and (validation or {}).get("status") in ("PROMOTE_REVIEW","SUPPRESS_REVIEW"):
+        base.update(stage="PROMOTION_CANDIDATE")
+        base["reason_codes"]+=["SUFFICIENT_EVIDENCE_FOR_HUMAN_REVIEW"]
+    return base
+
+
 def latest_microstructure(cur,codes):
     out={}
     if not codes:return out
