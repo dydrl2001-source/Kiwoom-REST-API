@@ -149,7 +149,7 @@
       "WEAK_CONFIRM": "체결강도 80 미만 AND 최근 15초 관측 매수체결 비중 45% 미만",
       "NO_DATA": "gap-free 15초 0B 자료가 없거나 판독 불가"
     },
-    "comparison": "복합조건의 평균·양(+)비율·MFE·MAE를 더 단순한 사전등록 부모조건과 비교해 Δ를 계산한다.",
+    "comparison": "복합조건(child)을 더 단순한 부모조건에서 child를 제외한 complement와 비교해 Δ평균수익률·Δ양(+)비율·ΔMFE·ΔMAE를 계산한다.",
     "safeguards": [
       "임의의 모든 변수 조합을 탐색하지 않고 사전등록 interaction만 계산한다",
       "상위 interaction일수록 더 많은 표본·종목·거래일을 요구한다",
