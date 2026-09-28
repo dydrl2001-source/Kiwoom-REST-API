@@ -70,6 +70,27 @@ class CoreTests(unittest.TestCase):
   h={'319660':[sample(0,0),sample(30,100),sample(60,200)],'123456':[sample(-30,0,code='123456'),sample(30,100,code='123456'),sample(60,200,code='123456')]}
   rows=[{**fc.metrics(v,NOW+timedelta(seconds=60)),'sector':'반도체','segment':c} for c,v in h.items()]
   self.assertEqual(fc.group_rows(rows,h)[1]['common_stocks'],1)
+ def test_candidate_requires_recent_valid_delta(self):
+  rows=[{**sample(60,300),'recent_trade':False,'delta_state':'OK','interval_turnover_krw':200,
+         'query_rank':1,'trade_rank':1,'burst_multiple':5,'market_theme':'AI','chart':{'state':'NEW_HIGH'}}]
+  self.assertEqual(fc.candidate_watchlist(rows,{'series':[]}),[])
+ def test_candidate_score_is_observation_not_trade_action(self):
+  rows=[{**sample(60,300),'recent_trade':True,'delta_state':'OK','interval_turnover_krw':200,
+         'five_min_turnover_krw':500,'query_rank':5,'trade_rank':7,'burst_multiple':3.5,
+         'market_theme':'AI 반도체','chart':{'state':'BREAKOUT_HOLD','state_ko':'돌파 후 지지','minute_trend':'상승 유지'},
+         'research':None,'research_stale':False,'event_type':None,'research_state':'ANALYSIS_PENDING'}]
+  rotation={'series':[{'name':'AI 반도체','change_pp':2.0}]}
+  out=fc.candidate_watchlist(rows,rotation)
+  self.assertTrue(out);self.assertIn(out[0]['label'],('관찰 우선','조건 확인','추적'))
+  self.assertNotIn('buy',json.dumps(out).lower());self.assertNotIn('매수',json.dumps(out))
+ def test_damaged_chart_penalizes_candidate(self):
+  base={**sample(60,300),'recent_trade':True,'delta_state':'OK','interval_turnover_krw':200,
+        'query_rank':5,'trade_rank':7,'burst_multiple':3.5,'market_theme':'AI 반도체',
+        'research':None,'research_stale':False,'event_type':None,'research_state':'ANALYSIS_PENDING'}
+  good=fc.candidate_watchlist([{**base,'chart':{'state':'BREAKOUT_HOLD'}}],{'series':[]})
+  bad=fc.candidate_watchlist([{**base,'chart':{'state':'BREAKOUT_FAIL'}}],{'series':[]})
+  self.assertTrue(good)
+  self.assertTrue((not bad) or good[0]['attention_score']>bad[0]['attention_score'])
  def test_report_not_headline_classifier(self):
   r={'text':'대한항공 기사에 HBM이 나옵니다.','citations':[{}]}
   self.assertIsNone(fc.event_from_report(r))
