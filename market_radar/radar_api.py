@@ -531,6 +531,11 @@ def compact_external_report(report, completed_at=None, model=None):
     body=re.sub(r"\[[^\]]{0,40}\]"," ",body)
     body=re.sub(r"\s+"," ",body).strip()
     summary=(body[:190]+"…") if len(body)>190 else body
+    age_sec=None
+    try:
+        age_sec=int((datetime.now(timezone.utc)-completed_at).total_seconds()) if completed_at else None
+    except Exception:
+        age_sec=None
     return {
         "summary":summary or "인용 포함 외부 조사 보고서",
         "event_type":event,
@@ -538,6 +543,8 @@ def compact_external_report(report, completed_at=None, model=None):
         "source_count":len(clean.get("sources") or []),
         "sources":(clean.get("sources") or [])[:3],
         "completed_at":iso(completed_at),
+        "age_sec":age_sec,
+        "stale":bool(age_sec is not None and age_sec>21600),
         "model":model,
         "status":"CITED_REPORT"
     }
@@ -569,6 +576,7 @@ def build_rank_history(cur, current_time, codes):
             out[code]["best_today"]=best
             out[code]["first_today"]=iso(first_seen)
             out[code]["seen_today"]=int(count or 0)
+            out[code]["had_earlier"]=bool(first_seen and first_seen < current_time-timedelta(minutes=2))
     return out
 
 
@@ -584,8 +592,8 @@ def apply_rank_movement(row, history):
         if delta>0:movement=f"▲{delta}";kind="UP"
         elif delta<0:movement=f"▼{abs(delta)}";kind="DOWN"
     elif current is not None:
-        # If it existed around 5 minutes ago, this is a re-entry; otherwise a new top-list appearance.
-        if five is not None:movement="RE";kind="REENTRY"
+        # If it was seen materially earlier today but vanished from the recent comparison window, call it re-entry.
+        if five is not None or h.get("had_earlier"):movement="RE";kind="REENTRY"
         else:movement="NEW";kind="NEW"
     row["rank_history"]={
         **h,"delta_30s":delta,"movement":movement,"movement_kind":kind,
