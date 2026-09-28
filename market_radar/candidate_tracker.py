@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS radar_candidate_episodes(
   last_score INTEGER NOT NULL,
   peak_score INTEGER NOT NULL,
   entry_price_krw NUMERIC,
+  entry_exchange_at TIMESTAMPTZ,
   entry_change_pct DOUBLE PRECISION,
   primary_type TEXT,
   watch_types JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS radar_candidate_episodes(
   risk_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
   UNIQUE(stock_code,started_at)
 );
+ALTER TABLE radar_candidate_episodes ADD COLUMN IF NOT EXISTS entry_exchange_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_episode_active
   ON radar_candidate_episodes(stock_code) WHERE status='ACTIVE';
 CREATE INDEX IF NOT EXISTS idx_candidate_episode_start
@@ -183,32 +185,42 @@ def valid_price(value):
 
 
 def quote_at_or_after(cur, code, target):
+    """Use only a quote whose exchange trade time advanced past the horizon."""
     cur.execute(
-        """SELECT batch_time,NULLIF(payload->>'price_krw','')::double precision AS price
+        """SELECT batch_time,
+                  NULLIF(payload->>'exchange_at','')::timestamptz AS exchange_at,
+                  NULLIF(payload->>'price_krw','')::double precision AS price
            FROM radar_flow_quotes
            WHERE stock_code=%s
              AND batch_time >= %s
              AND batch_time <= %s
+             AND payload->>'exchange_at' IS NOT NULL
+             AND NULLIF(payload->>'exchange_at','')::timestamptz >= %s
+             AND NULLIF(payload->>'exchange_at','')::timestamptz <= %s
              AND payload->>'price_krw' IS NOT NULL
              AND NULLIF(payload->>'price_krw','')::double precision > 0
-           ORDER BY batch_time
+           ORDER BY NULLIF(payload->>'exchange_at','')::timestamptz,batch_time
            LIMIT 1""",
-        (code, target, target+timedelta(seconds=MAX_HORIZON_DELAY_SECONDS)),
+        (code,target,target+timedelta(seconds=MAX_HORIZON_DELAY_SECONDS),
+         target,target+timedelta(seconds=MAX_HORIZON_DELAY_SECONDS)),
     )
     return cur.fetchone()
 
-
 def path_metrics(cur, code, started_at, end_at, entry_price):
     cur.execute(
-        """SELECT batch_time,NULLIF(payload->>'price_krw','')::double precision AS price
+        """SELECT batch_time,
+                  NULLIF(payload->>'exchange_at','')::timestamptz AS exchange_at,
+                  NULLIF(payload->>'price_krw','')::double precision AS price
            FROM radar_flow_quotes
            WHERE stock_code=%s
              AND batch_time >= %s
              AND batch_time <= %s
+             AND payload->>'exchange_at' IS NOT NULL
+             AND NULLIF(payload->>'exchange_at','')::timestamptz >= %s
              AND payload->>'price_krw' IS NOT NULL
              AND NULLIF(payload->>'price_krw','')::double precision > 0
-           ORDER BY batch_time""",
-        (code, started_at, end_at),
+           ORDER BY NULLIF(payload->>'exchange_at','')::timestamptz,batch_time""",
+        (code,started_at,end_at,started_at),
     )
     prices=[safe_float(r["price"]) for r in cur.fetchall()]
     prices=[x for x in prices if x is not None and x > 0]
@@ -218,7 +230,6 @@ def path_metrics(cur, code, started_at, end_at, entry_price):
     excursions=[pct(x,entry) for x in prices]
     excursions=[x for x in excursions if x is not None]
     return (max(excursions),min(excursions)) if excursions else (None,None)
-
 
 def active_episode_map(cur):
     cur.execute("""SELECT id,stock_code,started_at,last_seen_at,entry_price_krw
@@ -244,6 +255,9 @@ def sync_episodes(cur, sample_time, candidates, source_rows):
         )
         last=cur.fetchone()
         ended=(last["snapshot_time"] if last else episode["last_seen_at"]) or sample_time
+        # Tolerate one delayed/missed 30-second ranking sample before ending an episode.
+        if (sample_time-ended).total_seconds() <= 75:
+            continue
         exit_price=valid_price(last["price_krw"] if last else None)
         cur.execute("""UPDATE radar_candidate_episodes
                        SET status='CLOSED',ended_at=%s,last_seen_at=LEAST(last_seen_at,%s)
@@ -276,15 +290,15 @@ def sync_episodes(cur, sample_time, candidates, source_rows):
         cur.execute(
             """INSERT INTO radar_candidate_episodes(
                  stock_code,stock_name,started_at,last_seen_at,status,candidate_version,
-                 entry_score,last_score,peak_score,entry_price_krw,entry_change_pct,
+                 entry_score,last_score,peak_score,entry_price_krw,entry_exchange_at,entry_change_pct,
                  primary_type,watch_types,market_theme,event_type,chart_state,
                  query_rank,trade_rank,reasons,risk_flags)
-               VALUES(%s,%s,%s,%s,'ACTIVE',%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)
+               VALUES(%s,%s,%s,%s,'ACTIVE',%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)
                ON CONFLICT(stock_code,started_at) DO NOTHING
                RETURNING id""",
             (code,str(x.get("name") or code)[:80],sample_time,sample_time,
              str(x.get("candidate_version") or "unknown")[:80],
-             score,score,score,entry_price,safe_float(x.get("change_pct")),
+             score,score,score,entry_price,dt(src.get("exchange_at")),safe_float(x.get("change_pct")),
              str(x.get("primary_type") or "")[:80],
              json.dumps(x.get("watch_types") or [],ensure_ascii=False),
              str(x.get("market_theme") or "")[:160] or None,
@@ -330,7 +344,7 @@ def update_horizon_outcomes(cur, sample_time):
                         SET {prefix}_state='READY',{prefix}_at=%s,{prefix}_price_krw=%s,
                             {ret_col}=%s,{mfe_col}=%s,{mae_col}=%s,updated_at=now()
                         WHERE episode_id=%s""",
-                    (q["batch_time"],q["price"],pct(q["price"],entry),mfe,mae,e["id"]),
+                    (q["exchange_at"],q["price"],pct(q["price"],entry),mfe,mae,e["id"]),
                 )
             elif sample_time >= target+timedelta(seconds=MAX_HORIZON_DELAY_SECONDS):
                 cur.execute(
@@ -357,12 +371,17 @@ def snapshot():
         return "WAITING_FOR_SAMPLE"
 
     candidates=payload.get("watch_candidates") or []
+    source_rows=payload.get("rows") or []
     if payload.get("status")!="RECENT_TRADES":
-        set_status("NO_RECENT_TRADE",sample_time,len(candidates),0,
-                   note="market sample exists but recent exchange trade is not confirmed")
+        with db() as c,c.cursor() as cur:
+            sync_episodes(cur,sample_time,[],source_rows)
+            update_horizon_outcomes(cur,sample_time)
+            active,done=tracker_counts(cur)
+        set_status("NO_RECENT_TRADE",sample_time,0,0,active,done,
+                   "market sample exists but recent exchange trade is not confirmed")
         return "NO_RECENT_TRADE"
 
-    source_rows=payload.get("rows") or []
+
     source_by_code={r.get("code"):r for r in source_rows}
     rows=[]
     for x in candidates:
