@@ -28,6 +28,15 @@ def install(app,authorize):
         except Exception:
             raise HTTPException(503,detail="MARKET_OS_DATA_NOT_READY") from None
 
+    @app.get("/api/market-os/live-health")
+    def market_os_live_health(x_dashboard_token:str|None=Header(None)):
+        authorize(x_dashboard_token)
+        try:
+            from market_os_live_validation import payload
+            return JSONResponse(jsonable_encoder(payload()),headers={"Cache-Control":"no-store"})
+        except Exception:
+            raise HTTPException(503,detail="MARKET_OS_LIVE_HEALTH_NOT_READY") from None
+
     @app.get("/api/market-os/history/{code}")
     def market_os_history(code:str,x_dashboard_token:str|None=Header(None)):
         authorize(x_dashboard_token)
