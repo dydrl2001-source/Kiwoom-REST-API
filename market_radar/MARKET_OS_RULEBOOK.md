@@ -238,3 +238,72 @@ child - parent complement
 
 이 검증은 **규칙 변경 권한이 없다.** live Radar / Theme / Setup / Catalyst / Trigger 점수와 주문 로직은 자동 수정하지 않는다.
 
+## Promotion Registry v1.4 — Hypothesis Lifecycle
+
+Market OS가 발견한 조건은 화면에 잠깐 나타났다 사라지는 숫자가 아니라 **검증 이력을 가진 가설 객체**로 관리한다.
+
+### 자동 생애주기
+
+```text
+HYPOTHESIS
+  ↓
+FORMING
+  ↓
+VALIDATED
+  ↓
+STABLE
+  ↓
+PROMOTION_CANDIDATE
+```
+
+자동 학습은 여기까지다.
+
+`SHADOW_RULE`은 Promotion Registry가 스스로 만들 수 없다. 사람의 별도 승인 절차를 거친 경우에만 사용할 수 있도록 필드만 준비한다.
+
+### 단계 정의
+
+- `HYPOTHESIS`: 아직 탐색 품질. 관찰은 하지만 규칙 후보로 보지 않는다.
+- `FORMING`: 초기 품질이거나, 표본은 형성됐지만 누적 Validation Gate를 통과하지 못했다.
+- `VALIDATED`: 평균·중앙값·양(+) 비율, 필요 시 parent-complement까지 누적 검증을 통과했다. 아직 시간축 안정성이 확보되지 않았을 수 있다.
+- `STABLE`: 누적 검증과 EARLY/RECENT walk-forward 방향 일치를 통과했지만, 전체 품질이 `충분`까지 오르지 않았다.
+- `PROMOTION_CANDIDATE`: `충분` 품질 + 누적 검증 + walk-forward `STABLE`을 모두 통과한 사람 검토 대상.
+- `SHADOW_RULE`: 수동 승인 후 별도 shadow A/B 실험에 사용하는 단계. 자동 전이 금지.
+
+### 방향과 행동은 단계와 분리한다
+
+Registry는 조건의 생애주기와 함께 두 값을 별도로 저장한다.
+
+- `direction`: STRENGTH / WEAKNESS / MIXED
+- `review_action`: PROMOTE / SUPPRESS / NONE
+
+따라서 약한 조건도 검증을 충분히 통과하면 `PROMOTION_CANDIDATE` 단계에서 `SUPPRESS` 검토 대상으로 올라올 수 있다. 여기서 promotion은 “규칙으로 승격할 가치가 있는 가설”이라는 의미이며, 반드시 점수를 올린다는 뜻이 아니다.
+
+### 비단조적 검증
+
+과학적 검증 단계는 한 번 올라가면 영구히 고정되는 계급이 아니다.
+
+예를 들어 과거에는 `STABLE`이었지만 최근 데이터에서 반전되면 현재 단계는 다시 `VALIDATED` 또는 `FORMING`으로 내려갈 수 있다. 이 하향 전이도 실패가 아니라 새로운 증거다.
+
+단, 이미 사람이 승인한 `SHADOW_RULE`은 자동 refresh가 단계 자체를 덮어쓰지 않는다. 대신 최신 성과·방향·근거만 갱신해 재검토할 수 있게 한다.
+
+### 감사 가능성
+
+현재 상태는 `market_os_promotion_registry`에 저장한다.
+
+단계가 처음 발견되거나 바뀌거나 방향/행동이 바뀌면 `market_os_promotion_events`에 별도 이벤트를 남긴다.
+
+기록 항목:
+- candidate key
+- 이전 단계 / 현재 단계
+- 방향 / review action
+- 누적 N·종목 수·거래일 수
+- 품질 등급
+- walk-forward 상태
+- EARLY / RECENT 평균
+- interaction edge
+- reason codes
+
+Registry refresh는 후보를 삭제하지 않는다. 현재 60일 학습창에서 보이지 않는 항목은 `active=false`로 남겨 과거 이력을 보존한다.
+
+이 단계 역시 live 점수, 주문, 실전 비중을 자동 변경하지 않는다.
+
