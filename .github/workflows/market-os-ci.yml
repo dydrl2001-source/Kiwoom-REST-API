@@ -24,7 +24,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: python -m pip install --disable-pip-version-check "psycopg[binary]" requests websockets
+        run: python -m pip install --disable-pip-version-check fastapi uvicorn "psycopg[binary]" requests telethon websockets
 
       - name: Compile Market OS Python
         run: |
