@@ -41,6 +41,20 @@ class RealtimePureTests(unittest.TestCase):
         self.assertEqual(vals[0]['open'],80000)
         self.assertEqual(vals[1]['open'],80100)
 
+    def test_reconnect_baseline_jump_is_not_live_gap(self):
+        a=rt.Aggregator()
+        a.last_cum['005930']=100
+        a.baseline_codes.add('005930')
+        t=datetime(2026,9,28,1,30,1,tzinfo=timezone.utc)
+        a.add({'type':'0B','item':'005930','values':{'10':'80000','15':'+10','13':'140'}},t)
+        p=next(iter(a.pending.values()))
+        self.assertEqual(p['gaps'],0)
+        self.assertEqual(a.total_gaps,0)
+        a.add({'type':'0B','item':'005930','values':{'10':'80100','15':'+10','13':'180'}},t)
+        p=next(iter(a.pending.values()))
+        self.assertEqual(p['gaps'],1)
+        self.assertEqual(a.total_gaps,1)
+
     def test_duplicate_cumulative_volume_is_skipped(self):
         a=rt.Aggregator()
         t=datetime(2026,9,28,1,30,1,tzinfo=timezone.utc)
