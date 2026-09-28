@@ -263,13 +263,133 @@ def _validation_gate(segment):
     }
 
 
-def _validation_candidates(segments):
+def _walk_forward_gate(segment,windows,direction):
+    """Require time-split persistence before a review candidate can advance."""
+    by_name={x.get("window_name"):x for x in (windows or [])}
+    early=by_name.get("EARLY");recent=by_name.get("RECENT")
+    if not early or not recent:
+        return {
+            "status":"INSUFFICIENT","ready":False,
+            "reason_codes":["WALK_FORWARD_WINDOWS_MISSING"],
+            "early":early,"recent":recent,
+        }
+
+    depth=segment.get("interaction_depth",_segment_depth(segment.get("segment_type")))
+    min_samples={1:10,2:14,3:18,4:22}.get(depth,22)
+    min_stocks={1:3,2:4,3:5,4:6}.get(depth,6)
+
+    def diverse(w):
+        return (int(w.get("samples") or 0)>=min_samples
+                and int(w.get("distinct_stocks") or 0)>=min_stocks
+                and int(w.get("distinct_days") or 0)>=2)
+
+    if not diverse(early) or not diverse(recent):
+        return {
+            "status":"INSUFFICIENT","ready":False,
+            "reason_codes":["WALK_FORWARD_DIVERSITY_LOW"],
+            "early":early,"recent":recent,
+        }
+
+    def aligned(w):
+        avg=w.get("avg_return_pct");med=w.get("median_return_pct");pos=w.get("positive_rate")
+        if avg is None or med is None or pos is None:
+            return False
+        if direction=="STRENGTH":
+            return avg>0 and med>=0 and pos>=0.50
+        if direction=="WEAKNESS":
+            return avg<0 and med<=0 and pos<=0.50
+        return False
+
+    early_ok=aligned(early);recent_ok=aligned(recent)
+    if not recent_ok:
+        avg=recent.get("avg_return_pct")
+        reversed_sign=(direction=="STRENGTH" and avg is not None and avg<0) or (
+            direction=="WEAKNESS" and avg is not None and avg>0
+        )
+        return {
+            "status":"REVERSAL" if reversed_sign else "UNSTABLE","ready":False,
+            "reason_codes":["RECENT_DIRECTION_REVERSED" if reversed_sign else "RECENT_DIRECTION_WEAK"],
+            "early":early,"recent":recent,
+        }
+    if not early_ok:
+        return {
+            "status":"UNSTABLE","ready":False,
+            "reason_codes":["EARLY_DIRECTION_WEAK"],
+            "early":early,"recent":recent,
+        }
+
+    full_threshold=.50 if direction=="STRENGTH" else .30
+    recent_avg=abs(float(recent.get("avg_return_pct") or 0))
+    if recent_avg < full_threshold*.35:
+        return {
+            "status":"WEAKENING","ready":False,
+            "reason_codes":["RECENT_EFFECT_TOO_SMALL"],
+            "early":early,"recent":recent,
+        }
+
+    if depth>=2:
+        comp_min=max(8,min_samples//2)
+        comp_stocks=max(3,min_stocks-1)
+        for name,w in (("EARLY",early),("RECENT",recent)):
+            if (int(w.get("comparator_samples") or 0)<comp_min
+                    or int(w.get("comparator_stocks") or 0)<comp_stocks
+                    or int(w.get("comparator_days") or 0)<2):
+                return {
+                    "status":"INSUFFICIENT","ready":False,
+                    "reason_codes":[f"{name}_COMPARATOR_DIVERSITY_LOW"],
+                    "early":early,"recent":recent,
+                }
+            d_avg=w.get("delta_avg_return_pct")
+            d_pos=w.get("delta_positive_rate_pp")
+            d_mae=w.get("delta_mae_pct")
+            if direction=="STRENGTH":
+                edge_ok=(d_avg is not None and d_avg>0
+                         and d_pos is not None and d_pos>0
+                         and (d_mae is None or d_mae>=0))
+            else:
+                edge_ok=(d_avg is not None and d_avg<0
+                         and d_pos is not None and d_pos<0
+                         and (d_mae is None or d_mae<=0))
+            if not edge_ok:
+                return {
+                    "status":"REVERSAL" if name=="RECENT" else "UNSTABLE",
+                    "ready":False,
+                    "reason_codes":[f"{name}_EDGE_DIRECTION_MISMATCH"],
+                    "early":early,"recent":recent,
+                }
+
+    early_avg=abs(float(early.get("avg_return_pct") or 0))
+    retention=(recent_avg/early_avg) if early_avg>1e-9 else None
+    return {
+        "status":"STABLE","ready":True,
+        "retention_ratio":retention,
+        "reason_codes":["EARLY_RECENT_DIRECTION_ALIGNED","WALK_FORWARD_DIVERSITY_OK"],
+        "early":early,"recent":recent,
+    }
+
+
+def _validation_candidates(segments,walk_forward_rows=None):
     """Return review-worthy shadow evidence without altering the live engine."""
+    wf_index=defaultdict(list)
+    for w in walk_forward_rows or []:
+        wf_index[(w.get("segment_type"),w.get("segment_value"),w.get("horizon"))].append(w)
+
     rows=[]
     for s in segments:
         gate=_validation_gate(s)
         if not gate:
             continue
+        key=(s.get("segment_type"),s.get("segment_value"),s.get("horizon"))
+        wf=None
+        if gate.get("direction") in ("STRENGTH","WEAKNESS"):
+            wf=_walk_forward_gate(s,wf_index.get(key),gate["direction"])
+            if gate.get("status") in ("PROMOTE_REVIEW","SUPPRESS_REVIEW"):
+                if wf.get("ready"):
+                    gate["reason_codes"]=gate.get("reason_codes",[])+["WALK_FORWARD_STABLE"]
+                else:
+                    gate["status"]="HOLD"
+                    gate["readiness"]="WAIT_WALK_FORWARD"
+                    gate["reason_codes"]=gate.get("reason_codes",[])+wf.get("reason_codes",[])
         row={
             "segment_type":s.get("segment_type"),
             "segment_value":s.get("segment_value"),
@@ -287,19 +407,21 @@ def _validation_candidates(segments):
             "edge_positive_rate_pp":s.get("edge_positive_rate_pp"),
             "edge_mae_pct":s.get("edge_mae_pct"),
             "baseline":s.get("baseline"),
+            "walk_forward":wf,
             **gate,
         }
         rows.append(row)
     priority={"PROMOTE_REVIEW":0,"SUPPRESS_REVIEW":1,"HOLD":2}
+    stability={"STABLE":0,"WEAKENING":1,"UNSTABLE":2,"REVERSAL":3,"INSUFFICIENT":4}
     rows.sort(key=lambda x:(
         priority.get(x["status"],9),
+        stability.get((x.get("walk_forward") or {}).get("status"),9),
         -_quality_rank(x.get("quality")),
         -x.get("interaction_depth",1),
         -x.get("samples",0),
         {"close":0,"D+1":1,"30m":2}.get(x.get("horizon"),9)
     ))
     return rows
-
 
 
 def latest_microstructure(cur,codes):
@@ -352,10 +474,12 @@ def learning_payload():
         "mode":"SHADOW_LEARNING",
         "notice":"성과를 자동 측정하고 조건별 차이를 학습하지만, 충분한 표본 전에는 규칙 임계값을 자동 변경하지 않습니다.",
         "status":None,"segments":[],"interactions":[],"validation_candidates":[],
-        "validation_summary":{"promote_review":0,"suppress_review":0,"hold":0},
+        "validation_summary":{"promote_review":0,"suppress_review":0,"hold":0,
+                              "stable":0,"weakening":0,"reversal":0,"insufficient":0},
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
+    walk_forward_rows=[]
     with db() as c,c.cursor() as cur:
         micro=latest_microstructure(cur,[x.get("code") for x in current.get("market_os_watchlist",[]) if x.get("code")])
         if not exists(cur,"market_os_learning_status"):
@@ -405,6 +529,19 @@ def learning_payload():
                                   child_avg_mae_pct,comparator_avg_mae_pct,delta_mae_pct
                            FROM market_os_interaction_edges""")
             edge_rows=[dict(r) for r in cur.fetchall()]
+        if exists(cur,"market_os_walk_forward_windows"):
+            cur.execute("""SELECT segment_type,segment_value,horizon,window_name,start_day,end_day,
+                                  samples,distinct_stocks,distinct_days,avg_return_pct,median_return_pct,
+                                  positive_rate,avg_mfe_pct,avg_mae_pct,comparator_samples,
+                                  comparator_stocks,comparator_days,comparator_avg_return_pct,
+                                  comparator_positive_rate,comparator_avg_mae_pct,delta_avg_return_pct,
+                                  delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_walk_forward_windows""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["start_day"]=r["start_day"].isoformat() if r["start_day"] else None
+                x["end_day"]=r["end_day"].isoformat() if r["end_day"] else None
+                walk_forward_rows.append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
@@ -418,11 +555,15 @@ def learning_payload():
             ]
 
     learning["interactions"]=_enrich_edges(learning["segments"],edge_rows)
-    learning["validation_candidates"]=_validation_candidates(learning["segments"])
+    learning["validation_candidates"]=_validation_candidates(learning["segments"],walk_forward_rows)
     learning["validation_summary"]={
         "promote_review":sum(x["status"]=="PROMOTE_REVIEW" for x in learning["validation_candidates"]),
         "suppress_review":sum(x["status"]=="SUPPRESS_REVIEW" for x in learning["validation_candidates"]),
         "hold":sum(x["status"]=="HOLD" for x in learning["validation_candidates"]),
+        "stable":sum((x.get("walk_forward") or {}).get("status")=="STABLE" for x in learning["validation_candidates"]),
+        "weakening":sum((x.get("walk_forward") or {}).get("status")=="WEAKENING" for x in learning["validation_candidates"]),
+        "reversal":sum((x.get("walk_forward") or {}).get("status")=="REVERSAL" for x in learning["validation_candidates"]),
+        "insufficient":sum((x.get("walk_forward") or {}).get("status")=="INSUFFICIENT" for x in learning["validation_candidates"]),
     }
 
     # Conservative, deterministic feedback. This is evidence for review, not an
