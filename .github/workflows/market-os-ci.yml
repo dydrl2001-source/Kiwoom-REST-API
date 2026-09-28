@@ -45,6 +45,7 @@ jobs:
             market_radar/market_os_store.py \
             market_radar/market_os_routes.py \
             market_radar/market_os_live_validation.py \
+            market_radar/market_os_shadow.py \
             market_radar/kiwoom_realtime_0b.py
 
       - name: Run Market OS unit tests
@@ -76,3 +77,4 @@ jobs:
           bash -n market_radar/local/check_market_os_live.sh
           bash -n market_radar/local/launch_market_os_live.sh
           bash -n market_radar/local/check_market_os_learning.sh
+          bash -n market_radar/local/shadow_rule_admin.sh
