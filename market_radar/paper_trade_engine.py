@@ -316,7 +316,9 @@ def update_status():
         cur.execute("SELECT COUNT(*) AS n FROM radar_paper_trades WHERE status='OPEN'")
         open_count=int(cur.fetchone()["n"] or 0)
         cur.execute("""SELECT COUNT(*) AS n FROM radar_paper_trades
-                       WHERE closed_at>=(now() AT TIME ZONE 'Asia/Seoul')::date AT TIME ZONE 'Asia/Seoul'""")
+                       WHERE closed_at IS NOT NULL
+                         AND (closed_at AT TIME ZONE 'Asia/Seoul')::date
+                             =(now() AT TIME ZONE 'Asia/Seoul')::date""")
         closed_today=int(cur.fetchone()["n"] or 0)
         cur.execute("""INSERT INTO radar_paper_status(id,updated_at,status,open_count,closed_today,note)
                        VALUES(1,now(),'OK',%s,%s,%s)
