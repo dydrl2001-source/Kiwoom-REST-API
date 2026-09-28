@@ -115,7 +115,7 @@ if [ "$ok" -ne 1 ]; then
   echo "ERROR: 0B did not reach connected + tick state within 120 seconds."
   echo "Realtime will be turned back OFF; the backup remains at $backup."
   set_env KIWOOM_REALTIME_ENABLED 0
-  docker compose up -d --no-deps kiwoom-realtime
+  docker compose up -d --force-recreate --no-deps kiwoom-realtime radar-api
   docker compose logs --tail=80 kiwoom-realtime || true
   exit 3
 fi
