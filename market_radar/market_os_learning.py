@@ -98,6 +98,9 @@ CREATE TABLE IF NOT EXISTS market_os_learning_segments (
     segment_value       TEXT NOT NULL,
     horizon             TEXT NOT NULL,
     samples             INTEGER NOT NULL,
+    distinct_stocks     INTEGER NOT NULL DEFAULT 0,
+    distinct_days       INTEGER NOT NULL DEFAULT 0,
+    sample_basis        TEXT NOT NULL DEFAULT 'RAW',
     avg_return_pct      DOUBLE PRECISION,
     median_return_pct   DOUBLE PRECISION,
     positive_rate       DOUBLE PRECISION,
@@ -106,6 +109,10 @@ CREATE TABLE IF NOT EXISTS market_os_learning_segments (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (segment_type, segment_value, horizon)
 );
+
+ALTER TABLE market_os_learning_segments ADD COLUMN IF NOT EXISTS distinct_stocks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE market_os_learning_segments ADD COLUMN IF NOT EXISTS distinct_days INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE market_os_learning_segments ADD COLUMN IF NOT EXISTS sample_basis TEXT NOT NULL DEFAULT 'RAW';
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -453,14 +460,54 @@ def _aggregate(values):
     rets=[float(x["return_pct"]) for x in vals]
     mfes=[float(x["mfe_pct"]) for x in vals if x.get("mfe_pct") is not None]
     maes=[float(x["mae_pct"]) for x in vals if x.get("mae_pct") is not None]
+    stocks={x.get("stock_code") for x in vals if x.get("stock_code")}
+    days={x.get("trade_day") for x in vals if x.get("trade_day")}
     return {
         "samples":len(rets),
+        "distinct_stocks":len(stocks),
+        "distinct_days":len(days),
         "avg_return_pct":sum(rets)/len(rets),
         "median_return_pct":statistics.median(rets),
         "positive_rate":sum(x>0 for x in rets)/len(rets),
         "avg_mfe_pct":sum(mfes)/len(mfes) if mfes else None,
         "avg_mae_pct":sum(maes)/len(maes) if maes else None
     }
+
+
+def _sample_basis(horizon):
+    if horizon=="5m":return "NON_OVERLAP_5M"
+    if horizon=="30m":return "NON_OVERLAP_30M"
+    if horizon=="close":return "ONE_PER_STOCK_DAY_CLOSE"
+    if horizon=="D+1":return "ONE_PER_STOCK_DAY_D1"
+    return "UNKNOWN"
+
+
+def _episode_anchors(rows):
+    """Reduce repeated snapshots to horizon-aware non-overlapping anchors.
+
+    Raw assessments remain stored for audit. Learning segments use these anchors
+    so a stock that stays on screen for 20 minutes is not counted as 20
+    independent observations.
+    """
+    ordered=sorted(rows,key=lambda r:(r["horizon"],r["stock_code"],r["snapshot_time"]))
+    last_time={}
+    last_day={}
+    out=[]
+    for r in ordered:
+        horizon=r["horizon"];code=r["stock_code"];ts=r["snapshot_time"]
+        day=ts.astimezone(KST).date().isoformat()
+        r=dict(r);r["trade_day"]=day
+        key=(horizon,code)
+        if horizon in ("close","D+1"):
+            if last_day.get(key)==day:
+                continue
+            last_day[key]=day;out.append(r);continue
+        cooldown=300 if horizon=="5m" else 1800 if horizon=="30m" else 300
+        prev=last_time.get(key)
+        if prev is not None and (ts-prev).total_seconds()<cooldown:
+            continue
+        last_time[key]=ts;out.append(r)
+    return out
 
 
 def _bucket_strength(v):
@@ -483,7 +530,8 @@ def _bucket_buy_share(v):
 
 def refresh_segments():
     with db() as c,c.cursor() as cur:
-        cur.execute("""SELECT a.watch_tier,a.market_stance,a.trigger_state,a.session_bucket,
+        cur.execute("""SELECT a.snapshot_time,a.stock_code,
+                              a.watch_tier,a.market_stance,a.trigger_state,a.session_bucket,
                               a.catalyst_grade,a.setup_score,a.micro_strength,a.micro_buy_share_15s,
                               a.micro_tick_count_15s,a.micro_gap_count_15s,
                               o.horizon,o.return_pct,o.mfe_pct,o.mae_pct
@@ -493,7 +541,8 @@ def refresh_segments():
                         AND a.rule_version=o.rule_version
                        WHERE a.rule_version=%s
                          AND a.snapshot_time>now()-interval '60 days'""",(RULE_VERSION,))
-        rows=cur.fetchall()
+        raw=cur.fetchall()
+        rows=_episode_anchors(raw)
         groups=defaultdict(list)
         for r in rows:
             horizon=r["horizon"]
@@ -521,12 +570,13 @@ def refresh_segments():
         for (kind,value,horizon),vals in groups.items():
             a=_aggregate(vals)
             if not a:continue
-            payload.append((kind,value,horizon,a["samples"],a["avg_return_pct"],a["median_return_pct"],
+            payload.append((kind,value,horizon,a["samples"],a["distinct_stocks"],a["distinct_days"],
+                            _sample_basis(horizon),a["avg_return_pct"],a["median_return_pct"],
                             a["positive_rate"],a["avg_mfe_pct"],a["avg_mae_pct"]))
         cur.executemany("""INSERT INTO market_os_learning_segments(
-              segment_type,segment_value,horizon,samples,avg_return_pct,median_return_pct,
-              positive_rate,avg_mfe_pct,avg_mae_pct,updated_at)
-              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",payload)
+              segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,sample_basis,
+              avg_return_pct,median_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct,updated_at)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",payload)
         return len(payload)
 
 
