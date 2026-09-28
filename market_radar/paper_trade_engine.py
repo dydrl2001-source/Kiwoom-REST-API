@@ -72,6 +72,12 @@ ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_conviction DOUBLE PRE
 ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_decision_time TIMESTAMPTZ;
 ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_decision_version TEXT;
 ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS regime_label TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_regime_trend TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_regime_flow TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_regime_sentiment TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_catalyst_strength INTEGER;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_catalyst_identity TEXT;
+ALTER TABLE radar_paper_trades ADD COLUMN IF NOT EXISTS ai_chart_state TEXT;
 CREATE INDEX IF NOT EXISTS idx_paper_strategy_time ON radar_paper_trades(strategy_id,opened_at DESC);
 
 CREATE TABLE IF NOT EXISTS radar_paper_events(
@@ -133,6 +139,13 @@ def latest_ai_decision(cur,code,now):
                 (code,now-timedelta(seconds=AI_DECISION_FRESH_SEC)))
     r=cur.fetchone()
     return dict(r) if r else None
+
+def decision_desk_evidence(ai,desk):
+    packet=(ai or {}).get("packet") or {}
+    for row in packet.get("desks") or []:
+        if row.get("desk")==desk:
+            return row.get("evidence") or {}
+    return {}
 
 def latest_quote(cur,code,now):
     if not table_exists(cur,"radar_flow_quotes"):return None
@@ -301,6 +314,9 @@ def maybe_open(cur,now):
         warn=top_warning(cur,c["stock_code"])
         if warn and warn.get("kind")=="TOP_WARNING" and int(warn.get("score") or 0)>=70:
             continue
+        market_ev=decision_desk_evidence(ai,"market")
+        catalyst_ev=decision_desk_evidence(ai,"catalyst")
+        technical_ev=decision_desk_evidence(ai,"technical")
         reasons=entry_reason(c,chart)
         if ai:
             if ai.get("strategy_id"):
@@ -311,9 +327,11 @@ def maybe_open(cur,now):
                        entry_price_krw,last_mark_at,last_mark_price_krw,return_pct,mfe_pct,mae_pct,
                        entry_score,primary_type,market_theme,event_type,chart_state_entry,entry_reason,
                        strategy_id,strategy_name,strategy_family,strategy_lifecycle,strategy_fit,
-                       ai_conviction,ai_decision_time,ai_decision_version,regime_label)
+                       ai_conviction,ai_decision_time,ai_decision_version,regime_label,
+                       ai_regime_trend,ai_regime_flow,ai_regime_sentiment,
+                       ai_catalyst_strength,ai_catalyst_identity,ai_chart_state)
                        VALUES(%s,%s,%s,%s,'OPEN',%s,%s,%s,%s,0,0,0,%s,%s,%s,%s,%s,%s::jsonb,
-                              %s,%s,%s,%s,%s,%s,%s,%s,%s)
+                              %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        RETURNING id""",
                     (c["id"],c["stock_code"],c["stock_name"],RULE_VERSION,
                      q["exchange_at"],q["price"],q["exchange_at"],q["price"],
@@ -323,7 +341,9 @@ def maybe_open(cur,now):
                      (ai or {}).get("strategy_family"),(ai or {}).get("strategy_lifecycle"),
                      (ai or {}).get("strategy_fit"),(ai or {}).get("conviction"),
                      (ai or {}).get("snapshot_time"),(ai or {}).get("decision_version"),
-                     (ai or {}).get("regime_label")))
+                     (ai or {}).get("regime_label"),market_ev.get("trend"),market_ev.get("flow"),
+                     market_ev.get("sentiment"),catalyst_ev.get("material_strength"),
+                     catalyst_ev.get("identity_quality"),technical_ev.get("state")))
         trade_id=cur.fetchone()["id"]
         ai_event=None
         if ai:
