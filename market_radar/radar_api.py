@@ -794,7 +794,7 @@ def build_ai_daily_review(cur, paper_feedback):
 
 def build_shadow_execution_lab(cur):
     empty={
-        "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
+        "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,"partial_exit_count":0,
         "summary":{"closed":0,"median_gross_return_pct":None,"median_net_return_pct":None,
                    "median_entry_slippage_bps":None,"median_exit_slippage_bps":None,
                    "median_fill_ratio_pct":None,"median_notional_krw":None},
@@ -832,10 +832,13 @@ def build_shadow_execution_lab(cur):
             "median_fill_ratio_pct":float(r[5]) if r[5] is not None else None,
             "median_notional_krw":float(r[6]) if r[6] is not None else None,
         }
+        cur.execute("""SELECT COUNT(*) FROM ai_shadow_trades WHERE status='CLOSED_PARTIAL_LIQUIDITY'""")
+        status["partial_exit_count"]=int(cur.fetchone()[0] or 0)
         cur.execute("""SELECT stock_code,stock_name,strategy_id,status,requested_shares,filled_shares,
                               requested_notional_krw,stop_pct,entry_at,entry_ref_price_krw,
                               entry_fill_price_krw,entry_slippage_bps,entry_fill_ratio,entry_model_quality,
                               exit_at,exit_ref_price_krw,exit_fill_price_krw,exit_slippage_bps,
+                              exit_filled_shares,exit_fill_ratio,remaining_shares,
                               gross_return_pct,net_return_pct,net_pnl_krw,costs_krw,entry_model,exit_model
                        FROM ai_shadow_trades
                        ORDER BY COALESCE(exit_at,entry_at) DESC LIMIT 12""")
@@ -852,10 +855,11 @@ def build_shadow_execution_lab(cur):
                 "entry_model_quality":r[13],"exit_at":iso(r[14]),
                 "exit_ref_price_krw":float(r[15]) if r[15] is not None else None,
                 "exit_fill_price_krw":float(r[16]) if r[16] is not None else None,
-                "exit_slippage_bps":r[17],"gross_return_pct":r[18],"net_return_pct":r[19],
-                "net_pnl_krw":float(r[20]) if r[20] is not None else None,
-                "costs_krw":float(r[21]) if r[21] is not None else None,
-                "entry_model":r[22] or {},"exit_model":r[23] or {}
+                "exit_slippage_bps":r[17],"exit_filled_shares":r[18],"exit_fill_ratio":r[19],
+                "remaining_shares":r[20],"gross_return_pct":r[21],"net_return_pct":r[22],
+                "net_pnl_krw":float(r[23]) if r[23] is not None else None,
+                "costs_krw":float(r[24]) if r[24] is not None else None,
+                "entry_model":r[25] or {},"exit_model":r[26] or {}
             })
         status["recent"]=recent
         status["model_note"]="실제 호가·잔량 미수집 상태의 v1: 체결가 + 단기변동성 + 최근거래대금 + 참여율로 보수 추정"
