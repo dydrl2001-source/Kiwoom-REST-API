@@ -98,6 +98,19 @@ def schema():
         cur.execute("SELECT pg_advisory_xact_lock(%s)",(72419070,))
         cur.execute(SCHEMA)
 
+def table_exists(cur,name):
+    cur.execute("SELECT to_regclass(%s)",("public."+name,))
+    r=cur.fetchone()
+    return bool(r and r["to_regclass"] is not None)
+
+def column_exists(cur,table,column):
+    cur.execute("""SELECT EXISTS(
+                   SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='public' AND table_name=%s AND column_name=%s) AS ok""",
+                (table,column))
+    r=cur.fetchone()
+    return bool(r and r["ok"])
+
 def finite(v):
     try:
         x=float(v)
@@ -106,6 +119,8 @@ def finite(v):
         return None
 
 def quote_pair(cur,code,at):
+    if not table_exists(cur,"radar_flow_quotes"):
+        return None,None,None
     cur.execute("""SELECT batch_time,payload FROM radar_flow_quotes
                    WHERE stock_code=%s
                      AND batch_time<=%s+interval '60 seconds'
@@ -128,6 +143,8 @@ def quote_pair(cur,code,at):
     return price,recent,exchange
 
 def volatility_bps(cur,code,at):
+    if not table_exists(cur,"market_minute_bars"):
+        return None
     cur.execute("""SELECT close_price FROM market_minute_bars
                    WHERE stock_code=%s AND interval_min=3 AND bar_time<=%s
                    ORDER BY bar_time DESC LIMIT 21""",(code,at))
@@ -138,6 +155,8 @@ def volatility_bps(cur,code,at):
     return statistics.median(rets) if rets else None
 
 def open_new(cur):
+    if not table_exists(cur,"radar_paper_trades") or not column_exists(cur,"radar_paper_trades","strategy_id"):
+        return 0
     cur.execute("""SELECT p.id,p.stock_code,p.stock_name,p.opened_at,p.entry_price_krw,
                           p.strategy_id,p.strategy_name,p.strategy_family,p.regime_label
                    FROM radar_paper_trades p
@@ -170,6 +189,8 @@ def open_new(cur):
     return opened
 
 def close_ready(cur):
+    if not table_exists(cur,"radar_paper_trades"):
+        return 0
     cur.execute("""SELECT s.*,p.status AS paper_status,p.closed_at,p.exit_price_krw
                    FROM ai_shadow_trades s
                    JOIN radar_paper_trades p ON p.id=s.paper_trade_id
@@ -231,7 +252,13 @@ def cycle():
 
 def main():
     if not DB:raise RuntimeError("DATABASE_URL missing")
-    schema()
+    while True:
+        try:
+            schema()
+            break
+        except Exception as exc:
+            print("Shadow schema waiting:",type(exc).__name__,flush=True)
+            time.sleep(5)
     print("Shadow execution simulator started; no broker orders",flush=True)
     while True:
         started=time.monotonic()
