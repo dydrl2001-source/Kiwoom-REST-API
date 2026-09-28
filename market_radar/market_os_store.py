@@ -189,7 +189,7 @@ def learning_payload():
             ("STANCE",x.get("market_stance") or "UNKNOWN"),
             ("TIER",x.get("watch_tier") or "UNKNOWN"),
         ]
-        if m:
+        if m and int(m.get("tick_count_15s") or 0)>0 and int(m.get("gap_count_15s") or 0)==0:
             keys.extend([
                 ("MICRO_STRENGTH",_bucket_strength(m.get("strength"))),
                 ("MICRO_BUY_SHARE",_bucket_buy_share(m.get("buy_share_15s"))),
