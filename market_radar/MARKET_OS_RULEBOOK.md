@@ -387,3 +387,124 @@ v1.5는 기존 Market OS가 이미 assessment로 포착한 종목 안에서 tier
 
 Shadow Rule Lab은 live Radar / Theme / Setup / Catalyst / Trigger 계산, 실제 watch tier, 주문, 포지션, 비중을 수정하지 않는다.
 
+## Shadow Decision Gate v1.6 — Challenger Replacement Review
+
+Shadow Rule Lab의 평균 차이가 양수라는 이유만으로 기존 CONTROL을 교체하지 않는다. v1.6은 prospective A/B 결과가 **충분한 표본, 시간축 안정성, 실제 cohort membership 변화, 시장 stance 재현성**을 함께 통과했는지 별도로 판정한다.
+
+### 결정 상태
+
+```text
+SHADOW_RULE
+  ↓
+COLLECTING
+  ↓
+COMPARABLE
+  ↓
+CONSISTENT
+  ↓
+ACCEPT_CANDIDATE
+```
+
+중간에 증거가 혼합되면 `MORE_DATA`, 충분한 prospective 증거에서 일관되게 악화되면 `REJECT`가 될 수 있다.
+
+- `COLLECTING`: 30분 비교 문턱 전
+- `COMPARABLE`: 30분은 비교 가능하지만 종가 또는 재현성 근거가 부족
+- `CONSISTENT`: 30분·종가, 시간분할, stance 방향이 일치하지만 강한 표본 문턱 전
+- `ACCEPT_CANDIDATE`: 기존 CONTROL 교체를 사람이 검토할 자격
+- `MORE_DATA`: 효과가 혼합되거나 시간/stance 재현성 대기
+- `REJECT`: 비교 가능한 prospective 결과에서 명확한 악화가 반복
+
+`ACCEPT_CANDIDATE`와 `REJECT` 모두 자동으로 live 규칙을 교체하거나 Shadow Rule을 enable/disable하지 않는다.
+
+### Primary cohort 선택
+
+FOCUS와 REVIEW(FOCUS+PREP) 중 **실제 membership change가 더 많이 발생한 cohort**를 primary impact surface로 사용한다. 동률이면 REVIEW를 사용한다.
+
+이 선택에는 수익률·MFE·MAE를 사용하지 않는다. 성과를 보고 유리한 cohort를 고르는 사후 선택을 피하기 위한 규칙이다.
+
+### 기본 비교 문턱
+
+한 horizon/cohort cell이 비교 가능하려면 CONTROL과 CHALLENGER 양쪽에서 다음을 요구한다.
+
+- 최소 N 20
+- 최소 5종목
+- 최소 3거래일
+- 실제 cohort membership change 최소 5건
+
+강한 표본 문턱:
+
+- 최소 N 40
+- 최소 8종목
+- 최소 6거래일
+- membership change 최소 10건
+
+### 효과 방향
+
+Challenger − Control 기준의 기본 개선 조건:
+
+- Δ평균수익률 ≥ +0.10%p
+- Δ양(+)비율 ≥ +1.0%p
+- ΔMAE ≥ 0
+
+강한 개선 조건:
+
+- Δ평균수익률 ≥ +0.20%p
+- Δ양(+)비율 ≥ +3.0%p
+- ΔMAE ≥ 0
+
+반대 방향의 동일 문턱을 모두 충족하면 HARMFUL로 본다. 나머지는 MIXED다.
+
+이 임계값은 현재 운영 휴리스틱이며 실제 장기 표본을 통해 재검증할 대상이다.
+
+### Horizon 일치
+
+결정의 핵심 horizon은 `30m`와 `close`다.
+
+- 30m가 비교 가능하지 않으면 `COLLECTING`
+- 30m만 비교 가능하고 close가 부족하면 `COMPARABLE`
+- 30m와 close가 모두 HARMFUL이면 `REJECT`
+- 30m와 close가 모두 BENEFICIAL이어야 다음 안정성 검증으로 이동
+
+5m는 초기 반응 관찰용이며 v1.6의 최종 교체 판단을 지배하지 않는다. D+1은 보조 장기 관찰 자료로 유지하며 현재 ACCEPT 문턱의 필수조건은 아니다.
+
+### 시간분할 안정성
+
+승인 후 prospective episode를 거래일 기준 EARLY / RECENT로 나눠 다시 CONTROL과 CHALLENGER를 계산한다.
+
+- EARLY 30m BENEFICIAL
+- RECENT 30m BENEFICIAL
+- 최근 30m/close가 HARMFUL이면 `REJECT`
+- close 시간분할은 ACCEPT_CANDIDATE에서 양쪽 구간 모두 실제 비교 가능 + BENEFICIAL을 요구
+
+따라서 초기 며칠만 좋고 최근에 무너진 challenger는 강한 전체평균 때문에 채택되지 않는다.
+
+### 시장 stance 재현성
+
+`STANCE_...`로 시작하는 stance-scoped 가설은 사전 정의된 target stance 안에서의 재현성을 본다. 다른 stance에서 효과가 없다는 이유로 감점하지 않는다.
+
+stance를 조건에 포함하지 않는 일반 규칙은 EXPANDABLE / SELECTIVE / DEFENSIVE 중 실제 membership change가 발생하고 비교 가능한 stance에서 검증한다.
+
+- 서로 다른 최소 2개 stance에서 BENEFICIAL 재현을 요구
+- 비교 가능한 stance에서 HARMFUL이 나타나면 `MORE_DATA`
+- target stance 규칙은 해당 stance에서 BENEFICIAL이어야 한다
+
+### ACCEPT_CANDIDATE
+
+다음을 모두 만족해야 한다.
+
+1. 30m와 close 전체 결과 BENEFICIAL
+2. 두 horizon의 강한 전체표본 문턱 통과
+3. EARLY / RECENT 30m 안정
+4. RECENT 30m 강한 개선
+5. EARLY / RECENT close가 모두 비교 가능하고 BENEFICIAL
+6. stance-scoped 규칙은 target stance 재현
+7. 일반 규칙은 최소 2개 stance에서 재현
+
+이 상태는 **사람에게 CONTROL 교체를 검토할 자격**만 부여한다. live Market OS의 Radar / Theme / Setup / Catalyst / Trigger, watch tier, 주문, 포지션 비중은 자동 변경하지 않는다.
+
+### 감사 이력
+
+현재 상태는 `market_os_shadow_decisions`에 저장하고, 상태 변화는 `market_os_shadow_decision_events`에 별도 기록한다.
+
+따라서 `COLLECTING → COMPARABLE → CONSISTENT → ACCEPT_CANDIDATE` 또는 `MORE_DATA / REJECT`로 이동한 이력을 사후 감사할 수 있다.
+
