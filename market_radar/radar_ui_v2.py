@@ -77,10 +77,10 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 
 <div class="statusbar">
  <div class="stat market"><div class="k">오늘 장</div><div class="v" id="regime">대기</div><div class="s" id="regimeSub">시장 데이터 확인 중</div></div>
- <div class="stat kiwoom"><div class="k">Kiwoom</div><div class="v" id="kiwoom">-</div><div class="s" id="kiwoomSub"></div></div>
+ <div class="stat kiwoom"><div class="k">실시간 데이터</div><div class="v" id="kiwoom">-</div><div class="s" id="kiwoomSub"></div></div>
  <div class="stat material"><div class="k">재료 / 뉴스</div><div class="v" id="newsStatus">-</div><div class="s" id="newsSub"></div></div>
  <div class="stat turnover"><div class="k">조회 Top20 교체율</div><div class="v" id="turnover">-</div><div class="s">관심 순환 속도</div></div>
- <div class="stat mimosa"><div class="k">미모사 엔진</div><div class="v" id="mimosaStatus">-</div><div class="s" id="mimosaSub"></div></div>
+ <div class="stat mimosa"><div class="k">차트 신호</div><div class="v" id="mimosaStatus">-</div><div class="s" id="mimosaSub"></div></div>
 </div>
 
 <div class="tabs" id="tabs">
@@ -442,21 +442,24 @@ function render(d){
  document.getElementById("regimeSub").textContent=d.regime.note||"";
  const snap=d.market_snapshot||{};
  const liveText=snap.is_live?"LIVE":(snap.session_label||"장외");
- document.getElementById("kiwoom").textContent=d.system.kiwoom.status+" · "+liveText;
- document.getElementById("kiwoomSub").textContent=(snap.time?"수집 "+new Date(snap.time).toLocaleString("ko-KR"):"")+(snap.stale?" · 지연":"")+(d.system.kiwoom.note?" · "+d.system.kiwoom.note:"");
+ document.getElementById("kiwoom").textContent=liveText;
+ document.getElementById("kiwoomSub").textContent="Kiwoom "+(d.system.kiwoom.status||"미연결")+(snap.time?" · "+new Date(snap.time).toLocaleTimeString("ko-KR"):"")+(snap.stale?" · 지연":"");
  const ms=d.material_stats||{};
  document.getElementById("newsStatus").textContent="직접 "+(ms.direct||0)+" · 테마 "+(ms.sector||0);
  const ds=d.system.dartfeed||{};
  document.getElementById("newsSub").textContent="확산 "+(ms.spreading||0)+" · 약한언급 "+(ms.weak||0)+" · DART "+(ds.status||"미연결")+" · Telegram "+(d.system.telegram.count_24h||0).toLocaleString()+"건";
  document.getElementById("turnover").textContent=d.regime_metrics?.rank_turnover_5m==null?"-":pct(d.regime_metrics.rank_turnover_5m);
- document.getElementById("mimosaStatus").textContent=d.system.mimosa?.status||"미연결";
+ const homeTop=(d.query_ranking||[]).slice(0,12);
+ const topWarnCount=homeTop.filter(x=>x.reversal_signal?.kind==="TOP_WARNING").length;
+ const bottomWatchCount=homeTop.filter(x=>x.reversal_signal?.kind==="BOTTOM_WATCH").length;
+ document.getElementById("mimosaStatus").textContent="고점 "+topWarnCount+" · 바닥 "+bottomWatchCount;
  const re=d.system.research||{};
  const rsEl=document.getElementById("researchStatus");
  if(rsEl)rsEl.textContent="Research Engine "+(re.status||"미연결")+(re.note?" · "+re.note:"");
  const dre=d.system.deepresearch||{};
  const drEl=document.getElementById("deepResearchStatus");
  if(drEl)drEl.textContent="Deep Research Engine "+(dre.status||"미연결")+(dre.note?" · "+dre.note:"");
- document.getElementById("mimosaSub").textContent=d.system.chartfeed?.status?"차트 "+d.system.chartfeed.status:"";
+ document.getElementById("mimosaSub").textContent="미모사 "+(d.system.mimosa?.status||"미연결")+" · 차트 "+(d.system.chartfeed?.status||"미연결");
  document.getElementById("analysis").innerHTML=(d.analysis?.lines||[]).map(x=>'<div class="analysis-line">'+esc(x)+'</div>').join("")||'<span class="muted">시장 분석 대기</span>';
  const sig=[];
  const strongestTheme=[...(d.sector_rankings||[])].sort((a,b)=>Number(b.theme_strength||0)-Number(a.theme_strength||0))[0];
@@ -466,10 +469,8 @@ function render(d){
  if(noMat)sig.push("돈선행 "+noMat+"종목");
  if((d.material_stats?.direct||0)>0)sig.push("직접재료 "+d.material_stats.direct+"종목");
  if((d.material_stats?.spreading||0)>0)sig.push("확산 "+d.material_stats.spreading+"종목");
- const topWarn=(d.query_ranking||[]).slice(0,12).filter(x=>x.reversal_signal?.kind==="TOP_WARNING").length;
- const bottomWatch=(d.query_ranking||[]).slice(0,12).filter(x=>x.reversal_signal?.kind==="BOTTOM_WATCH").length;
- if(topWarn)sig.push("고점경계 "+topWarn+"종목");
- if(bottomWatch)sig.push("바닥감시 "+bottomWatch+"종목");
+ if(topWarnCount)sig.push("고점경계 "+topWarnCount+"종목");
+ if(bottomWatchCount)sig.push("바닥감시 "+bottomWatchCount+"종목");
  if(d.regime_metrics?.rank_turnover_5m!=null)sig.push("교체율 "+pct(d.regime_metrics.rank_turnover_5m));
  document.getElementById("quickSignals").innerHTML=sig.map(x=>'<span class="pill">'+esc(x)+'</span>').join("");
  const homeThemes=[...(d.sector_rankings||[])].sort((a,b)=>(Number(b.theme_strength||0)-Number(a.theme_strength||0))||(Number(b.recent_turnover_krw||0)-Number(a.recent_turnover_krw||0)));
