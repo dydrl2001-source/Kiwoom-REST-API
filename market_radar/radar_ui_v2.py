@@ -220,10 +220,17 @@ function rankMovement(x){
  return '<span class="rank-move '+cls+'">'+esc(h.movement||"—")+'</span>'+
    '<div class="rank-history">30초 '+esc(h.rank_30s??"-")+' · 5분 '+esc(h.rank_5m??"-")+' · 오늘최고 '+esc(h.best_today??"-")+'</div>';
 }
+function clipText(v,n=110){const t=String(v||"").replace(/\s+/g," ").trim();return t.length>n?t.slice(0,n)+"…":t;}
+function sourceMini(x){
+ const c=x?.catalyst||{},links=[];
+ for(const d of (c.dart||[]).slice(0,1))if(d.link)links.push('<a href="'+esc(d.link)+'" target="_blank" rel="noopener">DART</a>');
+ for(const n of (c.external_news||[]).slice(0,2))if(n.link)links.push('<a href="'+esc(n.link)+'" target="_blank" rel="noopener">'+esc(n.source||"기사")+'</a>');
+ return links.length?'<div class="os-links">'+links.join("")+'</div>':"";
+}
 function osMini(x){
  const r=x?.external_research;if(!r)return "";
  const links=(r.sources||[]).slice(0,2).map((s,i)=>'<a href="'+esc(s.url||"#")+'" target="_blank" rel="noopener">출처'+(i+1)+'</a>').join("");
- return '<div class="os-mini"><b>OS 외부조사 · '+esc(r.citation_count??0)+'인용</b><div>'+esc(r.summary||"인용 포함 조사")+'</div>'+(links?'<div class="os-links">'+links+'</div>':'')+'</div>';
+ return '<div class="os-mini"><b>'+(r.stale?'과거 OS':'OS 외부조사')+' · '+esc(r.citation_count??0)+'인용</b><div>'+esc(clipText(r.summary||"인용 포함 조사",115))+'</div>'+(links?'<div class="os-links">'+links+'</div>':'')+'</div>';
 }
 function renderSectorMix(rows){
  const top=(rows||[]).slice(0,12),groups={};
@@ -277,7 +284,7 @@ function sectorCards(list,limit=8,showStrength=false){
      const width=Math.max(2,Math.min(100,Number(x.trade_value_krw||0)/maxMoney*100));
      const d=x.material_digest||{},mv=(DATA?.query_ranking||[]).find(r=>r.code===x.code);
      return '<div class="stock-mini"><div class="name">'+esc(x.name||x.code)+'</div>'+
-       '<div class="num"><span><span class="rank-badge">#'+esc(x.rank??"-")+'</span> '+(mv?rankMovement(mv):'')+'</span><span class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</span></div>'+
+       '<div class="num"><div><span class="rank-badge">#'+esc(x.rank??"-")+'</span> '+(mv?rankMovement(mv):'')+'</div><span class="'+klass(x.change_rate)+'">'+esc(rate(x.change_rate))+'</span></div>'+
        '<div class="stock-money">'+esc(money(x.trade_value_krw))+' <span class="sub">대금 #'+esc(x.trade_rank??"-")+'</span></div>'+
        '<div class="stock-burst">'+esc(recentMoney(x)||"최근구간 비교대기")+'</div>'+
        '<div class="material-meta">'+materialTag(d)+'</div>'+
@@ -310,7 +317,7 @@ function stockRow(x,mode){
  '<td>'+esc(x.trade_to_cap_pct==null?"-":Number(x.trade_to_cap_pct).toFixed(1)+"%")+'</td>'+
  '<td class="left">'+sectorChip(sectorName(x))+'</td>'+
  '<td class="left"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td>'+
- '<td class="material-cell"><div class="material-meta">'+materialTag(d)+'</div><div class="material-main">'+esc(d.summary||"재료 미확인")+'</div><div class="sub">'+esc(d.assessment||"")+'</div>'+osMini(x)+'</td>'+
+ '<td class="material-cell"><div class="material-meta">'+materialTag(d)+'</div><div class="material-main" title="'+esc(d.summary||"")+'">'+esc(clipText(d.summary||"재료 미확인",130))+'</div><div class="sub">'+esc(d.assessment||"")+'</div>'+sourceMini(x)+osMini(x)+'</td>'+
  '<td class="left"><b>'+esc(c.state_ko||x.chart_state||"대기")+'</b><div class="sub">'+esc(c.minute_trend||"")+'</div>'+signalBadge(x)+'</td></tr>';
 }
 function renderHomeStocks(rows){
@@ -323,7 +330,7 @@ function renderHomeStocks(rows){
    '<td><b>'+esc(money(x.trade_value_krw))+'</b>'+(recent?'<div class="sub">'+esc(recent)+'</div>':'')+'</td>'+
    '<td class="left">'+sectorChip(sector)+'</td><td class="left"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td>'+
    '<td class="material-cell"><div class="material-meta">'+materialTag(d)+'<span class="pill">'+esc(d.newness||"")+'</span></div>'+
-   '<div class="material-main">'+esc(d.summary||"직접 재료 미확인")+'</div><div class="sub">'+esc(d.assessment||"")+' · 뉴스 '+esc(d.news_count??0)+' · 공시 '+esc(d.dart_count??0)+'</div>'+osMini(x)+'</td>'+
+   '<div class="material-main" title="'+esc(d.summary||"")+'">'+esc(clipText(d.summary||"직접 재료 미확인",105))+'</div><div class="sub">'+esc(d.assessment||"")+' · 뉴스 '+esc(d.news_count??0)+' · 공시 '+esc(d.dart_count??0)+'</div>'+sourceMini(x)+osMini(x)+'</td>'+
    '<td class="left"><b>'+esc(m.state_ko||x.chart_state||"대기")+'</b>'+signalBadge(x)+'</td></tr>';
  }).join("")||'<tr><td colspan="9" class="muted">장중 실시간 데이터 대기 중</td></tr>';
 }
