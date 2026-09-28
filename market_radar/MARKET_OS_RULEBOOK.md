@@ -765,3 +765,161 @@ DRY_RUN_ACTIVE
 
 v1.8의 목적은 **사람이 승인한 차기 ruleset candidate를 기존 CONTROL과 완전히 분리된 prospective 버전으로 운영 검증**하는 것이다.
 
+## Ruleset Succession Gate v1.9 — Candidate System Before Release
+
+Versioned Ruleset Dry Run의 평균이 CONTROL보다 높다는 이유만으로 차기 live ruleset 후보가 되지 않는다. v1.9는 **전체 효과, 시간축 안정성, 시장 stance 재현성, 영향 분산, 이전 Shadow 실험과의 효과 보존, D+1 열화 여부**를 함께 검사한다.
+
+### 상태
+
+```text
+RULESET_COLLECTING
+  ↓
+RULESET_COMPARABLE
+  ↓
+RULESET_STABLE
+  ↓
+SUCCESSION_CANDIDATE
+```
+
+증거가 혼합되거나 검증 항목이 부족하면 `RULESET_MORE_DATA`, 충분한 prospective 증거에서 악화가 확인되면 `RULESET_REJECT`로 분류한다.
+
+- `RULESET_COLLECTING`: 30m 기본 비교 문턱 전
+- `RULESET_COMPARABLE`: 30m는 비교 가능하나 close가 부족
+- `RULESET_STABLE`: 핵심 재현성·분산 검증 통과, 강한 최종 문턱 전
+- `SUCCESSION_CANDIDATE`: 사람이 Release Candidate 설계를 검토할 자격
+- `RULESET_MORE_DATA`: 집중도·stance·효과 보존·시간 안정성 중 하나가 부족
+- `RULESET_REJECT`: 30m/close 또는 최근 구간/D+1에서 비교 가능한 명확한 악화
+
+`SUCCESSION_CANDIDATE`도 live ruleset 승계가 아니다.
+
+### Primary cohort
+
+FOCUS와 REVIEW 중 30m+close에서 실제 membership change가 더 많이 발생한 cohort를 primary impact surface로 선택한다. 동률이면 REVIEW를 사용한다.
+
+성과를 보고 cohort를 선택하지 않는다.
+
+### 기본 및 강한 표본 문턱
+
+기본 비교:
+
+- CONTROL/CANDIDATE 각 N ≥ 30
+- 종목 ≥ 6
+- 거래일 ≥ 4
+- membership change ≥ 6
+
+강한 승계 문턱:
+
+- CONTROL/CANDIDATE 각 N ≥ 60
+- 종목 ≥ 10
+- 거래일 ≥ 8
+- membership change ≥ 12
+
+효과 방향은 v1.6과 같은 운영 기준을 사용한다.
+
+기본 BENEFICIAL:
+- Δ평균수익률 ≥ +0.10%p
+- Δ양(+)비율 ≥ +1.0%p
+- ΔMAE ≥ 0
+
+강한 BENEFICIAL:
+- Δ평균수익률 ≥ +0.20%p
+- Δ양(+)비율 ≥ +3.0%p
+- ΔMAE ≥ 0
+
+### Horizon 검증
+
+- 30m가 기본 비교 문턱 전이면 `RULESET_COLLECTING`
+- 30m만 비교 가능하고 close가 부족하면 `RULESET_COMPARABLE`
+- 30m와 close가 모두 BENEFICIAL이어야 다음 검증으로 이동
+- 둘이 모두 HARMFUL이면 `RULESET_REJECT`
+- D+1이 충분히 비교 가능하고 HARMFUL이면 `RULESET_REJECT`
+- D+1이 부족하면 최종 승계를 막지는 않지만 supporting evidence로 남긴다
+
+### Dry Run 자체의 시간분할
+
+Ruleset activation 이후 prospective episode를 거래일 기준 EARLY / RECENT로 다시 나눈다.
+
+30m와 close에서:
+
+- EARLY BENEFICIAL
+- RECENT BENEFICIAL
+
+을 모두 요구한다.
+
+RECENT 30m 또는 close가 HARMFUL이면 `RULESET_REJECT`.
+
+`SUCCESSION_CANDIDATE`에서는 RECENT 30m와 close도 강한 표본·효과 문턱을 통과해야 한다.
+
+### Impact concentration
+
+성과가 한 종목 또는 특정 하루에 몰려 생긴 착시를 방지한다.
+
+집중도 계산은 30m episode-anchor에서 primary cohort membership이 실제 바뀐 episode만 사용한다.
+
+승계 안정성 최소조건:
+
+- changed episode ≥ 12
+- changed distinct stocks ≥ 8
+- changed distinct days ≥ 6
+- top stock share ≤ 35%
+- top day share ≤ 45%
+
+또한 stock/day HHI를 evidence로 보존한다.
+
+집중 문턱을 넘으면 `RULESET_MORE_DATA`.
+
+이 수치는 운영 휴리스틱이며 실제 장기 자료로 재검증할 대상이다.
+
+### Stance 재현성
+
+STANCE-scoped overlay는 target stance에서 BENEFICIAL이어야 한다.
+
+일반 overlay는 EXPANDABLE / SELECTIVE / DEFENSIVE 중 비교 가능한 최소 2개 stance에서 BENEFICIAL 재현을 요구한다.
+
+비교 가능한 stance에서 HARMFUL이 나타나면 `RULESET_MORE_DATA`.
+
+### Shadow → Ruleset 효과 보존
+
+Versioned Dry Run의 효과를 계속 업데이트되는 Shadow table과 비교하지 않는다.
+
+비교 기준은 **Adoption Review Dossier에 동결된 승인 당시 Shadow CONTROL/CHALLENGER evidence**다.
+
+primary cohort의 30m와 close에 대해:
+
+```text
+retention = Ruleset Dry Run Δ평균 / Frozen Shadow Δ평균
+```
+
+을 계산한다.
+
+- retention < 40% → `RULESET_MORE_DATA` (`SHADOW_EFFECT_COLLAPSED`)
+- retention > 300% → `RULESET_MORE_DATA` (`SHADOW_EFFECT_SIZE_DIVERGED`)
+- reference가 없거나 방향 기준을 계산할 수 없으면 `RULESET_MORE_DATA`
+
+효과가 커진 것 자체를 자동으로 좋은 것으로 보지 않는 이유는 표본·시장구조 변화 또는 composition drift 가능성을 다시 확인하기 위해서다.
+
+### SUCCESSION_CANDIDATE
+
+최소 다음을 모두 만족한다.
+
+1. 30m / close 전체 결과 BENEFICIAL
+2. 30m / close 강한 전체 표본 문턱 통과
+3. EARLY / RECENT 30m와 close 모두 BENEFICIAL
+4. RECENT 30m / close 강한 문턱 통과
+5. D+1 비교 가능 시 HARMFUL이 아님
+6. impact concentration/diversity 통과
+7. stance 재현성 통과
+8. 승인 당시 frozen Shadow 효과의 40–300% 범위에서 유지
+
+이 상태의 의미는 **Release Candidate / Canary 설계를 사람이 검토할 수 있다**는 것뿐이다.
+
+### 저장 구조
+
+현재 Ruleset 승계 상태:
+- `market_os_ruleset_succession_decisions`
+
+상태 전이:
+- `market_os_ruleset_succession_events`
+
+현재 v1.9는 release package, canary, live switch, 주문 로직을 생성하지 않는다.
+
