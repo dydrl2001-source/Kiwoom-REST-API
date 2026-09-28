@@ -9,7 +9,7 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 from market_os_rule_engine import VERSION
-from market_os_store import _quality,_segment_depth,_enrich_edges
+from market_os_store import _quality,_segment_depth,_enrich_edges,_validation_candidates
 
 db=os.environ['DATABASE_URL']
 with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor() as cur:
@@ -127,6 +127,20 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
         if not shown:
             print('상호작용 표본 5개 이상 없음')
 
+        gates=_validation_candidates(segments)
+        print('\n[VALIDATION GATE]')
+        if not gates:
+            print('형성 등급 이상의 30m/close/D+1 검증 후보 없음')
+        else:
+            for g in gates[:30]:
+                edge=g.get('edge_avg_return_pct')
+                edge_txt=(f"{edge:+.3f}pp" if edge is not None else '—')
+                print(f"{g['status']} {g['horizon']} {g['segment_type']}={g['segment_value']} "
+                      f"N={g['samples']} stocks={g['distinct_stocks']} days={g['distinct_days']} "
+                      f"q={g['quality']} avg={g['avg_return_pct']:.3f}% "
+                      f"med={g['median_return_pct']:.3f}% pos={(g['positive_rate'] or 0)*100:.1f}% "
+                      f"dAvg={edge_txt} reasons={','.join(g.get('reason_codes') or [])}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -156,5 +170,6 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
 
 print('\nSampling: 5m=non-overlap 5m, 30m=non-overlap 30m, close/D+1=one per stock-day.')
 print('Interaction policy: only pre-registered regime/setup/trigger/micro combinations are tested; no arbitrary combination search.')
+print('Validation gate: 30m/close/D+1 only; aligned mean+median+positive-rate, and interaction parent-complement checks. Review-only; no live score change.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
