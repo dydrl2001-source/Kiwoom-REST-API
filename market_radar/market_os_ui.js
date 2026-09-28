@@ -207,6 +207,25 @@
    ['Rule','구간','Cohort','상태','변경','Control N','Challenger N','Control 평균','Challenger 평균','Δ평균','Δ양(+)','ΔMAE'].forEach(v=>abHead.append(el('th',v)));const abThead=el('thead');abThead.append(abHead);const abBody=el('tbody');
    for(const s of sum.slice(0,80)){const tr=el('tr');const d=s.delta_avg_return_pct;tr.append(el('td',(s.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',s.horizon),el('td',s.cohort),el('td',stateKo(s.evidence_state)),el('td',s.membership_changes??0),el('td',s.control_samples??0),el('td',s.challenger_samples??0),el('td',pct(s.control_avg_return_pct)),el('td',pct(s.challenger_avg_return_pct)),el('td',d==null?'—':((d>=0?'+':'')+fmt(d,2)+'%p'),d>0?'mos-up':d<0?'mos-down':''),el('td',s.delta_positive_rate_pp==null?'—':((s.delta_positive_rate_pp>=0?'+':'')+fmt(s.delta_positive_rate_pp,1)+'%p')),el('td',s.delta_mae_pct==null?'—':((s.delta_mae_pct>=0?'+':'')+fmt(s.delta_mae_pct,2)+'%p')));abBody.append(tr);}
    if(!sum.length){const tr=el('tr'),td=el('td','승인 후 outcome이 쌓이면 CONTROL/CHALLENGER 비교가 여기에 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);abBody.append(tr);}abTable.append(abThead,abBody);abScroll.append(abTable);body.append(abScroll);
+   body.append(el('div','Shadow Decision Gate','mos-section-title'));
+   const ds=sl.decision_summary||{},dec=sl.decisions||[],dev=sl.decision_events||[],dg=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['수집중',ds.collecting||0,'30분 비교 문턱 전'],
+     ['비교가능',ds.comparable||0,'30분은 비교 가능'],
+     ['일관',ds.consistent||0,'시간·stance 방향 유지'],
+     ['교체후보',ds.accept_candidate||0,'사람의 교체 검토 자격'],
+     ['추가자료',ds.more_data||0,'혼합 또는 재현성 대기'],
+     ['기각',ds.reject||0,'prospective 악화가 반복']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));dg.append(card);}body.append(dg);
+   body.append(el('div','교체후보는 자동 채택이 아닙니다. 30분·종가 전체 효과, 거래일을 나눈 최근 절반, 실제 membership 변화, 시장 stance 재현성을 모두 검사한 뒤 사람에게 기존 CONTROL 교체 검토 자격만 부여합니다.','mos-note'));
+   const decisionKo=x=>({COLLECTING:'수집중',COMPARABLE:'비교가능',CONSISTENT:'일관',ACCEPT_CANDIDATE:'교체후보',REJECT:'기각',MORE_DATA:'추가자료'})[x]||x||'—';
+   const dcScroll=el('div',null,'mos-scroll'),dcTable=el('table',null,'mos-learn-table'),dcHead=el('tr');
+   ['상태','Rule','Action','조건','근거구간','주 Cohort','30m','종가','시간분할','Stance','검토자격','근거'].forEach(v=>dcHead.append(el('th',v)));const dcThead=el('thead');dcThead.append(dcHead);const dcBody=el('tbody');
+   for(const d of dec.slice(0,40)){const tr=el('tr'),ev=d.evidence||{},tm=ev.temporal||{},stances=ev.stance||[];const stanceText=stances.length?stances.map(x=>x.stance+':'+x.state).join(' / '):(ev.stance_scoped?'target scope':'대기');const timeText=[tm.early_30m,tm.recent_30m,tm.early_close,tm.recent_close].filter(Boolean).join(' / ')||'—';const cls=d.decision_state==='ACCEPT_CANDIDATE'?'mos-up':d.decision_state==='REJECT'?'mos-down':'';tr.append(el('td',decisionKo(d.decision_state),cls),el('td',(d.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',shadowAction(d.action)),el('td',(d.segment_type||'—')+' · '+(d.segment_value||'—')),el('td',d.source_horizon||'—'),el('td',d.primary_cohort||'—'),el('td',ev.overall_30m||'—'),el('td',ev.overall_close||'—'),el('td',timeText,'mos-micro'),el('td',stanceText,'mos-micro'),el('td',d.review_eligible?'YES':'NO',d.review_eligible?'mos-up':''),el('td',(d.reason_codes||[]).join(' · '),'mos-micro'));dcBody.append(tr);}
+   if(!dec.length){const tr=el('tr'),td=el('td','Shadow Rule 결과가 쌓이면 Decision Gate 상태가 여기에 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);dcBody.append(tr);}dcTable.append(dcThead,dcBody);dcScroll.append(dcTable);body.append(dcScroll);
+   body.append(el('div','Decision 전이','mos-section-title'));const deScroll=el('div',null,'mos-scroll'),deTable=el('table',null,'mos-learn-table'),deHead=el('tr');['시각','Rule','조건','이전','현재','검토자격','근거'].forEach(v=>deHead.append(el('th',v)));const deThead=el('thead');deThead.append(deHead);const deBody=el('tbody');
+   for(const e of dev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',(e.segment_type||'—')+' · '+(e.segment_value||'—')),el('td',decisionKo(e.from_state)),el('td',decisionKo(e.to_state),e.to_state==='ACCEPT_CANDIDATE'?'mos-up':e.to_state==='REJECT'?'mos-down':''),el('td',e.review_eligible?'YES':'NO'),el('td',(e.reason_codes||[]).join(' · '),'mos-micro'));deBody.append(tr);}
+   if(!dev.length){const tr=el('tr'),td=el('td','아직 Decision 상태 전이가 없습니다.','mos-empty');td.colSpan=7;tr.append(td);deBody.append(tr);}deTable.append(deThead,deBody);deScroll.append(deTable);body.append(deScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
