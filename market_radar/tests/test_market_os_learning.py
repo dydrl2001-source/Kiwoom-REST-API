@@ -97,12 +97,32 @@ class LearningPureTests(unittest.TestCase):
              'quality':'형성','avg_return_pct':-.10,'median_return_pct':-.05,'positive_rate':.48,
              'avg_mfe_pct':.70,'avg_mae_pct':-.70},
         ]
-        inter=store._enrich_edges(segs)
+        edges=[{
+            'segment_type':'STANCE_SETUP_TRIGGER',
+            'segment_value':'DEFENSIVE | 80-100 | BREAKOUT_TEST','horizon':'30m',
+            'parent_type':'STANCE_TRIGGER','parent_value':'DEFENSIVE | BREAKOUT_TEST',
+            'sample_basis':'NON_OVERLAP_30M',
+            'child_samples':120,'child_stocks':13,'child_days':6,
+            'comparator_samples':100,'comparator_stocks':12,'comparator_days':6,
+            'child_avg_return_pct':-.10,'comparator_avg_return_pct':-.40,'delta_avg_return_pct':.30,
+            'child_positive_rate':.48,'comparator_positive_rate':.40,'delta_positive_rate_pp':8.0,
+            'child_avg_mfe_pct':.70,'comparator_avg_mfe_pct':.50,'delta_mfe_pct':.20,
+            'child_avg_mae_pct':-.70,'comparator_avg_mae_pct':-1.00,'delta_mae_pct':.30,
+        }]
+        inter=store._enrich_edges(segs,edges)
         child=next(x for x in inter if x['segment_type']=='STANCE_SETUP_TRIGGER')
+        self.assertEqual(child['baseline']['comparison'],'PARENT_COMPLEMENT')
         self.assertAlmostEqual(child['edge_avg_return_pct'],.30)
         self.assertAlmostEqual(child['edge_positive_rate_pp'],8.0)
         self.assertAlmostEqual(child['edge_mae_pct'],.30)
         self.assertTrue(child['edge_ready'])
+
+    def test_parent_complement_key_for_four_way_interaction(self):
+        self.assertEqual(
+            learn._parent_key('STANCE_SETUP_TRIGGER_MICRO',
+                              'DEFENSIVE | 80-100 | BREAKOUT_TEST | STRONG_CONFIRM'),
+            ('STANCE_SETUP_TRIGGER','DEFENSIVE | 80-100 | BREAKOUT_TEST')
+        )
 
     def test_nonfinite_values_are_rejected(self):
         self.assertIsNone(learn.safe_num('NaN'))
