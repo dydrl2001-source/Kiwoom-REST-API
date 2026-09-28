@@ -5,7 +5,7 @@ from datetime import datetime,timezone,timedelta
 import json
 import os
 import re
-from flow_core import quote, metrics, group_rows, rotation_series, candidate_watchlist, segment, dt, event_from_report, report_sections, SPEC, VERSION, KST
+from flow_core import quote, metrics, group_rows, rotation_series, candidate_watchlist, reversal_signals, segment, dt, event_from_report, report_sections, SPEC, VERSION, KST
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS radar_flow_quotes (
@@ -495,7 +495,7 @@ def desk_payload(include_tracking=True):
 def chart_payload(code,interval=3):
     if not re.fullmatch(r'[0-9A-Z]{6}',code):raise ValueError('INVALID_CODE')
     if interval not in (1,3,5,10,15,30,60):raise ValueError('INVALID_INTERVAL')
-    now=datetime.now(timezone.utc);minute=[];daily=[];state=None
+    now=datetime.now(timezone.utc);minute=[];daily=[];state=None;strategies={}
     with db(True) as c, c.cursor() as cur:
         if exists(cur,'market_minute_bars'):
             cur.execute('SELECT bar_time,open_price,high_price,low_price,close_price,volume FROM market_minute_bars '
@@ -524,7 +524,19 @@ def chart_payload(code,interval=3):
                         'WHERE stock_code=%s ORDER BY snapshot_time DESC LIMIT 1',(code,))
             r=cur.fetchone()
             if r:state={**r,'snapshot_time':r['snapshot_time'].isoformat()}
+        if exists(cur,'mimosa_strategy_signals'):
+            cur.execute("""SELECT DISTINCT ON(strategy) strategy,state,state_ko,score,reasons,snapshot_time
+                           FROM mimosa_strategy_signals
+                           WHERE stock_code=%s AND snapshot_time>now()-interval '15 minutes'
+                           ORDER BY strategy,snapshot_time DESC""",(code,))
+            for r in cur.fetchall():
+                strategies[r['strategy']]={'state':r['state'],'state_ko':r['state_ko'],
+                    'score':r['score'],'reasons':r['reasons'] or [],
+                    'snapshot_time':r['snapshot_time'].isoformat() if r['snapshot_time'] else None}
+    minute_signals=reversal_signals(minute,strategies)
+    daily_signals=reversal_signals(daily,{})
     return {'code':code,'minute_interval':interval,'minute':minute,'daily':daily,'mimosa':state,
+            'strategies':strategies,'minute_reversal_signals':minute_signals,'daily_reversal_signals':daily_signals,
             'price_source':'기존 chart-feed의 KRX 차트; 통합(SOR) 거래대금과 거래소 범위가 다릅니다.',
-            'notice':'저장된 OHLCV만 표시. 조회 버튼은 키움 또는 유료 AI API를 직접 호출하지 않습니다. '
-                     '차트 대상 수집범위 밖이면 빈 상태로 표시하며 데이터가 없는 가격을 만들어내지 않습니다.'}
+            'notice':'저장된 OHLCV만 표시. 고점/바닥 표시는 복합 관찰 신호이며 정확한 고점·바닥 예측이나 매수·매도 지시가 아닙니다. '
+                     '조회 버튼은 키움 주문 또는 유료 AI API를 직접 호출하지 않습니다.'}
