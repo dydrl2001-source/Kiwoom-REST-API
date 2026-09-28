@@ -77,12 +77,12 @@
    const main=el('div',null,'mos-main'),left=el('section',null,'mos-panel'),right=el('aside',null,'mos-panel mos-detail');
    const ph=el('div',null,'mos-panel-head');ph.append(el('h3','관심종목 Screener'),el('div','축별 점수는 독립 지표','mos-micro'));left.append(ph,filterBar());
    const scroll=el('div',null,'mos-scroll'),table=el('table',null,'mos-table'),thead=el('thead'),trh=el('tr');
-   ['종목','단계','등락','Radar','Theme','Setup','Catalyst','Trigger','최근 구간','리스크'].forEach(x=>trh.append(el('th',x)));thead.append(trh);const tbody=el('tbody');table.append(thead,tbody);scroll.append(table);left.append(scroll);
+   ['종목','단계','등락','Radar','Theme','Setup','Catalyst','Trigger','학습','최근 구간','리스크'].forEach(x=>trh.append(el('th',x)));thead.append(trh);const tbody=el('tbody');table.append(thead,tbody);scroll.append(table);left.append(scroll);
    const xs=candidates();for(const x of xs){const r=rowData(x.code)||{},tr=el('tr');tr.dataset.selected=String(x.code===selected);tr.onclick=()=>{selected=x.code;renderContent();};
      const n=el('td');n.append(el('div',x.name,'mos-name'),el('div',x.code+' · '+(x.market_theme||'테마 미확인'),'mos-code'));tr.append(n);
      const tdTier=el('td');tdTier.append(el('span',tierKo(x.watch_tier),'mos-tier '+tierClass(x.watch_tier)));tr.append(tdTier);
-     tr.append(el('td',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''),el('td',x.radar_score,'mos-axisnum'),el('td',x.theme_score,'mos-axisnum'),el('td',x.setup_score,'mos-axisnum'),el('td',x.catalyst_grade||'—'),el('td',x.trigger_state||'—'),el('td',money(x.interval_turnover_krw)),el('td',(x.risk_flags||[]).length?String((x.risk_flags||[]).length):'—'));tbody.append(tr);}
-   if(!xs.length){const tr=el('tr'),td=el('td','현재 필터를 충족한 후보가 없습니다.','mos-empty');td.colSpan=10;tr.append(td);tbody.append(tr);}
+     const lc=(x.learning_context||[])[0];tr.append(el('td',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''),el('td',x.radar_score,'mos-axisnum'),el('td',x.theme_score,'mos-axisnum'),el('td',x.setup_score,'mos-axisnum'),el('td',x.catalyst_grade||'—'),el('td',x.trigger_state||'—'),el('td',lc?('N'+lc.samples+' · '+pct(lc.avg_return_pct)):'—',lc&&lc.avg_return_pct>0?'mos-up':lc&&lc.avg_return_pct<0?'mos-down':''),el('td',money(x.interval_turnover_krw)),el('td',(x.risk_flags||[]).length?String((x.risk_flags||[]).length):'—'));tbody.append(tr);}
+   if(!xs.length){const tr=el('tr'),td=el('td','현재 필터를 충족한 후보가 없습니다.','mos-empty');td.colSpan=11;tr.append(td);tbody.append(tr);}
    main.append(left,right);content.replaceChildren(main);renderDetail(right);
  }
 
@@ -93,6 +93,16 @@
    box.append(el('h4','Independent axes'),axis('Radar',x.radar_score),axis('Theme',x.theme_score),axis('Setup',x.setup_score));
    box.append(el('h4','Why now'));const why=el('div',null,'mos-reasons');for(const v of [...(x.axis_reasons?.radar||[]),...(x.axis_reasons?.theme||[]),...(x.axis_reasons?.setup||[])].slice(0,10))why.append(pill(v));box.append(why);
    box.append(el('h4','Market context'),el('div',(x.market_stance_label||x.market_stance)+' · '+(DATA?.market_regime?.stable_label||DATA?.market_regime?.candidate_label||'레짐 대기'),'mos-note'));
+   const hist=x.learning_context||[];
+   box.append(el('h4','Shadow learning'));
+   if(hist.length){
+     const hc=el('div',null,'mos-note');
+     for(const s of hist){
+       const line=el('div',(s.segment_type+' · '+s.horizon+' · N'+s.samples+' · 평균 '+pct(s.avg_return_pct)+' · 양(+) '+(s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%')),'mos-micro');
+       hc.append(line);
+     }
+     box.append(hc);
+   }else box.append(el('div','동일 조건의 확정 표본이 아직 20개 미만입니다. 현재 판단에는 역사 성과를 반영하지 않습니다.','mos-note'));
    box.append(el('h4','Invalidation / Risk'));box.append(el('div',(x.risk_flags||[]).length?(x.risk_flags||[]).join(' · '):'현재 등록된 위험 플래그 없음','mos-risk'));
    if(r.research){box.append(el('h4','Catalyst evidence'),el('div',(x.catalyst_note||'인용 포함 보고서')+' · '+stamp(r.research.completed_at),'mos-note'));const sec=r.research.sections||{};if(sec['핵심 재료'])box.append(el('div',sec['핵심 재료'].text,'mos-research'));}
    else box.append(el('h4','Catalyst evidence'),el('div',x.catalyst_note||'종합 검증 대기','mos-note'));
