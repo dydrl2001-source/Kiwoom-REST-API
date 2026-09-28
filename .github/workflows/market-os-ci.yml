@@ -34,6 +34,12 @@ jobs:
         working-directory: market_radar
         run: python -m unittest discover -s tests -p "test_market_os*.py" -v
 
+      - name: Run flow and candidate-tracker regression tests
+        working-directory: market_radar
+        run: |
+          python -m unittest tests.test_flow -v
+          python -m unittest tests.test_candidate_tracker -v
+
       - name: Check browser JavaScript syntax
         run: |
           node --check market_radar/market_os_ui.js
@@ -41,3 +47,11 @@ jobs:
 
       - name: Validate rulebook JSON
         run: python -m json.tool market_radar/rulebook/market_os_rules.json >/dev/null
+
+      - name: Check rollout shell syntax
+        run: |
+          bash -n market_radar/local/update_flow_desk.sh
+          bash -n market_radar/local/check_flow_desk.sh
+          bash -n market_radar/local/check_market_os.sh
+          bash -n market_radar/local/check_market_os_live.sh
+          bash -n market_radar/local/launch_market_os_live.sh
