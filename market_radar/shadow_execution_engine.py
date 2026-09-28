@@ -21,6 +21,7 @@ from ai_brokerage.execution_model import (
     FillPolicy,
     PortfolioRiskPolicy,
     SizingPolicy,
+    estimate_book_capacity,
     estimate_book_fill,
     estimate_fill,
     implementation_shortfall_summary,
@@ -42,6 +43,7 @@ ALLOW_PROXY_FALLBACK=os.getenv("SHADOW_ALLOW_PROXY_FALLBACK","1").strip().lower(
 BOOK_MAX_AGE_SEC=max(5,min(120,int(os.getenv("SHADOW_BOOK_MAX_AGE_SECONDS","30"))))
 BOOK_HAIRCUT=max(.05,min(1.0,float(os.getenv("SHADOW_BOOK_LIQUIDITY_HAIRCUT","0.5"))))
 BOOK_MAX_SPREAD_BPS=max(5.0,min(500.0,float(os.getenv("SHADOW_BOOK_MAX_SPREAD_BPS","120"))))
+BOOK_CAPACITY_MAX_IS_BPS=max(5.0,min(200.0,float(os.getenv("SHADOW_BOOK_CAPACITY_MAX_IS_BPS","30"))))
 PORT_MAX_TOTAL_RISK_PCT=max(.1,min(20.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_TOTAL_RISK_PCT","2.0"))))
 PORT_MAX_THEME_RISK_PCT=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_THEME_RISK_PCT","0.8"))))
 PORT_MAX_FAMILY_RISK_PCT=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_FAMILY_RISK_PCT","1.2"))))
@@ -89,6 +91,10 @@ CREATE TABLE IF NOT EXISTS ai_shadow_trades(
   requested_notional_krw NUMERIC,
   stop_pct DOUBLE PRECISION,
   risk_at_entry_krw NUMERIC,
+  entry_book_capacity_shares INTEGER,
+  entry_book_capacity_krw NUMERIC,
+  entry_book_capacity_is_bps DOUBLE PRECISION,
+  entry_spread_bps DOUBLE PRECISION,
   entry_at TIMESTAMPTZ,
   entry_ref_price_krw NUMERIC,
   entry_arrival_mid_krw NUMERIC,
@@ -124,6 +130,10 @@ CREATE TABLE IF NOT EXISTS ai_shadow_trades(
 );
 ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS market_theme TEXT;
 ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS risk_at_entry_krw NUMERIC;
+ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS entry_book_capacity_shares INTEGER;
+ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS entry_book_capacity_krw NUMERIC;
+ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS entry_book_capacity_is_bps DOUBLE PRECISION;
+ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS entry_spread_bps DOUBLE PRECISION;
 ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS entry_arrival_mid_krw NUMERIC;
 ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS entry_implementation_shortfall_bps DOUBLE PRECISION;
 ALTER TABLE ai_shadow_trades ADD COLUMN IF NOT EXISTS entry_model_mode TEXT;
@@ -323,8 +333,13 @@ def open_new(cur):
     for p in cur.fetchall():
         vol=volatility_bps(cur,p["stock_code"],p["opened_at"])
         book=latest_book(cur,p["stock_code"],p["opened_at"])
+        book_capacity=None
         if book:
             sizing_ref=(finite(book.get("best_ask_krw")) or finite(book.get("best_bid_krw")))
+            book_capacity=estimate_book_capacity(
+                "BUY",book,BOOK_FILL,
+                max_implementation_shortfall_bps=BOOK_CAPACITY_MAX_IS_BPS
+            )
         else:
             sizing_ref,_,_=quote_pair(cur,p["stock_code"],p["opened_at"])
         sizing=SIZING.size(sizing_ref,vol) if sizing_ref else {
@@ -373,15 +388,21 @@ def open_new(cur):
                        paper_trade_id,stock_code,stock_name,market_theme,strategy_id,strategy_name,
                        strategy_family,regime_label,status,requested_shares,filled_shares,
                        requested_notional_krw,stop_pct,risk_at_entry_krw,
+                       entry_book_capacity_shares,entry_book_capacity_krw,
+                       entry_book_capacity_is_bps,entry_spread_bps,
                        entry_at,entry_ref_price_krw,entry_arrival_mid_krw,entry_fill_price_krw,
                        entry_slippage_bps,entry_implementation_shortfall_bps,
                        entry_fill_ratio,entry_model_quality,entry_model_mode,
                        sizing,risk_gate,entry_model)
                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                              %s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb)""",
+                              %s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb)""",
                     (p["id"],p["stock_code"],p["stock_name"],p["market_theme"],p["strategy_id"],
                      p["strategy_name"],p["strategy_family"],p["regime_label"],status,requested,filled,
                      float(sizing_ref*requested) if sizing_ref and requested else 0.0,stop_pct,risk_at_entry,
+                     int((book_capacity or {}).get("capacity_shares") or 0) if book_capacity else None,
+                     finite((book_capacity or {}).get("capacity_notional_krw")) if book_capacity else None,
+                     finite((book_capacity or {}).get("capacity_is_bps")) if book_capacity else None,
+                     finite((book_capacity or {}).get("spread_bps")) if book_capacity else finite(fill.get("spread_bps")),
                      p["opened_at"],arrival,finite(fill.get("arrival_mid_krw")),entry_price,slippage,
                      finite(fill.get("implementation_shortfall_bps")),finite(fill.get("fill_ratio")),
                      fill.get("model_quality"),mode,json.dumps(sizing,ensure_ascii=False),
