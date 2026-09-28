@@ -550,6 +550,12 @@ def learning_payload():
                        "superseded":0,"stale_decision":0},
             "notice":"ACCEPT_CANDIDATE의 증거·반례·영향범위·rollback 조건을 immutable revision으로 심사합니다. APPROVED_DRY_RUN도 live rule 생성이 아닙니다."
         },
+        "ruleset_dry_run":{
+            "enabled":os.getenv("MARKET_OS_RULESET_DRY_RUN_ENABLED","1").strip().lower() in {"1","true","yes","on"},
+            "rulesets":[],"summaries":[],"events":[],
+            "summary":{"active":0,"stopped":0,"stale_source":0,"observations":0,"changed":0},
+            "notice":"APPROVED_DRY_RUN dossier를 사람이 다시 시작한 뒤 CONTROL market-os-v1과 immutable candidate ruleset을 prospective로 병렬 계산합니다. live Market OS는 변경하지 않습니다."
+        },
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
@@ -798,6 +804,69 @@ def learning_payload():
                 x=dict(r)
                 x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
                 learning["adoption_review"]["events"].append(x)
+        if exists(cur,"market_os_versioned_rulesets"):
+            cur.execute("""SELECT vr.ruleset_id,vr.version_label,vr.base_rule_version,
+                                  vr.source_dossier_id,vr.source_shadow_rule_id,vr.status,
+                                  vr.spec_hash,vr.spec,vr.created_at,vr.activated_at,
+                                  vr.stopped_at,vr.stale_at,vr.last_evaluated_at,vr.note,
+                                  COUNT(o.*) AS observations,
+                                  COUNT(o.*) FILTER(WHERE o.changed) AS changed
+                           FROM market_os_versioned_rulesets vr
+                           LEFT JOIN market_os_ruleset_dry_run_observations o
+                             ON o.ruleset_id=vr.ruleset_id
+                           GROUP BY vr.ruleset_id
+                           ORDER BY CASE vr.status WHEN 'DRY_RUN_ACTIVE' THEN 1
+                                    WHEN 'STALE_SOURCE' THEN 2 ELSE 3 END,
+                                    vr.activated_at DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("created_at","activated_at","stopped_at","stale_at","last_evaluated_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                x["observations"]=int(r["observations"] or 0)
+                x["changed"]=int(r["changed"] or 0)
+                learning["ruleset_dry_run"]["rulesets"].append(x)
+            learning["ruleset_dry_run"]["summary"]["active"]=sum(
+                x["status"]=="DRY_RUN_ACTIVE" for x in learning["ruleset_dry_run"]["rulesets"]
+            )
+            learning["ruleset_dry_run"]["summary"]["stopped"]=sum(
+                x["status"]=="DRY_RUN_STOPPED" for x in learning["ruleset_dry_run"]["rulesets"]
+            )
+            learning["ruleset_dry_run"]["summary"]["stale_source"]=sum(
+                x["status"]=="STALE_SOURCE" for x in learning["ruleset_dry_run"]["rulesets"]
+            )
+            learning["ruleset_dry_run"]["summary"]["observations"]=sum(
+                x["observations"] for x in learning["ruleset_dry_run"]["rulesets"]
+            )
+            learning["ruleset_dry_run"]["summary"]["changed"]=sum(
+                x["changed"] for x in learning["ruleset_dry_run"]["rulesets"]
+            )
+        if exists(cur,"market_os_ruleset_dry_run_summary"):
+            cur.execute("""SELECT ruleset_id,horizon,cohort,evidence_state,membership_changes,
+                                  control_samples,control_stocks,control_days,
+                                  control_avg_return_pct,control_median_return_pct,
+                                  control_positive_rate,control_avg_mfe_pct,control_avg_mae_pct,
+                                  candidate_samples,candidate_stocks,candidate_days,
+                                  candidate_avg_return_pct,candidate_median_return_pct,
+                                  candidate_positive_rate,candidate_avg_mfe_pct,candidate_avg_mae_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct,updated_at
+                           FROM market_os_ruleset_dry_run_summary
+                           ORDER BY CASE evidence_state WHEN 'COMPARABLE' THEN 1
+                                    WHEN 'FORMING' THEN 2 WHEN 'COLLECTING' THEN 3 ELSE 4 END,
+                                    CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                    WHEN 'D+1' THEN 3 ELSE 4 END,cohort,ruleset_id""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["updated_at"]=r["updated_at"].isoformat() if r["updated_at"] else None
+                learning["ruleset_dry_run"]["summaries"].append(x)
+        if exists(cur,"market_os_ruleset_events"):
+            cur.execute("""SELECT event_id,ruleset_id,event_time,event_type,
+                                  from_status,to_status,evidence
+                           FROM market_os_ruleset_events
+                           ORDER BY event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["ruleset_dry_run"]["events"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
