@@ -76,5 +76,98 @@ class ShadowRulePureTests(unittest.TestCase):
         self.assertEqual(s['membership_changes'],1)
 
 
+    def summary_cell(self,horizon='30m',cohort='REVIEW',changes=12,
+                     cavg=.20,havg=.55,cpos=.50,hpos=.58,cmae=-1.0,hmae=-.7,
+                     n=50,days=7,stocks=10):
+        return {
+            'horizon':horizon,'cohort':cohort,'membership_changes':changes,
+            'control':{'samples':n,'distinct_stocks':stocks,'distinct_days':days,
+                       'avg_return_pct':cavg,'median_return_pct':cavg,
+                       'positive_rate':cpos,'avg_mfe_pct':1.0,'avg_mae_pct':cmae},
+            'challenger':{'samples':n,'distinct_stocks':stocks,'distinct_days':days,
+                          'avg_return_pct':havg,'median_return_pct':havg,
+                          'positive_rate':hpos,'avg_mfe_pct':1.2,'avg_mae_pct':hmae},
+            'delta_avg_return_pct':havg-cavg,
+            'delta_positive_rate_pp':(hpos-cpos)*100,
+            'delta_mae_pct':hmae-cmae,
+        }
+
+    def test_decision_gate_collects_before_30m_is_comparable(self):
+        weak=self.summary_cell(n=8,days=1,stocks=2,changes=2)
+        d=shadow.shadow_decision(
+            {'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST'},
+            [weak],[]
+        )
+        self.assertEqual(d['state'],'COLLECTING')
+        self.assertFalse(d['review_eligible'])
+
+    def test_decision_gate_rejects_consistent_harm(self):
+        bad30=self.summary_cell(cavg=.5,havg=.1,cpos=.60,hpos=.48,cmae=-.5,hmae=-1.0)
+        badc=self.summary_cell(horizon='close',cavg=.6,havg=.1,cpos=.62,hpos=.48,cmae=-.6,hmae=-1.1)
+        d=shadow.shadow_decision(
+            {'segment_type':'STANCE_TRIGGER','segment_value':'DEFENSIVE | BREAKOUT_TEST'},
+            [bad30,badc],[]
+        )
+        self.assertEqual(d['state'],'REJECT')
+
+    def test_decision_gate_accept_candidate_requires_time_and_stance_replication(self):
+        overall=[
+            self.summary_cell('30m','REVIEW'),
+            self.summary_cell('close','REVIEW',cavg=.10,havg=.45,cpos=.50,hpos=.58,cmae=-1.0,hmae=-.7),
+        ]
+        slices=[]
+        for window in ('EARLY','RECENT'):
+            for h in ('30m','close'):
+                cell=self.summary_cell(h,'REVIEW',changes=10,n=40,days=3,stocks=8)
+                slices.append({'scope_type':'WINDOW','scope_value':window,**cell})
+        for stance in ('EXPANDABLE','SELECTIVE'):
+            cell=self.summary_cell('30m','REVIEW',changes=7,n=25,days=4,stocks=6)
+            slices.append({'scope_type':'STANCE','scope_value':stance,**cell})
+        d=shadow.shadow_decision(
+            {'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST'},
+            overall,slices
+        )
+        self.assertEqual(d['state'],'ACCEPT_CANDIDATE')
+        self.assertTrue(d['review_eligible'])
+
+    def test_decision_gate_nonstance_rule_waits_for_second_stance(self):
+        overall=[
+            self.summary_cell('30m','REVIEW'),
+            self.summary_cell('close','REVIEW'),
+        ]
+        slices=[]
+        for window in ('EARLY','RECENT'):
+            for h in ('30m','close'):
+                cell=self.summary_cell(h,'REVIEW',changes=10,n=40,days=3,stocks=8)
+                slices.append({'scope_type':'WINDOW','scope_value':window,**cell})
+        cell=self.summary_cell('30m','REVIEW',changes=7,n=25,days=4,stocks=6)
+        slices.append({'scope_type':'STANCE','scope_value':'SELECTIVE',**cell})
+        d=shadow.shadow_decision(
+            {'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST'},
+            overall,slices
+        )
+        self.assertEqual(d['state'],'MORE_DATA')
+        self.assertIn('MULTI_STANCE_REPLICATION_PENDING',d['reason_codes'])
+
+    def test_decision_gate_stance_scoped_rule_needs_target_stance_only(self):
+        overall=[
+            self.summary_cell('30m','REVIEW'),
+            self.summary_cell('close','REVIEW'),
+        ]
+        slices=[]
+        for window in ('EARLY','RECENT'):
+            for h in ('30m','close'):
+                cell=self.summary_cell(h,'REVIEW',changes=10,n=40,days=3,stocks=8)
+                slices.append({'scope_type':'WINDOW','scope_value':window,**cell})
+        cell=self.summary_cell('30m','REVIEW',changes=7,n=25,days=4,stocks=6)
+        slices.append({'scope_type':'STANCE','scope_value':'DEFENSIVE',**cell})
+        d=shadow.shadow_decision(
+            {'segment_type':'STANCE_TRIGGER',
+             'segment_value':'DEFENSIVE | BREAKOUT_TEST'},
+            overall,slices
+        )
+        self.assertIn(d['state'],('CONSISTENT','ACCEPT_CANDIDATE'))
+
+
 if __name__=='__main__':
     unittest.main()
