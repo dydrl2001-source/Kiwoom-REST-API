@@ -93,11 +93,11 @@
    box.append(el('h4','Independent axes'),axis('Radar',x.radar_score),axis('Theme',x.theme_score),axis('Setup',x.setup_score));
    box.append(el('h4','Why now'));const why=el('div',null,'mos-reasons');for(const v of [...(x.axis_reasons?.radar||[]),...(x.axis_reasons?.theme||[]),...(x.axis_reasons?.setup||[])].slice(0,10))why.append(pill(v));box.append(why);
    box.append(el('h4','Market context'),el('div',(x.market_stance_label||x.market_stance)+' · '+(DATA?.market_regime?.stable_label||DATA?.market_regime?.candidate_label||'레짐 대기'),'mos-note'));
-   const hist=x.learning_context||[];
+   const histctx=x.learning_context||[];
    box.append(el('h4','Shadow learning'));
-   if(hist.length){
+   if(histctx.length){
      const hc=el('div',null,'mos-note');
-     for(const s of hist){
+     for(const s of histctx){
        const line=el('div',(s.segment_type+' · '+s.horizon+' · N'+s.samples+' · 평균 '+pct(s.avg_return_pct)+' · 양(+) '+(s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%')),'mos-micro');
        hc.append(line);
      }
