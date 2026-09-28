@@ -307,3 +307,83 @@ Registry refresh는 후보를 삭제하지 않는다. 현재 60일 학습창에�
 
 이 단계 역시 live 점수, 주문, 실전 비중을 자동 변경하지 않는다.
 
+## Shadow Rule Lab v1.5 — Prospective CONTROL vs CHALLENGER
+
+`PROMOTION_CANDIDATE`가 충분한 과거·walk-forward 근거를 갖더라도 기존 Market OS 규칙을 바로 바꾸지 않는다. 사람의 명시적 승인 이후 **별도 challenger**로만 실행한다.
+
+### 수동 승인 경계
+
+자동 학습은 `SHADOW_RULE`을 만들 수 없다.
+
+수동 도구:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh list
+bash market_radar/local/shadow_rule_admin.sh approve <candidate_key> --confirm
+bash market_radar/local/shadow_rule_admin.sh disable <shadow_rule_id> --confirm
+```
+
+승인은 `PROMOTION_CANDIDATE`에만 허용한다. 승인 시각을 prospective boundary로 고정하며 **승인 이전 assessment는 Shadow A/B에 재사용하지 않는다.** 동일 candidate를 다시 승인해 이 경계를 재설정하는 것도 금지한다.
+
+### Challenger v1의 허용 행동
+
+현재 v1.5에서 challenger는 live score weight를 직접 바꾸지 않는다. 현재 assessment universe 안에서 **review tier를 한 단계만** shadow 이동한다.
+
+- `PROMOTE_ONE_TIER`: DISCOVER → PREP → FOCUS
+- `SUPPRESS_ONE_TIER`: FOCUS → PREP → DISCOVER
+- FOCUS의 promote와 DISCOVER의 suppress는 더 이동하지 않는다.
+- `BLOCKED`는 어떠한 shadow promotion으로도 해제하지 않는다.
+
+규칙의 condition은 Promotion Registry의 사전등록 segment language를 그대로 사용한다. 0B MICRO 조건은 gap-free 자료에서만 match한다.
+
+### 동일한 관측 경로
+
+각 승인 규칙마다 같은 assessment에 대해 두 판단을 저장한다.
+
+```text
+CONTROL
+= 실제 당시 Market OS watch tier
+
+CHALLENGER
+= 같은 assessment + 승인된 shadow rule
+```
+
+둘은 동일한 기준가격, 동일한 +5m/+30m/close/D+1 outcome을 공유한다. challenger를 위해 별도 가격을 선택하거나 미래자료를 condition에 사용하지 않는다.
+
+### 비교 cohort
+
+두 운영 관점에서 cohort composition을 비교한다.
+
+- `FOCUS`: 최우선 검토군
+- `REVIEW`: FOCUS + PREP
+
+반복 snapshot을 독립 표본으로 세지 않고 기존 episode-anchor 규칙을 동일하게 적용한다.
+
+각 horizon/cohort에 대해 기록:
+- CONTROL / CHALLENGER N
+- 종목 수 / 거래일 수
+- 평균·중앙 수익률
+- 양(+) 비율
+- 평균 MFE / MAE
+- challenger − control Δ평균수익률
+- Δ양(+)비율
+- ΔMAE
+- 실제 cohort membership이 달라진 episode 수
+
+### Evidence state
+
+Shadow A/B는 적은 표본으로 승자를 선언하지 않는다.
+
+- `NO_DIFFERENCE`: challenger가 cohort membership을 바꾸지 않음
+- `COLLECTING`: 비교 표본·종목·거래일 부족
+- `FORMING`: 차이는 발생하지만 아직 비교 근거가 초기 단계
+- `COMPARABLE`: 양쪽 cohort와 membership change가 최소 비교 문턱을 통과
+
+`COMPARABLE` 역시 자동 채택을 뜻하지 않는다. 이 단계는 CONTROL보다 challenger가 실제 prospective 자료에서 어떤 차이를 만들었는지 사람이 검토할 수 있다는 의미다.
+
+### 현재 범위의 한계
+
+v1.5는 기존 Market OS가 이미 assessment로 포착한 종목 안에서 tier priority를 시험한다. 현재 shortlist 밖의 새 종목을 challenger가 추가하는 **universe expansion 실험은 포함하지 않는다.**
+
+Shadow Rule Lab은 live Radar / Theme / Setup / Catalyst / Trigger 계산, 실제 watch tier, 주문, 포지션, 비중을 수정하지 않는다.
+
