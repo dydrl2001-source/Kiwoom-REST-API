@@ -73,8 +73,7 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                        FROM market_os_learning_segments
                        WHERE samples>=5
                        ORDER BY CASE horizon WHEN '5m' THEN 1 WHEN '30m' THEN 2 WHEN 'close' THEN 3 ELSE 4 END,
-                                samples DESC,segment_type,segment_value
-                       LIMIT 80""")
+                                samples DESC,segment_type,segment_value""")
         rows=cur.fetchall()
         segments=[]
         for r in rows:
@@ -90,7 +89,7 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
         print('\n[SEGMENTS N>=5]')
         if not rows:
             print('표본 5개 이상 구간 없음')
-        for r in rows:
+        for r in rows[:80]:
             print(f"{r['horizon']} | {r['segment_type']}={r['segment_value']} | "
                   f"N={r['samples']} stocks={r['distinct_stocks']} days={r['distinct_days']} basis={r['sample_basis']} "
                   f"avg={r['avg_return']}% med={r['median_return']}% pos={r['positive_pct']}% "
@@ -127,29 +126,21 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"quality={s['quality']} dAvg={s.get('edge_avg_return_pct'):+.3f}pp "
                       f"dPos={s.get('edge_positive_rate_pp'):+.1f}pp")
 
-        cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
-                              avg_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct
-                       FROM market_os_learning_segments
-                       WHERE samples>=20 AND distinct_stocks>=5 AND distinct_days>=2
-                         AND horizon IN('30m','close')
-                       ORDER BY avg_return_pct DESC NULLS LAST LIMIT 8""")
-        strong=cur.fetchall()
-        cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
-                              avg_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct
-                       FROM market_os_learning_segments
-                       WHERE samples>=20 AND distinct_stocks>=5 AND distinct_days>=2
-                         AND horizon IN('30m','close')
-                       ORDER BY avg_return_pct ASC NULLS LAST LIMIT 8""")
-        weak=cur.fetchall()
-        print('\n[REVIEW CANDIDATES N>=20]')
-        if not strong and not weak:
-            print('아직 30m/close 표본 20개 이상 조건 없음')
+        review=[s for s in segments
+                if s["horizon"] in ("30m","close")
+                and s["quality"] in ("형성","충분")
+                and s.get("interaction_depth",_segment_depth(s["segment_type"]))==1]
+        review.sort(key=lambda s:(s["avg_return_pct"] is None,-(s["avg_return_pct"] or 0)))
+        print('\n[BASE REVIEW READY]')
+        if not review:
+            print('아직 형성 등급 이상의 30m/close 단일축 조건 없음')
         else:
-            for label,rows in [('STRONG',strong),('WEAK',weak)]:
-                for r in rows:
-                    print(f"{label} {r['horizon']} {r['segment_type']}={r['segment_value']} "
-                          f"N={r['samples']} stocks={r['distinct_stocks']} days={r['distinct_days']} "
-                          f"avg={r['avg_return_pct']:.3f}% positive={(r['positive_rate'] or 0)*100:.1f}%")
+            for s in review[:12]:
+                print(f"{s['horizon']} {s['segment_type']}={s['segment_value']} "
+                      f"N={s['samples']} stocks={s['distinct_stocks']} days={s['distinct_days']} "
+                      f"q={s['quality']} avg={s['avg_return_pct']:.3f}% "
+                      f"positive={(s['positive_rate'] or 0)*100:.1f}%")
+
 
 print('\nSampling: 5m=non-overlap 5m, 30m=non-overlap 30m, close/D+1=one per stock-day.')
 print('Interaction policy: only pre-registered regime/setup/trigger/micro combinations are tested; no arbitrary combination search.')
