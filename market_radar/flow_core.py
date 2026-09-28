@@ -450,6 +450,117 @@ def candidate_watchlist(rows, theme_rotation, limit=12):
     eligible.sort(key=lambda x:(-x['attention_score'],-(x.get('interval_turnover_krw') or 0)))
     return eligible[:limit]
 
+
+def _rsi(values, period=14):
+    if len(values)<period+1:return [None]*len(values)
+    out=[None]*len(values);gains=[];losses=[]
+    for i in range(1,len(values)):
+        d=values[i]-values[i-1];gains.append(max(d,0));losses.append(max(-d,0))
+        if i==period:
+            ag=sum(gains[-period:])/period;al=sum(losses[-period:])/period
+        elif i>period:
+            ag=(ag*(period-1)+gains[-1])/period;al=(al*(period-1)+losses[-1])/period
+        else:continue
+        rs=ag/al if al>0 else float('inf')
+        out[i]=100-(100/(1+rs))
+    return out
+
+
+def reversal_signals(bars, strategy_signals=None, max_signals=14):
+    """Multi-factor top-warning / bottom-watch observations.
+
+    Source framing:
+    - user's Mimosa notes: large turnover/new-high/leader trend matter, but reject a
+      setup when the minute trend bends down; M-contraction is an early structure.
+    - general TA confirmation: momentum extremes alone are insufficient; divergence,
+      volume, support/resistance and reversal-bar context are combined.
+
+    These are warning/watch labels, never exact tops/bottoms or trade instructions.
+    """
+    clean=[]
+    for b in bars or []:
+        try:
+            o,h,l,c=float(b['open']),float(b['high']),float(b['low']),float(b['close'])
+            v=float(b.get('volume') or 0)
+            if min(o,h,l,c)<=0 or h<max(o,c,l) or l>min(o,c,h):continue
+            clean.append({**b,'open':o,'high':h,'low':l,'close':c,'volume':max(0,v)})
+        except (TypeError,ValueError,KeyError):
+            continue
+    if len(clean)<22:
+        return {'signals':[],'latest':None,'note':'신호 계산에 최소 22개 유효 봉 필요'}
+    closes=[x['close'] for x in clean];vols=[x['volume'] for x in clean];rsi=_rsi(closes,14)
+    sigs=[];strategy_signals=strategy_signals or {}
+    for i in range(20,len(clean)):
+        b=clean[i];prior=clean[max(0,i-20):i]
+        prior_high=max(x['high'] for x in prior);prior_low=min(x['low'] for x in prior)
+        vrange=max(1e-9,b['high']-b['low'])
+        upper=(b['high']-max(b['open'],b['close']))/vrange
+        lower=(min(b['open'],b['close'])-b['low'])/vrange
+        close_pos=(b['close']-b['low'])/vrange
+        avgvol=sum(vols[max(0,i-20):i])/max(1,len(vols[max(0,i-20):i]))
+        volx=(b['volume']/avgvol) if avgvol>0 else None
+        prev5=closes[max(0,i-5):i]
+        uptrend=bool(prev5 and closes[i-1] > prev5[0]*1.02)
+        downtrend=bool(prev5 and closes[i-1] < prev5[0]*.98)
+        top=0;bottom=0;top_reason=[];bottom_reason=[]
+        rv=rsi[i]
+
+        if rv is not None and rv>=75:top+=12;top_reason.append('RSI 과열')
+        if rv is not None and rv<=25:bottom+=12;bottom_reason.append('RSI 과매도')
+
+        # Regular RSI divergence against a recent comparable swing extreme.
+        prev_hi_idx=max(range(max(0,i-20),i),key=lambda j:clean[j]['high'])
+        prev_lo_idx=min(range(max(0,i-20),i),key=lambda j:clean[j]['low'])
+        if b['high']>=prior_high and rsi[prev_hi_idx] is not None and rv is not None and rv<=rsi[prev_hi_idx]-5:
+            top+=22;top_reason.append('가격 고점↑ · RSI 고점↓')
+        if b['low']<=prior_low and rsi[prev_lo_idx] is not None and rv is not None and rv>=rsi[prev_lo_idx]+5:
+            bottom+=22;bottom_reason.append('가격 저점↓ · RSI 저점↑')
+
+        # Failed breakout / spring reclaim around the previous 20-bar boundary.
+        if b['high']>prior_high and b['close']<prior_high:
+            top+=24;top_reason.append('전고 돌파 실패')
+        if b['low']<prior_low and b['close']>prior_low:
+            bottom+=24;bottom_reason.append('저점 이탈 후 회복')
+
+        if volx is not None and volx>=1.6 and upper>=.42 and uptrend:
+            top+=16;top_reason.append(f'고거래량 윗꼬리 {volx:.1f}배')
+        if volx is not None and volx>=1.6 and lower>=.42 and downtrend:
+            bottom+=16;bottom_reason.append(f'고거래량 아랫꼬리 {volx:.1f}배')
+        if volx is not None and volx>=2.5 and close_pos<=.40 and uptrend:
+            top+=14;top_reason.append('거래량 클라이맥스·종가 약화')
+        if volx is not None and volx>=2.5 and close_pos>=.60 and downtrend:
+            bottom+=14;bottom_reason.append('투매성 거래 후 종가 회복')
+
+        # Current Mimosa strategy context is only attached to the latest bar.
+        if i==len(clean)-1:
+            close_sig=strategy_signals.get('CLOSE_BET') or {}
+            over=strategy_signals.get('OVERSOLD') or {}
+            fall=strategy_signals.get('FALLING_STOCK') or {}
+            if close_sig.get('state')=='CLOSEBET_NO' and '추세' in str(close_sig.get('state_ko') or ''):
+                top+=18;top_reason.append('미모사 분봉 추세 훼손')
+            if over.get('state')=='OVERSOLD_REBOUND_WATCH':
+                bottom+=18;bottom_reason.append('미모사 과대낙폭 반등 감시')
+            if fall.get('state')=='FALLING_REBOUND_WATCH':
+                bottom+=18;bottom_reason.append('미모사 낙주 반등 감시')
+
+        top=min(100,round(top));bottom=min(100,round(bottom))
+        if max(top,bottom)<45:continue
+        if top>=bottom:
+            kind='TOP_WARNING';score=top;reasons=top_reason
+            label='고점 경계' if top<70 else '고점 경계 강화'
+        else:
+            kind='BOTTOM_WATCH';score=bottom;reasons=bottom_reason
+            label='바닥 감시' if bottom<70 else '바닥 구조 강화'
+        sigs.append({'index':i,'time':b.get('time'),'kind':kind,'label':label,'score':score,
+                     'price':b['close'],'rsi':round(rv,1) if rv is not None else None,
+                     'volume_multiple':round(volx,2) if volx is not None else None,
+                     'reasons':reasons[:4]})
+    sigs=sigs[-max_signals:]
+    latest=sigs[-1] if sigs and sigs[-1]['index']==len(clean)-1 else None
+    return {'signals':sigs,'latest':latest,
+            'note':'복합 관찰 신호. RSI 극단값 단독으로 고점/바닥을 확정하지 않으며 실제 매매 신호가 아님'}
+
+
 def report_sections(report):
     """Slice report sections without destroying citation offsets. No new AI calls."""
     if not isinstance(report,dict) or not report.get('citations'):return {}
