@@ -32,6 +32,10 @@ try:
     from ai_brokerage.analytics import build_context_matrix as ai_build_context_matrix
     from ai_brokerage.analytics import lifecycle_candidates as ai_lifecycle_candidates
     from ai_brokerage.analytics import build_daily_review as ai_build_daily_review
+    from ai_brokerage.capacity import execution_adjusted_strategy_rows as ai_execution_adjusted_strategy_rows
+    from ai_brokerage.capacity import build_capacity_matrix as ai_build_capacity_matrix
+    from ai_brokerage.capacity import strategy_capacity_rows as ai_strategy_capacity_rows
+    from ai_brokerage.capacity import execution_adjusted_lifecycle as ai_execution_adjusted_lifecycle
 except Exception:
     try:
         from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
@@ -40,6 +44,10 @@ except Exception:
         from market_radar.ai_brokerage.analytics import build_context_matrix as ai_build_context_matrix
         from market_radar.ai_brokerage.analytics import lifecycle_candidates as ai_lifecycle_candidates
         from market_radar.ai_brokerage.analytics import build_daily_review as ai_build_daily_review
+        from market_radar.ai_brokerage.capacity import execution_adjusted_strategy_rows as ai_execution_adjusted_strategy_rows
+        from market_radar.ai_brokerage.capacity import build_capacity_matrix as ai_build_capacity_matrix
+        from market_radar.ai_brokerage.capacity import strategy_capacity_rows as ai_strategy_capacity_rows
+        from market_radar.ai_brokerage.capacity import execution_adjusted_lifecycle as ai_execution_adjusted_lifecycle
     except Exception:
         AIBrokerageDecisionEngine = None
         ai_context_from_dashboard_row = None
@@ -47,6 +55,10 @@ except Exception:
         ai_build_context_matrix = None
         ai_lifecycle_candidates = None
         ai_build_daily_review = None
+        ai_execution_adjusted_strategy_rows = None
+        ai_build_capacity_matrix = None
+        ai_strategy_capacity_rows = None
+        ai_execution_adjusted_lifecycle = None
 
 AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
@@ -790,6 +802,64 @@ def build_ai_daily_review(cur, paper_feedback):
         return out
     except Exception as e:
         return {**empty,"status":"ERROR","note":f"Daily Review 집계 실패: {type(e).__name__}"}
+
+
+def build_ai_capacity_analysis(cur, strategy_performance):
+    empty={
+        "status":"WAITING","execution_rows":[],"capacity_matrix":[],
+        "strategy_capacity":[],"final_lifecycle":[],
+        "note":"BOOK_V2 Shadow 표본 축적 대기"
+    }
+    funcs=(ai_execution_adjusted_strategy_rows,ai_build_capacity_matrix,
+           ai_strategy_capacity_rows,ai_execution_adjusted_lifecycle)
+    if any(x is None for x in funcs) or not table_exists(cur,"ai_shadow_trades"):
+        return empty
+    required=("entry_model_mode","entry_book_capacity_krw","entry_spread_bps",
+              "paper_return_pct","net_return_pct","return_drag_pct","round_trip_is_bps")
+    if any(not column_exists(cur,"ai_shadow_trades",x) for x in required):
+        return {**empty,"status":"WAITING_FOR_V2_SCHEMA","note":"Capacity v2 스키마 마이그레이션 대기"}
+    try:
+        cur.execute("""SELECT strategy_id,strategy_name,strategy_family,status,entry_model_mode,
+                              regime_label,requested_notional_krw,entry_book_capacity_krw,
+                              entry_spread_bps,entry_fill_ratio,paper_return_pct,net_return_pct,
+                              return_drag_pct,round_trip_is_bps,entry_at
+                       FROM ai_shadow_trades
+                       WHERE strategy_id IS NOT NULL
+                         AND entry_at>now()-interval '120 days'
+                       ORDER BY entry_at""")
+        rows=[{
+            "strategy_id":r[0],"strategy_name":r[1],"strategy_family":r[2],
+            "status":r[3],"entry_model_mode":r[4],"regime_label":r[5],
+            "requested_notional_krw":float(r[6]) if r[6] is not None else None,
+            "entry_book_capacity_krw":float(r[7]) if r[7] is not None else None,
+            "entry_spread_bps":r[8],"entry_fill_ratio":r[9],
+            "paper_return_pct":r[10],"net_return_pct":r[11],
+            "return_drag_pct":r[12],"round_trip_is_bps":r[13],
+            "entry_at":iso(r[14])
+        } for r in cur.fetchall()]
+        execution=ai_execution_adjusted_strategy_rows(rows)
+        matrix=ai_build_capacity_matrix(rows)
+        capacities=ai_strategy_capacity_rows(rows)
+        paper_review=(strategy_performance or {}).get("lifecycle_review") or []
+        final=ai_execution_adjusted_lifecycle(paper_review,execution,capacities)
+        return {
+            "status":"OK" if rows else "WAITING",
+            "execution_rows":execution,
+            "capacity_matrix":matrix,
+            "strategy_capacity":capacities,
+            "final_lifecycle":final,
+            "window_days":120,
+            "gates":{
+                "shadow_closed":20,"book_coverage_pct":60,"median_net_return_pct":0.10,
+                "positive_pct":50,"profit_factor":1.10,"max_drag_pct":0.50,
+                "max_round_trip_is_bps":40,
+                "capacity_min_book_closed":20,"capacity_min_bucket_closed":5,
+                "capacity_min_regimes":2
+            },
+            "note":"최종 승격은 Paper + execution-adjusted Shadow + BOOK_V2 capacity를 모두 검토하며 auto_apply=false"
+        }
+    except Exception as e:
+        return {**empty,"status":"ERROR","note":f"Capacity 분석 실패: {type(e).__name__}"}
 
 
 def build_shadow_execution_lab(cur):
@@ -1738,6 +1808,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
             ai_morning_brief=build_ai_morning_brief(regime,sector_groups,ai_brokerage,paper_lab)
             ai_strategy_performance=build_ai_strategy_performance(cur)
+            ai_capacity=build_ai_capacity_analysis(cur,ai_strategy_performance)
             ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             shadow_execution=build_shadow_execution_lab(cur)
             shadow_execution["orderbook_feed"]=orderbook
@@ -1991,6 +2062,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "ai_brokerage": ai_brokerage,
         "ai_morning_brief": ai_morning_brief,
         "ai_strategy_performance": ai_strategy_performance,
+        "ai_capacity": ai_capacity,
         "ai_daily_review": ai_daily_review,
         "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
