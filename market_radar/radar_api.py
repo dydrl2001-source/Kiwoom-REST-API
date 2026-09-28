@@ -29,17 +29,23 @@ try:
     from ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
     from ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
     from ai_brokerage.analytics import summarize_strategy_rows as ai_summarize_strategy_rows
+    from ai_brokerage.analytics import build_context_matrix as ai_build_context_matrix
+    from ai_brokerage.analytics import lifecycle_candidates as ai_lifecycle_candidates
     from ai_brokerage.analytics import build_daily_review as ai_build_daily_review
 except Exception:
     try:
         from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
         from market_radar.ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
         from market_radar.ai_brokerage.analytics import summarize_strategy_rows as ai_summarize_strategy_rows
+        from market_radar.ai_brokerage.analytics import build_context_matrix as ai_build_context_matrix
+        from market_radar.ai_brokerage.analytics import lifecycle_candidates as ai_lifecycle_candidates
         from market_radar.ai_brokerage.analytics import build_daily_review as ai_build_daily_review
     except Exception:
         AIBrokerageDecisionEngine = None
         ai_context_from_dashboard_row = None
         ai_summarize_strategy_rows = None
+        ai_build_context_matrix = None
+        ai_lifecycle_candidates = None
         ai_build_daily_review = None
 
 AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
@@ -696,13 +702,16 @@ def build_ai_morning_brief(regime, sector_groups, ai_brokerage, paper_lab):
 def build_ai_strategy_performance(cur):
     empty={"status":"WAITING","rows":[],"unassigned":0,
            "note":"AI 전략이 귀속된 Paper Trade 표본을 기다리는 중"}
-    if not ai_summarize_strategy_rows or not table_exists(cur,"radar_paper_trades"):
+    if not ai_summarize_strategy_rows or not ai_build_context_matrix or not ai_lifecycle_candidates or not table_exists(cur,"radar_paper_trades"):
         return empty
     try:
         if not column_exists(cur,"radar_paper_trades","strategy_id"):return empty
         cur.execute("""SELECT status,return_pct,mfe_pct,mae_pct,opened_at,closed_at,
                               strategy_id,strategy_name,strategy_family,strategy_lifecycle,
-                              strategy_fit,ai_conviction,regime_label
+                              strategy_fit,ai_conviction,regime_label,
+                              ai_regime_trend,ai_regime_flow,ai_regime_sentiment,
+                              ai_catalyst_strength,ai_catalyst_identity,ai_chart_state,
+                              chart_state_entry
                        FROM radar_paper_trades
                        WHERE opened_at>now()-interval '90 days'
                        ORDER BY opened_at""")
@@ -710,18 +719,30 @@ def build_ai_strategy_performance(cur):
             "status":r[0],"return_pct":r[1],"mfe_pct":r[2],"mae_pct":r[3],
             "opened_at":iso(r[4]),"closed_at":iso(r[5]),"strategy_id":r[6],
             "strategy_name":r[7],"strategy_family":r[8],"strategy_lifecycle":r[9],
-            "strategy_fit":r[10],"ai_conviction":r[11],"regime_label":r[12]
+            "strategy_fit":r[10],"ai_conviction":r[11],"regime_label":r[12],
+            "ai_regime_trend":r[13],"ai_regime_flow":r[14],"ai_regime_sentiment":r[15],
+            "ai_catalyst_strength":r[16],"ai_catalyst_identity":r[17],
+            "ai_chart_state":r[18],"chart_state_entry":r[19]
         } for r in cur.fetchall()]
         registry={}
         if AI_BROKERAGE_ENGINE:
             registry={x.strategy_id:x.to_dict() for x in AI_BROKERAGE_ENGINE.registry.all()}
         out=ai_summarize_strategy_rows(rows,registry)
+        matrix=ai_build_context_matrix(rows)
+        lifecycle=ai_lifecycle_candidates(out,matrix)
         return {
             "status":"OK" if out else "WAITING",
             "rows":out,
+            "context_matrix":matrix,
+            "lifecycle_review":lifecycle,
+            "gates":{
+                "min_closed":30,"min_positive_pct":55,"min_median_return_pct":0.20,
+                "min_profit_factor":1.20,"min_context_cells":2,"min_cell_samples":5,
+                "max_context_concentration":0.70
+            },
             "unassigned":sum(1 for x in rows if not x.get("strategy_id")),
             "window_days":90,
-            "note":"전략 ID가 실제 Paper Trade에 귀속된 이후의 전향적 표본만 전략 성과에 사용"
+            "note":"전향적 Paper 표본만 사용. 승격·강등은 자동 적용하지 않고 후보로만 제시"
         }
     except Exception as e:
         return {"error":str(type(e).__name__),"status":"ERROR","rows":[],"unassigned":0,
