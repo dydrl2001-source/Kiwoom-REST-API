@@ -118,7 +118,7 @@ def resolve_cap(raw_value, shares, current, listed_shares=None):
         return None,None,'CAP_UNIT_UNRESOLVED'
     candidates=[]
     for priority,share_ref,_source in refs:
-        expected=abs(float(current))*share_ref
+        expected=abs(float(current))*float(share_ref)
         for scale in (1,1_000,10_000,100_000,1_000_000,100_000_000):
             value=float(raw)*scale
             rel=abs(value/expected-1) if expected else 99
