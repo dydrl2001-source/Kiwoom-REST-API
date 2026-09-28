@@ -41,6 +41,8 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .sector-chip.sc0{background:#e9edff;color:#4053a5}.sector-chip.sc1{background:#e2f5ef;color:#116b5a}.sector-chip.sc2{background:#fff0df;color:#915515}.sector-chip.sc3{background:#f9e8f1;color:#91466f}.sector-chip.sc4{background:#e5f3fa;color:#2f7295}.sector-chip.sc5{background:#f0e9fa;color:#684595}.sector-chip.sc6{background:#edf4e4;color:#567431}.sector-chip.sc7{background:#fbe9e7;color:#92453f}
 .sector-chip.sc0 i{background:#5d6fd7}.sector-chip.sc1 i{background:#1d9b83}.sector-chip.sc2 i{background:#dd8b35}.sector-chip.sc3 i{background:#b85d8f}.sector-chip.sc4 i{background:#3f8fc0}.sector-chip.sc5 i{background:#8a62c8}.sector-chip.sc6 i{background:#6b8e45}.sector-chip.sc7 i{background:#c25a52}
 .sector-pulse{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-bottom:9px}.sector-pulse-card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 10px;position:relative;overflow:hidden}.sector-pulse-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#7b8799}.sector-pulse-card.sc0:before{background:#5d6fd7}.sector-pulse-card.sc1:before{background:#1d9b83}.sector-pulse-card.sc2:before{background:#dd8b35}.sector-pulse-card.sc3:before{background:#b85d8f}.sector-pulse-card.sc4:before{background:#3f8fc0}.sector-pulse-card.sc5:before{background:#8a62c8}.sector-pulse-card.sc6:before{background:#6b8e45}.sector-pulse-card.sc7:before{background:#c25a52}.sector-pulse-card .sp-name{font-weight:850;font-size:12px}.sector-pulse-card .sp-count{font-size:19px;font-weight:900;margin-top:2px}.sector-pulse-card .sp-money{font-size:10px;color:var(--muted);margin-top:2px}.sector-pulse-card .sp-reason{font-size:9px;color:#52627a;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.theme-strength{margin-top:6px}.theme-strength-top{display:flex;justify-content:space-between;align-items:center;font-size:10px}.theme-strength-top b{font-size:12px}.theme-strength-bar{height:6px;background:#edf1f7;border-radius:99px;overflow:hidden;margin-top:4px}.theme-strength-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#7b8ce0,#19a287)}.theme-components{font-size:9px;color:#718098;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 .surge-row td:first-child{position:relative;padding-left:13px}.surge-row.sc0 td:first-child:before,.surge-row.sc1 td:first-child:before,.surge-row.sc2 td:first-child:before,.surge-row.sc3 td:first-child:before,.surge-row.sc4 td:first-child:before,.surge-row.sc5 td:first-child:before,.surge-row.sc6 td:first-child:before,.surge-row.sc7 td:first-child:before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:4px;border-radius:4px}.surge-row.sc0 td:first-child:before{background:#5d6fd7}.surge-row.sc1 td:first-child:before{background:#1d9b83}.surge-row.sc2 td:first-child:before{background:#dd8b35}.surge-row.sc3 td:first-child:before{background:#b85d8f}.surge-row.sc4 td:first-child:before{background:#3f8fc0}.surge-row.sc5 td:first-child:before{background:#8a62c8}.surge-row.sc6 td:first-child:before{background:#6b8e45}.surge-row.sc7 td:first-child:before{background:#c25a52}
 
 .tblwrap{overflow:auto;max-height:660px}.tbl{width:100%;border-collapse:collapse;min-width:980px}.tbl th,.tbl td{padding:8px 8px;border-bottom:1px solid #edf1f6;text-align:right;vertical-align:middle;white-space:nowrap}.tbl th{position:sticky;top:0;background:#f8fafc;color:var(--muted);font-size:10px;z-index:2}.tbl .left{text-align:left}.tbl .wrap{white-space:normal;min-width:220px;text-align:left}
@@ -91,7 +93,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
   <div class="panel pad analysis-main" id="analysis"></div>
   <div class="panel pad"><div class="legend" id="quickSignals"></div><div class="sub" style="margin-top:8px">※ 매수·매도 신호가 아니라 현재 상태를 설명하는 레이더입니다.</div></div>
  </div>
- <div class="section-title"><h2>실시간 섹터 보드</h2><span>어디에 몇 종목 · 얼마가 터지는지 · 왜 움직이는지</span></div>
+ <div class="section-title"><h2>실시간 테마·섹터 보드</h2><span>테마 강도 · 급부상 종목수 · 거래대금 · 상승 이유</span></div>
  <div id="homeSectorPulse" class="sector-pulse"></div>
  <div class="sector-grid" id="homeSectors"></div>
  <div class="section-title"><h2>급부상 종목</h2><span>현재 상위 12종목 · 섹터별 개수와 같은 색상 표시</span></div>
@@ -195,8 +197,16 @@ function renderSectorMix(rows){
  const top=(rows||[]).slice(0,12),groups={};
  top.forEach(x=>{const n=sectorName(x),g=groups[n]||(groups[n]={name:n,count:0,money:0,recent:0});g.count++;g.money+=Number(x.trade_value_krw||0);g.recent+=Number(x.recent_turnover_krw||0)});
  const xs=Object.values(groups).sort((a,b)=>(b.count-a.count)||(b.recent-a.recent)||(b.money-a.money));
- return xs.map(g=>sectorChip(g.name,g.count+"개 · "+money(g.money)+(g.recent>0?" / 최근 +"+money(g.recent):""))).join("")||'<span class="muted">급부상 섹터 집계 대기</span>';
+ return xs.map(g=>{const src=(DATA?.sector_rankings||[]).find(x=>x.name===g.name)||{};return sectorChip(g.name,"강도 "+(src.theme_strength??"-")+" · "+g.count+"개 · "+money(g.money)+(g.recent>0?" / 최근 +"+money(g.recent):""));}).join("")||'<span class="muted">급부상 섹터 집계 대기</span>';
 }
+function strengthBlock(g){
+ const score=Number(g?.theme_strength||0),label=g?.theme_strength_label||"대기",c=g?.theme_strength_components||{};
+ const title='관심 '+fmt(c.interest,1)+' · 돈 '+fmt(c.money,1)+' · 확산 '+fmt(c.breadth,1)+' · 가격 '+fmt(c.price,1)+' · 급부상 '+fmt(c.surge,1)+' · 재료 '+fmt(c.material,1);
+ return '<div class="theme-strength" title="'+esc(title)+'"><div class="theme-strength-top"><span>테마 강도</span><b>'+esc(score)+'/100 · '+esc(label)+'</b></div>'+
+   '<div class="theme-strength-bar"><i style="width:'+Math.max(0,Math.min(100,score))+'%"></i></div>'+
+   '<div class="theme-components">'+esc(title)+'</div></div>';
+}
+
 function renderSectorPulse(sectors,rows){
  const top=(rows||[]).slice(0,12),counts={};
  top.forEach(x=>{const n=sectorName(x);counts[n]=(counts[n]||0)+1});
@@ -206,6 +216,7 @@ function renderSectorPulse(sectors,rows){
    return '<div class="sector-pulse-card '+c+'"><div class="sp-name">'+esc(n)+'</div>'+
      '<div class="sp-count">'+cnt+'개 <span class="'+klass(g.avg_change_rate)+'" style="font-size:12px">'+esc(rate(g.avg_change_rate))+'</span></div>'+
      '<div class="sp-money">누적 '+esc(money(g.trade_value_krw))+' · 최근 '+esc(recent)+'</div>'+
+     strengthBlock(g)+
      '<div class="sp-reason">'+esc(why.label||"공통재료 미확인")+' · '+esc(why.summary||"")+'</div></div>';
  }).join("")||'<div class="panel pad muted">섹터 흐름 집계 대기</div>';
 }
@@ -245,7 +256,7 @@ function sectorCards(list,limit=8){
    const hotCount=((DATA?.query_ranking)||[]).slice(0,12).filter(x=>sectorName(x)===g.name).length;
    return '<div class="sector-card '+sectorClass(g.name)+'"><div class="sector-head"><div><strong>'+esc(g.name)+'</strong> '+(hotCount?'<span class="sector-chip '+sectorClass(g.name)+'"><i></i>급부상 '+hotCount+'개</span>':'')+
      '<div class="sector-meta">조회상위 '+esc(g.count)+'종목 · 상승 '+esc(g.positive??0)+'/'+esc(g.change_n??g.count)+'</div>'+
-     '<div class="sector-money">누적 '+esc(money(g.trade_value_krw))+esc(recent)+'</div></div>'+
+     '<div class="sector-money">누적 '+esc(money(g.trade_value_krw))+esc(recent)+'</div>'+strengthBlock(g)+'</div>'+
      '<div class="'+klass(g.avg_change_rate)+'"><b>'+esc(rate(g.avg_change_rate))+'</b></div></div>'+
      '<div class="stock-list">'+stocks+'</div>'+
      '<div class="sector-reason '+reasonClass+'"><b>왜 움직이나 · '+esc(why.label||"분석 대기")+'</b><div>'+esc(why.summary||"섹터 재료 분석 대기")+'</div>'+
@@ -402,8 +413,9 @@ function render(d){
  if((d.material_stats?.spreading||0)>0)sig.push("확산 "+d.material_stats.spreading+"종목");
  if(d.regime_metrics?.rank_turnover_5m!=null)sig.push("교체율 "+pct(d.regime_metrics.rank_turnover_5m));
  document.getElementById("quickSignals").innerHTML=sig.map(x=>'<span class="pill">'+esc(x)+'</span>').join("");
- document.getElementById("homeSectorPulse").innerHTML=renderSectorPulse(d.sector_rankings,d.query_ranking);
- document.getElementById("homeSectors").innerHTML=sectorCards(d.sector_rankings,8);
+ const homeThemes=[...(d.sector_rankings||[])].sort((a,b)=>(Number(b.theme_strength||0)-Number(a.theme_strength||0))||(Number(b.recent_turnover_krw||0)-Number(a.recent_turnover_krw||0)));
+ document.getElementById("homeSectorPulse").innerHTML=renderSectorPulse(homeThemes,d.query_ranking);
+ document.getElementById("homeSectors").innerHTML=sectorCards(homeThemes,8);
  document.getElementById("sectorBoard").innerHTML=sectorCards(d.sector_rankings,20);
  document.getElementById("homeSectorMix").innerHTML=renderSectorMix(d.query_ranking);
  document.getElementById("homeStocks").innerHTML=renderHomeStocks(d.query_ranking);
