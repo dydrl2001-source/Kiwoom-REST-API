@@ -175,5 +175,81 @@ class LearningPureTests(unittest.TestCase):
         self.assertIsNone(store._validation_gate(s))
 
 
+    def test_walk_forward_split_never_mixes_trade_days(self):
+        base=datetime(2026,9,21,1,0,tzinfo=timezone.utc)
+        rows=[]
+        for d in range(6):
+            for k in range(2):
+                rows.append({
+                    'horizon':'30m','stock_code':f'{d:06d}',
+                    'snapshot_time':base+timedelta(days=d,minutes=k*30),
+                    'trade_day':(base+timedelta(days=d)).astimezone(learn.KST).date().isoformat(),
+                    'return_pct':.4+d*.05,'mfe_pct':1.0,'mae_pct':-.4,
+                })
+        windows=learn._walk_forward_windows(rows)
+        self.assertEqual([x['window_name'] for x in windows],['EARLY','RECENT'])
+        early=windows[0];recent=windows[1]
+        self.assertLess(early['end_day'],recent['start_day'])
+        self.assertEqual(early['distinct_days'],3)
+        self.assertEqual(recent['distinct_days'],3)
+
+    def test_walk_forward_interaction_keeps_time_aligned_comparator(self):
+        base=datetime(2026,9,21,1,0,tzinfo=timezone.utc)
+        child=[];comp=[]
+        for d in range(4):
+            day=(base+timedelta(days=d)).astimezone(learn.KST).date().isoformat()
+            child.append({'stock_code':f'C{d}','trade_day':day,'return_pct':.8,
+                          'mfe_pct':1.2,'mae_pct':-.3})
+            comp.append({'stock_code':f'P{d}','trade_day':day,'return_pct':.2,
+                         'mfe_pct':.7,'mae_pct':-.6})
+        windows=learn._walk_forward_windows(child,comp)
+        self.assertEqual(len(windows),2)
+        for w in windows:
+            self.assertAlmostEqual(w['delta_avg_return_pct'],.6)
+            self.assertEqual(w['comparator_days'],2)
+
+    def test_walk_forward_gate_stable_allows_review(self):
+        segment={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'30m',
+            'interaction_depth':1,'samples':100,'distinct_stocks':12,'distinct_days':8,
+        }
+        windows=[
+            {'window_name':'EARLY','samples':50,'distinct_stocks':7,'distinct_days':4,
+             'avg_return_pct':.70,'median_return_pct':.30,'positive_rate':.62},
+            {'window_name':'RECENT','samples':50,'distinct_stocks':8,'distinct_days':4,
+             'avg_return_pct':.45,'median_return_pct':.20,'positive_rate':.58},
+        ]
+        g=store._walk_forward_gate(segment,windows,'STRENGTH')
+        self.assertTrue(g['ready'])
+        self.assertEqual(g['status'],'STABLE')
+
+    def test_walk_forward_gate_recent_reversal_blocks_review(self):
+        segment={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'30m',
+            'interaction_depth':1,'samples':100,'distinct_stocks':12,'distinct_days':8,
+        }
+        windows=[
+            {'window_name':'EARLY','samples':50,'distinct_stocks':7,'distinct_days':4,
+             'avg_return_pct':.70,'median_return_pct':.30,'positive_rate':.62},
+            {'window_name':'RECENT','samples':50,'distinct_stocks':8,'distinct_days':4,
+             'avg_return_pct':-.20,'median_return_pct':-.10,'positive_rate':.44},
+        ]
+        g=store._walk_forward_gate(segment,windows,'STRENGTH')
+        self.assertFalse(g['ready'])
+        self.assertEqual(g['status'],'REVERSAL')
+
+    def test_validation_candidates_downgrades_without_walk_forward_evidence(self):
+        s={
+            'segment_type':'TRIGGER','segment_value':'BREAKOUT_TEST','horizon':'30m',
+            'samples':170,'distinct_stocks':12,'distinct_days':7,'quality':'충분',
+            'avg_return_pct':.80,'median_return_pct':.40,'positive_rate':.64,
+            'avg_mfe_pct':1.5,'avg_mae_pct':-.6,
+        }
+        rows=store._validation_candidates([s],[])
+        self.assertEqual(rows[0]['status'],'HOLD')
+        self.assertEqual(rows[0]['readiness'],'WAIT_WALK_FORWARD')
+        self.assertEqual(rows[0]['walk_forward']['status'],'INSUFFICIENT')
+
+
 if __name__=='__main__':
     unittest.main()
