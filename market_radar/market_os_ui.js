@@ -265,6 +265,25 @@
    body.append(el('div','Ruleset 이력','mos-section-title'));const rvScroll=el('div',null,'mos-scroll'),rvTable=el('table',null,'mos-learn-table'),rvHead=el('tr');['시각','Ruleset','이벤트','이전','현재'].forEach(v=>rvHead.append(el('th',v)));const rvThead=el('thead');rvThead.append(rvHead);const rvBody=el('tbody');
    for(const e of rev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.ruleset_id||'—','mos-code'),el('td',e.event_type||'—'),el('td',e.from_status||'—'),el('td',e.to_status||'—'));rvBody.append(tr);}
    if(!rev.length){const tr=el('tr'),td=el('td','아직 ruleset 상태 이력이 없습니다.','mos-empty');td.colSpan=5;tr.append(td);rvBody.append(tr);}rvTable.append(rvThead,rvBody);rvScroll.append(rvTable);body.append(rvScroll);
+   body.append(el('div','Ruleset Succession Gate','mos-section-title'));
+   const sd=rd.succession_summary||{},sdec=rd.succession_decisions||[],sev=rd.succession_events||[],sg=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['수집중',sd.collecting||0,'30분 비교 문턱 전'],
+     ['비교가능',sd.comparable||0,'30분/종가 비교 형성'],
+     ['안정',sd.stable||0,'시간·stance·집중도 통과'],
+     ['승계후보',sd.succession_candidate||0,'사람의 release 검토 자격'],
+     ['추가자료',sd.more_data||0,'집중·효과붕괴·재현성 대기'],
+     ['기각',sd.reject||0,'prospective 악화 반복']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));sg.append(card);}body.append(sg);
+   body.append(el('div','30m·종가 전체 효과, EARLY/RECENT 안정성, stance 재현성, 한 종목·하루 집중도, 승인 당시 Shadow 효과 대비 보존율, D+1 열화를 함께 검사합니다. SUCCESSION_CANDIDATE도 live 전환이 아니라 release 심사 자격입니다.','mos-note'));
+   const successionKo=x=>({RULESET_COLLECTING:'수집중',RULESET_COMPARABLE:'비교가능',RULESET_STABLE:'안정',SUCCESSION_CANDIDATE:'승계후보',RULESET_MORE_DATA:'추가자료',RULESET_REJECT:'기각'})[x]||x||'—';
+   const sgScroll=el('div',null,'mos-scroll'),sgTable=el('table',null,'mos-learn-table'),sgHead=el('tr');
+   ['상태','Ruleset','Version','Ruleset 상태','Cohort','30m','종가','D+1','집중도','Shadow 보존율','검토자격','근거'].forEach(v=>sgHead.append(el('th',v)));const sgThead=el('thead');sgThead.append(sgHead);const sgBody=el('tbody');
+   for(const d of sdec.slice(0,40)){const tr=el('tr'),ev=d.evidence||{},conc=ev.concentration||{},ret=ev.shadow_effect_retention||{};const concText=conc.changed_episodes==null?'—':('N '+conc.changed_episodes+' · stock '+fmt((conc.top_stock_share||0)*100,0)+'% · day '+fmt((conc.top_day_share||0)*100,0)+'%');const retText=(ret['30m']==null&&ret.close==null)?'—':('30m '+(ret['30m']==null?'—':fmt(ret['30m']*100,0)+'%')+' · close '+(ret.close==null?'—':fmt(ret.close*100,0)+'%'));const cls=d.decision_state==='SUCCESSION_CANDIDATE'?'mos-up':d.decision_state==='RULESET_REJECT'?'mos-down':'';tr.append(el('td',successionKo(d.decision_state),cls),el('td',(d.ruleset_id||'').slice(0,16),'mos-code'),el('td',d.version_label||'—','mos-code'),el('td',d.status||'—'),el('td',d.primary_cohort||'—'),el('td',ev.overall_30m||'—'),el('td',ev.overall_close||'—'),el('td',ev.overall_d1||'—'),el('td',concText,'mos-micro'),el('td',retText,'mos-micro'),el('td',d.review_eligible?'YES':'NO',d.review_eligible?'mos-up':''),el('td',(d.reason_codes||[]).join(' · '),'mos-micro'));sgBody.append(tr);}
+   if(!sdec.length){const tr=el('tr'),td=el('td','Versioned Dry Run 결과가 쌓이면 승계 판단이 여기에 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);sgBody.append(tr);}sgTable.append(sgThead,sgBody);sgScroll.append(sgTable);body.append(sgScroll);
+   body.append(el('div','Succession 전이','mos-section-title'));const seScroll=el('div',null,'mos-scroll'),seTable=el('table',null,'mos-learn-table'),seHead=el('tr');['시각','Ruleset','이전','현재','검토자격','근거'].forEach(v=>seHead.append(el('th',v)));const seThead=el('thead');seThead.append(seHead);const seBody=el('tbody');
+   for(const e of sev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.ruleset_id||'').slice(0,16),'mos-code'),el('td',successionKo(e.from_state)),el('td',successionKo(e.to_state),e.to_state==='SUCCESSION_CANDIDATE'?'mos-up':e.to_state==='RULESET_REJECT'?'mos-down':''),el('td',e.review_eligible?'YES':'NO'),el('td',(e.reason_codes||[]).join(' · '),'mos-micro'));seBody.append(tr);}
+   if(!sev.length){const tr=el('tr'),td=el('td','아직 Succession 상태 전이가 없습니다.','mos-empty');td.colSpan=6;tr.append(td);seBody.append(tr);}seTable.append(seThead,seBody);seScroll.append(seTable);body.append(seScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
