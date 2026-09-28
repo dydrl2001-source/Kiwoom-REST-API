@@ -26,6 +26,7 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .tab[data-view="trade"].active{background:var(--orange);border-color:var(--orange)}
 .tab[data-view="material"].active{background:var(--green);border-color:var(--green)}
 .tab[data-view="research"].active{background:var(--indigo);border-color:var(--indigo)}
+.tab[data-view="brokerage"].active{background:#111827;border-color:#111827}
 .tab[data-view="mimosa"].active{background:var(--cyan);border-color:var(--cyan)}
 .view{display:none}.view.active{display:block}.section-title{display:flex;align-items:end;justify-content:space-between;margin:14px 2px 7px}.section-title h2{font-size:15px;margin:0}.section-title span{font-size:10px;color:var(--muted)}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}.pad{padding:12px}
@@ -76,12 +77,19 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .material-top{display:flex;justify-content:space-between;gap:6px}.material-card h3{font-size:14px;margin:0}.material-summary{font-weight:750;margin:8px 0 5px;line-height:1.5}.material-why{font-size:11px;color:#516078;background:#f6f8fb;padding:7px;border-radius:7px}
 details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evidence{border-top:1px solid #edf1f6;margin-top:7px;padding-top:7px;font-size:11px}.evidence p{margin:4px 0}.links{display:flex;gap:7px;flex-wrap:wrap}
 .mimosa-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.index-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.chart-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.chart-title{display:flex;justify-content:space-between;align-items:end;margin-bottom:6px}.chart-title b{font-size:14px}.svgchart{width:100%;height:210px;display:block}.strategy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.strategy-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.strategy-card h3{font-size:13px;margin:0}.strategy-score{font-weight:900;font-size:16px}.strategy-note{font-size:10px;color:var(--muted);margin-top:6px}.m-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px}.m-head{display:flex;justify-content:space-between}.m-state{font-size:13px;font-weight:900;margin-top:6px}.score{font-weight:900}.reason{font-size:10px;color:var(--muted);margin-top:5px}.fb{display:flex;gap:5px;margin-top:8px}.fb button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 7px;font-size:10px;color:#5d6b7f;cursor:pointer}.fb button:hover{background:#f3f6fa}.fb .sent{background:#eaf6f1;color:#187a59}
+.broker-hero{background:linear-gradient(135deg,#101827,#233653);color:#fff;border-radius:16px;padding:20px;display:grid;grid-template-columns:1.4fr .6fr;gap:16px;box-shadow:0 10px 30px rgba(17,24,39,.12)}
+.broker-eyebrow{font-size:10px;font-weight:900;letter-spacing:.12em;color:#9ec5ff}.broker-hero h2{font-size:26px;line-height:1.25;margin:5px 0 8px;letter-spacing:-.04em}.broker-hero p{margin:0;color:#d7e0ec;max-width:780px}.broker-mode{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;text-align:right}.broker-mode strong{font-size:24px}.broker-mode span{font-size:10px;color:#b8c5d8}
+.broker-cycle{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin-top:9px}.broker-step{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px}.broker-step b{display:block;font-size:11px}.broker-step span{font-size:9px;color:var(--muted)}.broker-step i{font-style:normal;font-size:9px;font-weight:900;color:#5d6fd7}
+.broker-desks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.broker-desk{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px;border-left:4px solid #7184d8}.broker-desk b{font-size:12px}.broker-desk p{font-size:9px;color:#66758a;margin:4px 0 0;line-height:1.55}
+.broker-registry{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.broker-reg{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px}.broker-reg .br-v{font-size:21px;font-weight:900}.broker-reg .br-k{font-size:9px;color:var(--muted)}
+.broker-candidates{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.broker-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px;border-top:4px solid #97a4b8}.broker-card.entry{border-top-color:#15966d}.broker-card.ready{border-top-color:#3f6fd8}.broker-card.watch{border-top-color:#d99120}.broker-card.blocked{border-top-color:#e35353}.broker-top{display:flex;justify-content:space-between;gap:8px}.broker-name{font-size:14px;font-weight:900}.broker-state{display:inline-flex;padding:3px 7px;border-radius:999px;background:#eef1f5;font-size:9px;font-weight:900}.broker-conv{font-size:24px;font-weight:900;text-align:right}.broker-strategy{margin-top:7px;padding:7px 8px;border-radius:8px;background:#f6f8fb;font-size:10px}.broker-deskline{display:grid;grid-template-columns:72px 1fr 34px;gap:6px;align-items:center;margin-top:5px;font-size:9px}.broker-bar{height:5px;background:#edf1f6;border-radius:99px;overflow:hidden}.broker-bar i{display:block;height:100%;background:#7184d8;border-radius:99px}.broker-block{margin-top:7px;padding:7px 8px;background:#fff0f1;border-radius:8px;color:#9c3d49;font-size:9px;line-height:1.5}.broker-foot{margin-top:7px;font-size:9px;color:#748196}
+.broker-principle{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.broker-principle div{border-left:3px solid #dbe3ee;padding-left:9px}.broker-principle b{display:block;font-size:11px}.broker-principle span{font-size:9px;color:var(--muted)}
 .bottom{display:none}
-@media(max-width:1100px){.leader-desk{grid-template-columns:1fr 1fr}.leader-desk .leader-panel:last-child{grid-column:1/-1}.home-candidates{grid-template-columns:repeat(3,minmax(0,1fr))}.paper-open-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid,.deep-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
+@media(max-width:1100px){.broker-cycle{grid-template-columns:repeat(3,1fr)}.broker-desks{grid-template-columns:repeat(2,1fr)}.leader-desk{grid-template-columns:1fr 1fr}.leader-desk .leader-panel:last-child{grid-column:1/-1}.home-candidates{grid-template-columns:repeat(3,minmax(0,1fr))}.paper-open-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid,.deep-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
 @media(max-width:700px){
  .app{padding:10px 8px 82px}.head{margin-bottom:6px}.brand{font-size:20px}.statusbar{grid-template-columns:1fr 1fr;gap:6px}.stat{min-height:61px;padding:8px}
  .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.leader-desk{grid-template-columns:1fr}.leader-desk .leader-panel:last-child{grid-column:auto}.home-market-tools{display:block}.market-detail{margin-top:6px}.home-candidates{grid-template-columns:1fr}.paper-summary{grid-template-columns:1fr 1fr}.paper-open-grid{grid-template-columns:1fr}.sector-grid{grid-template-columns:1fr;gap:7px}.stock-list{grid-template-columns:1fr 1fr}.stock-mini{border-right:1px solid #f0f3f7}
- .material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.sector-pulse{grid-template-columns:1fr 1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
+ .broker-hero{grid-template-columns:1fr}.broker-mode{align-items:flex-start;text-align:left}.broker-cycle,.broker-desks,.broker-registry,.broker-candidates,.broker-principle{grid-template-columns:1fr}.material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.sector-pulse{grid-template-columns:1fr 1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
  .bottom button{border:0;background:transparent;color:#78869b;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px}.bottom button.active{color:#1c2b45;font-weight:900}.bottom b{font-size:16px;line-height:1}
 }
 </style></head>
@@ -104,6 +112,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <button class="tab" data-view="trade">거래대금</button>
  <button class="tab" data-view="material">재료·뉴스</button>
  <button class="tab" data-view="research">리서치</button>
+ <button class="tab" data-view="brokerage">AI 증권사</button>
  <button class="tab" data-view="mimosa">미모사</button>
 </div>
 
@@ -130,6 +139,50 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div id="homeCandidates" class="home-candidates"></div>
  <div class="section-title"><h2>Paper Lab · 자동 가상매매</h2><span>레이더 규칙 검증용 · 1단위 · 실계좌 주문 없음</span></div>
  <div id="homePaperLab" class="paper-lab"></div>
+</section>
+
+<section class="view" id="view-brokerage">
+ <div class="broker-hero">
+  <div>
+   <div class="broker-eyebrow">AI BROKERAGE OS · PAPER-FIRST</div>
+   <h2>감으로 고르는 종목이 아니라<br>근거가 통과한 전략만 다음 단계로</h2>
+   <p>시장·재료·수급·차트·전략·리스크를 한 점수로 뭉개지 않습니다. 여섯 Desk가 각자 다른 질문을 던지고, 전략 조건과 리스크 게이트를 모두 통과한 경우에만 PAPER 실행 후보가 됩니다.</p>
+  </div>
+  <div class="broker-mode"><strong id="brokerMode">PAPER ONLY</strong><span id="brokerStatus">실계좌 주문 경로 없음</span></div>
+ </div>
+
+ <div class="section-title"><h2>하루의 운영 루프</h2><span>관찰 → 교차검증 → 전략선택 → 거부권 → 가상실행 → 복기</span></div>
+ <div class="broker-cycle">
+  <div class="broker-step"><i>01 OBSERVE</i><b>시장 읽기</b><span>장세·섹터·관심·거래대금</span></div>
+  <div class="broker-step"><i>02 CROSS-CHECK</i><b>근거 검증</b><span>뉴스·DART·Telegram 신원 확인</span></div>
+  <div class="broker-step"><i>03 MATCH</i><b>전략 매칭</b><span>50-slot Registry의 현재 조건 비교</span></div>
+  <div class="broker-step"><i>04 VETO</i><b>Risk 거부권</b><span>데이터 지연·손실·중복포지션 차단</span></div>
+  <div class="broker-step"><i>05 PAPER</i><b>가상 실행</b><span>실제 주문 전 forward-test 축적</span></div>
+  <div class="broker-step"><i>06 REVIEW</i><b>성과 귀속</b><span>어떤 전략·장세·판단이 맞았는지 기록</span></div>
+ </div>
+
+ <div class="section-title"><h2>6개 Desk</h2><span>한 AI의 자신감보다 서로 다른 책임의 분리</span></div>
+ <div class="broker-desks">
+  <div class="broker-desk"><b>Market Desk · 시장부</b><p>현재 장세의 추세·수급 분포·심리와 데이터 신선도를 판단합니다.</p></div>
+  <div class="broker-desk"><b>Catalyst Desk · 재료부</b><p>뉴스·공시·Telegram의 재료 강도뿐 아니라 실제 종목과의 identity가 맞는지 확인합니다.</p></div>
+  <div class="broker-desk"><b>Flow Desk · 수급부</b><p>조회순위, 순위 가속, 최근 거래대금과 섹터 확산을 분리해 봅니다.</p></div>
+  <div class="broker-desk"><b>Technical Desk · 기술부</b><p>MIMOSA 상태, 추세 유지·M수렴·돌파·전고점·고점 경계를 판독합니다.</p></div>
+  <div class="broker-desk"><b>Strategy Desk · 전략부</b><p>전략 이름을 추천하는 대신 현재 regime·chart·material gate를 실제 Registry와 대조합니다.</p></div>
+  <div class="broker-desk"><b>Risk Desk · 리스크부</b><p>포지션 수, 일일 손실, 시세 freshness, 중복 보유를 보고 최종 거부권을 가집니다.</p></div>
+ </div>
+
+ <div class="section-title"><h2>Strategy Factory</h2><span>50개 슬롯을 보유하되 검증되지 않은 전략은 ACTIVE처럼 표시하지 않음</span></div>
+ <div id="brokerRegistry" class="broker-registry"></div>
+
+ <div class="section-title"><h2>오늘의 6-Desk 회의 결과</h2><span>WATCH · READY · PAPER_ENTRY · BLOCKED를 이유와 함께 공개</span></div>
+ <div id="brokerCandidates" class="broker-candidates"></div>
+
+ <div class="section-title"><h2>우리의 기준</h2><span>자동화보다 중요한 것은 무엇을 자동화하느냐</span></div>
+ <div class="broker-principle">
+  <div><b>예측보다 검증</b><span>AI가 시장을 맞힌다고 가정하지 않고, 확인 가능한 근거와 조건을 남깁니다.</span></div>
+  <div><b>점수보다 거부권</b><span>높은 종합점수도 데이터 지연·차트 훼손·손실한도에 걸리면 실행하지 않습니다.</span></div>
+  <div><b>자가수정보다 성과 귀속</b><span>AI가 몰래 규칙을 바꾸지 않고, 먼저 전략별 결과를 축적해 승격·강등 근거로 사용합니다.</span></div>
+ </div>
 </section>
 
 <section class="view" id="view-index">
@@ -197,7 +250,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 </div>
 
 <div class="bottom" id="bottom">
- <button class="active" data-view="home"><b>⌂</b>홈</button><button data-view="index"><b>⌁</b>지수</button><button data-view="query"><b>⌕</b>조회</button><button data-view="sector"><b>▦</b>섹터</button><button data-view="trade"><b>₩</b>대금</button><button data-view="material"><b>◆</b>재료</button><button data-view="research"><b>R</b>리서치</button><button data-view="mimosa"><b>M</b>미모사</button>
+ <button class="active" data-view="home"><b>⌂</b>홈</button><button data-view="index"><b>⌁</b>지수</button><button data-view="query"><b>⌕</b>조회</button><button data-view="sector"><b>▦</b>섹터</button><button data-view="trade"><b>₩</b>대금</button><button data-view="material"><b>◆</b>재료</button><button data-view="research"><b>R</b>리서치</button><button data-view="brokerage"><b>AI</b>증권사</button><button data-view="mimosa"><b>M</b>미모사</button>
 </div>
 
 <script>
