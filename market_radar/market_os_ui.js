@@ -61,6 +61,7 @@
      ['FOCUS / PREP',focus+' / '+prep,'상위 검토 후보',''],
      ['주도 테마',themes[0]?.name||'테마 대기',themes[0]?.change_pp!=null?'비중 '+(themes[0].change_pp>=0?'+':'')+fmt(themes[0].change_pp,1)+'%p':'공통표본 대기',''],
      ['학습 표본',fmt(st.assessments_total||0,0),fmt(st.outcomes_total||0,0)+' outcomes',''],
+     ['Live data',DATA?.live_health?.overall||'진단 대기',(DATA?.live_health?.blockers||[]).join(' · ')||((DATA?.live_health?.warnings||[]).join(' · ')||'freshness check'),''],
      ['Rule',DATA?.market_os_version||learn.rule_version||'v1',learn.mode==='SHADOW_LEARNING'?'Shadow learning':'대기','']
    ];
    for(const [lab,val,note,cls] of cards){const c=el('div',null,'mos-metric '+cls);c.append(el('div',lab,'mos-label'),el('strong',val),el('div',note,'mos-micro'));strip.append(c);}
@@ -158,6 +159,6 @@
    }catch(e){holder.textContent='학습 기록 응답 대기 · '+e.message;}
  }
 
- async function load(force=false){if(busy||(!force&&(!view.classList.contains('active')||document.hidden||Date.now()-lastLoaded<28000)))return;if(!accessKey()){content.replaceChildren(el('div','대시보드 접속키가 필요합니다.','mos-empty'));return;}busy=true;try{const d=await get('/api/market-os');DATA=d;lastLoaded=Date.now();if(!selected&&(d.market_os_watchlist||[]).length)selected=d.market_os_watchlist[0].code;renderContent();}catch(e){content.replaceChildren(el('div','Market OS 자료 응답 대기 · '+e.message,'mos-empty'));}finally{busy=false;}}
+ async function load(force=false){if(busy||(!force&&(!view.classList.contains('active')||document.hidden||Date.now()-lastLoaded<28000)))return;if(!accessKey()){content.replaceChildren(el('div','대시보드 접속키가 필요합니다.','mos-empty'));return;}busy=true;try{const [d,h]=await Promise.all([get('/api/market-os'),get('/api/market-os/live-health').catch(()=>null)]);d.live_health=h;DATA=d;lastLoaded=Date.now();if(!selected&&(d.market_os_watchlist||[]).length)selected=d.market_os_watchlist[0].code;renderContent();}catch(e){content.replaceChildren(el('div','Market OS 자료 응답 대기 · '+e.message,'mos-empty'));}finally{busy=false;}}
  setInterval(()=>load(false),30000);load(true);
 })();
