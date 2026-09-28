@@ -28,7 +28,7 @@ class MarketOSCapValidationTests(unittest.TestCase):
             'stk_cd':'005930_AL','dt':'20260928','cntr_tm':'103000',
             'cur_prc':'80000','low_pric':'79000','high_pric':'81000',
             'trde_qty':'1000000','trde_prica':'80000',
-            'stkcnt':'10','mac':'999999'
+            'stkcnt':'10','mac':'9999999'
         },NOW,listed_shares=11)
         self.assertIsNone(q['cap_krw'])
         self.assertIn('CAP_REFERENCE_MISMATCH',q['quality_flags'])
