@@ -108,3 +108,38 @@ CREATE TABLE IF NOT EXISTS market_os_learning_status (
 -- close/D+1: one anchor per stock per KST trade day.
 -- Raw assessment snapshots remain intact for audit; segment sample counts use anchors.
 -- Confidence additionally requires stock diversity and multiple trade days.
+
+
+CREATE TABLE IF NOT EXISTS market_os_interaction_edges (
+    segment_type TEXT NOT NULL,
+    segment_value TEXT NOT NULL,
+    horizon TEXT NOT NULL,
+    parent_type TEXT NOT NULL,
+    parent_value TEXT NOT NULL,
+    sample_basis TEXT NOT NULL,
+    child_samples INTEGER NOT NULL,
+    child_stocks INTEGER NOT NULL,
+    child_days INTEGER NOT NULL,
+    comparator_samples INTEGER NOT NULL,
+    comparator_stocks INTEGER NOT NULL,
+    comparator_days INTEGER NOT NULL,
+    child_avg_return_pct DOUBLE PRECISION,
+    comparator_avg_return_pct DOUBLE PRECISION,
+    delta_avg_return_pct DOUBLE PRECISION,
+    child_positive_rate DOUBLE PRECISION,
+    comparator_positive_rate DOUBLE PRECISION,
+    delta_positive_rate_pp DOUBLE PRECISION,
+    child_avg_mfe_pct DOUBLE PRECISION,
+    comparator_avg_mfe_pct DOUBLE PRECISION,
+    delta_mfe_pct DOUBLE PRECISION,
+    child_avg_mae_pct DOUBLE PRECISION,
+    comparator_avg_mae_pct DOUBLE PRECISION,
+    delta_mae_pct DOUBLE PRECISION,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(segment_type,segment_value,horizon)
+);
+
+-- Interaction edge policy:
+-- child is compared with the parent-condition complement (parent rows excluding child rows),
+-- not with the inclusive parent aggregate. This is descriptive conditional comparison,
+-- not a causal estimate.
