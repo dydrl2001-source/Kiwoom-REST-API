@@ -82,7 +82,7 @@
    const xs=candidates();for(const x of xs){const r=rowData(x.code)||{},tr=el('tr');tr.dataset.selected=String(x.code===selected);tr.onclick=()=>{selected=x.code;renderContent();};
      const n=el('td');n.append(el('div',x.name,'mos-name'),el('div',x.code+' · '+(x.market_theme||'테마 미확인'),'mos-code'));tr.append(n);
      const tdTier=el('td');tdTier.append(el('span',tierKo(x.watch_tier),'mos-tier '+tierClass(x.watch_tier)));tr.append(tdTier);
-     const lc=(x.learning_context||[])[0],mic=x.microstructure||null;const microText=mic?((mic.strength==null?'강도—':'강도 '+fmt(mic.strength,0))+' · '+money(mic.trade_value_krw)):'—';tr.append(el('td',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''),el('td',x.radar_score,'mos-axisnum'),el('td',x.theme_score,'mos-axisnum'),el('td',x.setup_score,'mos-axisnum'),el('td',x.catalyst_grade||'—'),el('td',x.trigger_state||'—'),el('td',lc?('N'+lc.samples+' · '+pct(lc.avg_return_pct)):'—',lc&&lc.avg_return_pct>0?'mos-up':lc&&lc.avg_return_pct<0?'mos-down':''),el('td',microText,mic&&mic.gap_count===0?'mos-up':''),el('td',money(x.interval_turnover_krw)),el('td',(x.risk_flags||[]).length?String((x.risk_flags||[]).length):'—'));tbody.append(tr);}
+     const lc=(x.learning_context||[])[0],mic=x.microstructure||null;const microText=mic?((mic.strength==null?'강도—':'강도 '+fmt(mic.strength,0))+' · 15초 '+money(mic.trade_value_15s_krw??mic.trade_value_krw)):'—';tr.append(el('td',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''),el('td',x.radar_score,'mos-axisnum'),el('td',x.theme_score,'mos-axisnum'),el('td',x.setup_score,'mos-axisnum'),el('td',x.catalyst_grade||'—'),el('td',x.trigger_state||'—'),el('td',lc?('N'+lc.samples+' · '+pct(lc.avg_return_pct)):'—',lc&&lc.avg_return_pct>0?'mos-up':lc&&lc.avg_return_pct<0?'mos-down':''),el('td',microText,mic&&mic.gap_count===0?'mos-up':''),el('td',money(x.interval_turnover_krw)),el('td',(x.risk_flags||[]).length?String((x.risk_flags||[]).length):'—'));tbody.append(tr);}
    if(!xs.length){const tr=el('tr'),td=el('td','현재 필터를 충족한 후보가 없습니다.','mos-empty');td.colSpan=12;tr.append(td);tbody.append(tr);}
    main.append(left,right);content.replaceChildren(main);renderDetail(right);
  }
@@ -99,9 +99,11 @@
    if(mic){
      const mbox=el('div',null,'mos-note');
      const bs=mic.buy_share==null?'—':fmt(mic.buy_share*100,0)+'%';
-     mbox.append(el('div','실시간 1분 거래대금 '+money(mic.trade_value_krw)+' · Tick '+mic.tick_count+' · Gap '+mic.gap_count,'mos-micro'),
-                 el('div','체결강도 '+(mic.strength==null?'—':fmt(mic.strength,1))+' · 매수비율 '+(mic.buy_ratio==null?'—':fmt(mic.buy_ratio,1))+' · 관측 매수체결 비중 '+bs,'mos-micro'),
-                 el('div','0B는 아직 Radar/Setup 점수에 자동 반영하지 않고 검증용으로 병행합니다.','mos-micro'));
+     const bs15=mic.buy_share_15s==null?'—':fmt(mic.buy_share_15s*100,0)+'%';
+     mbox.append(el('div','최근 15초 '+money(mic.trade_value_15s_krw)+' · Tick '+(mic.tick_count_15s??'—')+' · Gap '+(mic.gap_count_15s??'—')+' · 매수체결 '+bs15,'mos-micro'),
+                 el('div','현재 1분 '+money(mic.trade_value_krw)+' · Tick '+(mic.tick_count??'—')+' · Gap '+(mic.gap_count??'—'),'mos-micro'),
+                 el('div','체결강도 '+(mic.strength==null?'—':fmt(mic.strength,1))+' · 매수비율 '+(mic.buy_ratio==null?'—':fmt(mic.buy_ratio,1))+' · 1분 매수체결 비중 '+bs,'mos-micro'),
+                 el('div','0B는 아직 Radar/Setup 점수에 자동 반영하지 않고 shadow-learning으로 검증합니다.','mos-micro'));
      box.append(mbox);
    }else box.append(el('div','Kiwoom 0B 실시간 관측 대기 · 기능을 켜기 전에는 기존 30초/3분 데이터만 사용합니다.','mos-note'));
    const histctx=x.learning_context||[];
