@@ -22,10 +22,11 @@ def exists(cur,name):
     return cur.fetchone()["name"] is not None
 
 
-def _quality(n):
-    if n>=80:return "충분"
-    if n>=40:return "형성"
-    if n>=20:return "초기"
+def _quality(n,stocks=0,days=0):
+    # A large N from one stock or one day is not strong evidence.
+    if n>=150 and stocks>=10 and days>=5:return "충분"
+    if n>=60 and stocks>=8 and days>=3:return "형성"
+    if n>=20 and stocks>=5 and days>=2:return "초기"
     return "탐색"
 
 
@@ -115,7 +116,7 @@ def learning_payload():
         micro=latest_microstructure(cur,[x.get("code") for x in current.get("market_os_watchlist",[]) if x.get("code")])
         if not exists(cur,"market_os_learning_status"):
             for x in current.get("market_os_watchlist",[]):
-                x["microstructure"]=m
+                x["microstructure"]=micro.get(x.get("code"))
             current["learning"]=learning
             return current
         cur.execute("SELECT * FROM market_os_learning_status WHERE id=1")
@@ -131,15 +132,19 @@ def learning_payload():
                 "note":st["note"],
             }
         if exists(cur,"market_os_learning_segments"):
-            cur.execute("""SELECT segment_type,segment_value,horizon,samples,avg_return_pct,
-                                  median_return_pct,positive_rate,avg_mfe_pct,avg_mae_pct,updated_at
+            cur.execute("""SELECT segment_type,segment_value,horizon,samples,distinct_stocks,distinct_days,
+                                  sample_basis,avg_return_pct,median_return_pct,positive_rate,
+                                  avg_mfe_pct,avg_mae_pct,updated_at
                            FROM market_os_learning_segments
                            ORDER BY CASE horizon WHEN '5m' THEN 1 WHEN '30m' THEN 2 WHEN 'close' THEN 3 ELSE 4 END,
                                     samples DESC,segment_type,segment_value""")
             for r in cur.fetchall():
                 learning["segments"].append({
                     "segment_type":r["segment_type"],"segment_value":r["segment_value"],
-                    "horizon":r["horizon"],"samples":r["samples"],"quality":_quality(r["samples"]),
+                    "horizon":r["horizon"],"samples":r["samples"],
+                    "distinct_stocks":r["distinct_stocks"],"distinct_days":r["distinct_days"],
+                    "sample_basis":r["sample_basis"],
+                    "quality":_quality(r["samples"],r["distinct_stocks"],r["distinct_days"]),
                     "avg_return_pct":r["avg_return_pct"],"median_return_pct":r["median_return_pct"],
                     "positive_rate":r["positive_rate"],"avg_mfe_pct":r["avg_mfe_pct"],
                     "avg_mae_pct":r["avg_mae_pct"],
@@ -160,7 +165,7 @@ def learning_payload():
     # Conservative, deterministic feedback. This is evidence for review, not an
     # automatic rewrite of thresholds.
     for s in learning["segments"]:
-        if s["samples"]<20 or s["horizon"] not in ("30m","close"):
+        if s["quality"]=="탐색" or s["horizon"] not in ("30m","close"):
             continue
         avg=s["avg_return_pct"];pr=s["positive_rate"]
         if avg is not None and pr is not None and avg>0.5 and pr>=0.58:
@@ -198,7 +203,7 @@ def learning_payload():
         for horizon in ("30m","close","5m"):
             for kind,value in keys:
                 s=seg_index.get((kind,value,horizon))
-                if s and s["samples"]>=20:
+                if s and s["quality"]!="탐색":
                     evidence.append({
                         "segment_type":kind,"segment_value":value,"horizon":horizon,
                         "samples":s["samples"],"quality":s["quality"],
