@@ -2,7 +2,7 @@
 # Read-only diagnostics, not another model call. No keys/report text are printed.
 set -eu
 cd "$(dirname "$0")"
-docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker
+docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker candidate-tracker
 curl --fail --silent --show-error --max-time 8 http://localhost:8080/health
 printf '\n'
 docker compose exec -T radar-api python - <<'PY'
@@ -24,6 +24,11 @@ try:
     from collections import Counter
     counts=Counter(x.get('primary_type') for x in d.get('watch_candidates',[]) if x.get('primary_type'))
     print('WATCH_TYPE_COUNTS:',dict(counts))
+    tr=d.get('candidate_tracking',{})
+    print('CANDIDATE_TRACKER_STATUS:',tr.get('status'))
+    print('CANDIDATE_STATE_COUNTS:',tr.get('state_counts'))
+    print('RECENT_DROPOUTS:',len(tr.get('recent_dropouts',[])))
+    print('PERSISTENT_THEMES:',len(tr.get('theme_persistence',[])))
     a=d.get('automation',{})
     print('AUTO_SELECTION:',a.get('automatic'))
     print('DAILY_LIMIT_UNCHANGED:',a.get('daily_limit'))
