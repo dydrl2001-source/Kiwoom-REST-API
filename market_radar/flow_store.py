@@ -175,8 +175,7 @@ def candidate_tracking_payload(current_candidates, now, sample_time):
     with db(True) as c,c.cursor() as cur:
         if not exists(cur,'radar_candidate_history'):
             return base
-        cur.execute("""SELECT updated_at,status,last_sample_time,candidate_count,rows_written,
-                              active_episodes,completed_30m,note
+        cur.execute("""SELECT updated_at,status,last_sample_time,candidate_count,rows_written,note
                        FROM radar_candidate_tracker_status WHERE id=1""")
         tracker=cur.fetchone() if exists(cur,'radar_candidate_tracker_status') else None
         base['status']=tracker['status'] if tracker else 'READY_NO_STATUS'
@@ -184,8 +183,7 @@ def candidate_tracking_payload(current_candidates, now, sample_time):
             base['tracker']={
                 'updated_at':tracker['updated_at'].isoformat() if tracker['updated_at'] else None,
                 'last_sample_time':tracker['last_sample_time'].isoformat() if tracker['last_sample_time'] else None,
-                'candidate_count':tracker['candidate_count'],'rows_written':tracker['rows_written'],
-                'active_episodes':tracker['active_episodes'],'completed_30m':tracker['completed_30m']
+                'candidate_count':tracker['candidate_count'],'rows_written':tracker['rows_written']
             }
 
         cur.execute("""SELECT snapshot_time,stock_code,stock_name,attention_score,label,primary_type,
