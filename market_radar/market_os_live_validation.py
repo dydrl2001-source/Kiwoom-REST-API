@@ -131,6 +131,13 @@ def _realtime_status(cur,now):
     if not r:
         return {"enabled":enabled,"exists":True,"status":"EMPTY","connected":False,
                 "last_message_at":None,"age_sec":None}
+    recent_gaps=0;recent_gap_stocks=0
+    if exists(cur,"market_realtime_5s_bars"):
+        cur.execute("""SELECT COALESCE(SUM(gap_count),0) AS gaps,
+                              COUNT(DISTINCT stock_code) FILTER(WHERE gap_count>0) AS stocks
+                       FROM market_realtime_5s_bars
+                       WHERE bucket_time>now()-interval '5 minutes'""")
+        g=cur.fetchone();recent_gaps=int(g["gaps"] or 0);recent_gap_stocks=int(g["stocks"] or 0)
     return {
         "enabled":enabled,"exists":True,"status":r["status"],"mode":r["mode"],
         "connected":bool(r["connected"]),
@@ -138,6 +145,7 @@ def _realtime_status(cur,now):
         "age_sec":_age_seconds(r["last_message_at"],now),
         "subscribed_count":int(r["subscribed_count"] or 0),
         "tick_count":int(r["tick_count"] or 0),"gap_count":int(r["gap_count"] or 0),
+        "recent_gap_count_5m":recent_gaps,"recent_gap_stocks_5m":recent_gap_stocks,
         "note":r["note"],"updated_at":r["updated_at"].isoformat() if r["updated_at"] else None,
     }
 
