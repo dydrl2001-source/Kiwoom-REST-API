@@ -308,6 +308,48 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"eligible={r['review_eligible']} "
                       f"reasons={','.join(r['reason_codes'] or [])}")
 
+        print('\n[ADOPTION REVIEW DOSSIER v1.7]')
+        if not exists('market_os_adoption_dossiers'):
+            print('adoption dossier table missing')
+        else:
+            cur.execute("""SELECT d.dossier_id,d.shadow_rule_id,d.revision,d.content_hash,
+                                  d.source_decision_event_id,d.decision_state,d.review_state,
+                                  d.generated_at,d.reviewed_at,
+                                  r.segment_type,r.segment_value,r.source_horizon,r.action
+                           FROM market_os_adoption_dossiers d
+                           LEFT JOIN market_os_shadow_rules r
+                             ON r.shadow_rule_id=d.shadow_rule_id
+                           ORDER BY CASE d.review_state
+                               WHEN 'PENDING' THEN 1
+                               WHEN 'APPROVED_DRY_RUN' THEN 2
+                               WHEN 'REJECTED' THEN 3
+                               WHEN 'STALE_DECISION' THEN 4
+                               WHEN 'SUPERSEDED' THEN 5 ELSE 6 END,
+                               d.generated_at DESC""")
+            dossiers=cur.fetchall()
+            if not dossiers:
+                print('dossier 없음')
+            for r in dossiers[:30]:
+                print(f"{r['review_state']} {r['dossier_id']} rev={r['revision']} "
+                      f"decision={r['decision_state']} event={r['source_decision_event_id'] or '—'} "
+                      f"{r['source_horizon'] or '—'} {r['action'] or '—'} "
+                      f"{r['segment_type'] or '—'}={r['segment_value'] or '—'} "
+                      f"generated={r['generated_at']} reviewed={r['reviewed_at']} "
+                      f"hash={r['content_hash'][:12]}")
+        if exists('market_os_adoption_dossier_events'):
+            print('\n[ADOPTION DOSSIER EVENTS]')
+            cur.execute("""SELECT event_time,dossier_id,event_type,from_review_state,
+                                  to_review_state,note
+                           FROM market_os_adoption_dossier_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            rows=cur.fetchall()
+            if not rows:
+                print('dossier event 없음')
+            for r in rows:
+                print(f"{r['event_time']} {r['dossier_id']} {r['event_type']} "
+                      f"{r['from_review_state'] or '—'}->{r['to_review_state']} "
+                      f"{r['note'] or ''}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -341,5 +383,6 @@ print('Validation gate v1.3: cumulative gate + day-split EARLY/RECENT walk-forwa
 print('Promotion Registry v1.4: lifecycle is persisted with transition history; automation stops at PROMOTION_CANDIDATE and never creates SHADOW_RULE.')
 print('Shadow Rule Lab v1.5: only manually approved rules are observed; pre-approval data is excluded and CONTROL/CHALLENGER share identical outcome paths.')
 print('Shadow Decision Gate v1.6: 30m+close, time-split stability, membership changes and stance reproduction are required before ACCEPT_CANDIDATE; no automatic live adoption.')
+print('Adoption Review Dossier v1.7: one immutable dossier revision is generated per ACCEPT_CANDIDATE transition; human review can only approve a future dry-run or reject it.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
