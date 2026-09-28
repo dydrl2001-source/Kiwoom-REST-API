@@ -226,6 +226,24 @@
    body.append(el('div','Decision 전이','mos-section-title'));const deScroll=el('div',null,'mos-scroll'),deTable=el('table',null,'mos-learn-table'),deHead=el('tr');['시각','Rule','조건','이전','현재','검토자격','근거'].forEach(v=>deHead.append(el('th',v)));const deThead=el('thead');deThead.append(deHead);const deBody=el('tbody');
    for(const e of dev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',(e.segment_type||'—')+' · '+(e.segment_value||'—')),el('td',decisionKo(e.from_state)),el('td',decisionKo(e.to_state),e.to_state==='ACCEPT_CANDIDATE'?'mos-up':e.to_state==='REJECT'?'mos-down':''),el('td',e.review_eligible?'YES':'NO'),el('td',(e.reason_codes||[]).join(' · '),'mos-micro'));deBody.append(tr);}
    if(!dev.length){const tr=el('tr'),td=el('td','아직 Decision 상태 전이가 없습니다.','mos-empty');td.colSpan=7;tr.append(td);deBody.append(tr);}deTable.append(deThead,deBody);deScroll.append(deTable);body.append(deScroll);
+   body.append(el('div','Adoption Review Dossier','mos-section-title'));
+   const ar=learn.adoption_review||{},ars=ar.summary||{},ads=ar.dossiers||[],are=ar.events||[],ag=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['심사대기',ars.pending||0,'현재 ACCEPT_CANDIDATE 증거 revision'],
+     ['Dry-run 승인',ars.approved_dry_run||0,'사람이 다음 단계만 승인'],
+     ['기각',ars.rejected||0,'사람의 심사 기각'],
+     ['대체됨',ars.superseded||0,'새 증거 revision 생성'],
+     ['Decision 변경',ars.stale_decision||0,'ACCEPT 조건에서 이탈']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));ag.append(card);}body.append(ag);
+   body.append(el('div',ar.notice||'교체후보의 증거를 immutable revision으로 고정해 심사합니다.','mos-note'));
+   const reviewKo=x=>({PENDING:'심사대기',APPROVED_DRY_RUN:'Dry-run 승인',REJECTED:'기각',SUPERSEDED:'대체됨',STALE_DECISION:'Decision 변경'})[x]||x||'—';
+   const adScroll=el('div',null,'mos-scroll'),adTable=el('table',null,'mos-learn-table'),adHead=el('tr');
+   ['심사상태','Dossier','Rev','Rule','조건','Action','Decision','영향건','반례','Rollback','생성시각','Hash'].forEach(v=>adHead.append(el('th',v)));const adThead=el('thead');adThead.append(adHead);const adBody=el('tbody');
+   for(const d of ads.slice(0,40)){const tr=el('tr'),doc=d.dossier||{},impact=doc.impact_surface||{},counter=doc.counterexamples||{},change=doc.proposed_change||{};const cls=d.review_state==='APPROVED_DRY_RUN'?'mos-up':d.review_state==='REJECTED'?'mos-down':'';tr.append(el('td',reviewKo(d.review_state),cls),el('td',d.dossier_id||'—','mos-code'),el('td',d.revision??'—'),el('td',(d.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',(d.segment_type||'—')+' · '+(d.segment_value||'—')),el('td',shadowAction(d.action||change.action)),el('td',d.decision_state||'—'),el('td',impact.changed_episode_count??'—'),el('td',(counter.cases||[]).length),el('td',(doc.rollback_criteria||[]).slice(0,2).join(' / ')||'—','mos-micro'),el('td',stamp(d.generated_at)),el('td',(d.content_hash||'').slice(0,12),'mos-code'));adBody.append(tr);}
+   if(!ads.length){const tr=el('tr'),td=el('td','ACCEPT_CANDIDATE가 생기면 증거·반례·rollback 조건을 고정한 dossier revision이 자동 생성됩니다.','mos-empty');td.colSpan=12;tr.append(td);adBody.append(tr);}adTable.append(adThead,adBody);adScroll.append(adTable);body.append(adScroll);
+   body.append(el('div','Dossier 심사 이력','mos-section-title'));const aeScroll=el('div',null,'mos-scroll'),aeTable=el('table',null,'mos-learn-table'),aeHead=el('tr');['시각','Dossier','이벤트','이전','현재','메모'].forEach(v=>aeHead.append(el('th',v)));const aeThead=el('thead');aeThead.append(aeHead);const aeBody=el('tbody');
+   for(const e of are.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.dossier_id||'—','mos-code'),el('td',e.event_type||'—'),el('td',reviewKo(e.from_review_state)),el('td',reviewKo(e.to_review_state),e.to_review_state==='APPROVED_DRY_RUN'?'mos-up':e.to_review_state==='REJECTED'?'mos-down':''),el('td',e.note||'—','mos-micro'));aeBody.append(tr);}
+   if(!are.length){const tr=el('tr'),td=el('td','아직 dossier 심사 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);aeBody.append(tr);}aeTable.append(aeThead,aeBody);aeScroll.append(aeTable);body.append(aeScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
