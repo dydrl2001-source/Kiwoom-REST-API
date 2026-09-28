@@ -506,34 +506,43 @@ function renderShadowExecution(x){
  const kpis=[
    ["진행",r.open_count??0],
    ["완전청산",r.closed_count??0],
-   ["유동성 거절",r.rejected_count??0],
-   ["부분청산",r.partial_exit_count??0],
+   ["실행 거절",r.rejected_count??0],
+   ["Risk 거절",r.risk_reject_count??0],
    ["중앙 Net",sum.median_net_return_pct==null?"—":obsPct(sum.median_net_return_pct)]
  ];
  const summary='<div class="shadow-summary">'+kpis.map(v=>'<div class="shadow-kpi"><div class="sk">'+esc(v[0])+'</div><div class="sv">'+esc(v[1])+'</div></div>').join("")+'</div>';
  const quality='<div class="brief-list" style="padding:9px 10px">'+
-   '<span class="pill">진입 slip '+esc(sum.median_entry_slippage_bps==null?"—":fmt(sum.median_entry_slippage_bps,1)+"bp")+'</span>'+
-   '<span class="pill">청산 slip '+esc(sum.median_exit_slippage_bps==null?"—":fmt(sum.median_exit_slippage_bps,1)+"bp")+'</span>'+
+   '<span class="pill">BOOK_V2 '+esc(sum.book_coverage_pct==null?"—":fmt(sum.book_coverage_pct,0)+"%")+'</span>'+
+   '<span class="pill">Entry IS '+esc(sum.median_entry_is_bps==null?"—":fmt(sum.median_entry_is_bps,1)+"bp")+'</span>'+
+   '<span class="pill">Exit IS '+esc(sum.median_exit_is_bps==null?"—":fmt(sum.median_exit_is_bps,1)+"bp")+'</span>'+
+   '<span class="pill">Round-trip IS '+esc(sum.median_round_trip_is_bps==null?"—":fmt(sum.median_round_trip_is_bps,1)+"bp")+'</span>'+
+   '<span class="pill">Paper→Shadow drag '+esc(sum.median_return_drag_pct==null?"—":obsPct(sum.median_return_drag_pct))+'</span>'+
    '<span class="pill">체결률 '+esc(sum.median_fill_ratio_pct==null?"—":fmt(sum.median_fill_ratio_pct,0)+"%")+'</span>'+
    '<span class="pill">중앙 주문 '+esc(sum.median_notional_krw==null?"—":money(sum.median_notional_krw))+'</span>'+
-   '<span class="pill">Gross '+esc(sum.median_gross_return_pct==null?"—":obsPct(sum.median_gross_return_pct))+'</span>'+
    '</div>';
- let table='<div class="tblwrap"><table class="shadow-table"><thead><tr><th>종목</th><th>상태</th><th>전략</th><th>요청/체결</th><th>Stop</th><th>진입 Ref→Fill</th><th>진입 Slip</th><th>청산 Ref→Fill</th><th>청산 Slip</th><th>잔여</th><th>Net</th></tr></thead><tbody>';
+ let table='<div class="tblwrap"><table class="shadow-table"><thead><tr><th>종목</th><th>상태</th><th>모델</th><th>전략/테마</th><th>요청/체결</th><th>Risk</th><th>진입 Mid→Fill</th><th>Entry IS</th><th>청산 Mid→Fill</th><th>Exit IS</th><th>RT IS</th><th>Drag</th><th>Net</th></tr></thead><tbody>';
  table+=rows.length?rows.map(t=>{
    const sc=t.status==="CLOSED"?"closed":t.status==="CLOSED_PARTIAL_LIQUIDITY"?"partial":t.status==="REJECTED"?"rejected":"";
-   const entry=(t.entry_ref_price_krw==null?"—":fmt(t.entry_ref_price_krw,0))+" → "+(t.entry_fill_price_krw==null?"—":fmt(t.entry_fill_price_krw,0));
-   const exit=(t.exit_ref_price_krw==null?"—":fmt(t.exit_ref_price_krw,0))+" → "+(t.exit_fill_price_krw==null?"—":fmt(t.exit_fill_price_krw,0));
-   return '<tr><td><b>'+esc(t.name||t.code)+'</b><div class="sub">'+esc(t.code||"")+'</div></td>'+
-    '<td><span class="shadow-status '+sc+'">'+esc(t.status||"")+'</span></td><td>'+esc(t.strategy_id||"—")+'</td>'+
-    '<td>'+esc((t.requested_shares??0)+" / "+(t.filled_shares??0))+'</td><td>'+esc(t.stop_pct==null?"—":fmt(t.stop_pct,2)+"%")+'</td>'+
-    '<td>'+esc(entry)+'</td><td>'+esc(t.entry_slippage_bps==null?"—":fmt(t.entry_slippage_bps,1)+"bp")+'</td>'+
-    '<td>'+esc(exit)+'</td><td>'+esc(t.exit_slippage_bps==null?"—":fmt(t.exit_slippage_bps,1)+"bp")+'</td>'+
-    '<td>'+esc(t.remaining_shares??0)+'</td><td class="'+retClass(t.net_return_pct)+'">'+esc(t.net_return_pct==null?"—":obsPct(t.net_return_pct))+'</td></tr>';
- }).join(""):'<tr><td colspan="11" class="muted">Shadow 표본 축적 중</td></tr>';
+   const entry=(t.entry_arrival_mid_krw==null?(t.entry_ref_price_krw==null?"—":fmt(t.entry_ref_price_krw,0)):fmt(t.entry_arrival_mid_krw,0))+" → "+(t.entry_fill_price_krw==null?"—":fmt(t.entry_fill_price_krw,0));
+   const exit=(t.exit_arrival_mid_krw==null?(t.exit_ref_price_krw==null?"—":fmt(t.exit_ref_price_krw,0)):fmt(t.exit_arrival_mid_krw,0))+" → "+(t.exit_fill_price_krw==null?"—":fmt(t.exit_fill_price_krw,0));
+   const gate=t.risk_gate||{},blocks=gate.blockers||[];
+   const riskText=(t.risk_at_entry_krw==null?"—":money(t.risk_at_entry_krw))+(blocks.length?(" · "+blocks.join(",")):"");
+   return '<tr><td><b>'+esc(t.stock_name||t.name||t.stock_code||t.code)+'</b><div class="sub">'+esc(t.stock_code||t.code||"")+'</div></td>'+
+    '<td><span class="shadow-status '+sc+'">'+esc(t.status||"")+'</span></td>'+
+    '<td><b>'+esc(t.entry_model_mode||"—")+'</b><div class="sub">'+esc(t.entry_model_quality||"")+'</div></td>'+
+    '<td>'+esc(t.strategy_id||"—")+'<div class="sub">'+esc(t.market_theme||"미분류")+' · '+esc(t.strategy_family||"")+'</div></td>'+
+    '<td>'+esc((t.requested_shares??0)+" / "+(t.filled_shares??0))+'</td>'+
+    '<td>'+esc(riskText)+'</td>'+
+    '<td>'+esc(entry)+'</td><td>'+esc(t.entry_implementation_shortfall_bps==null?"—":fmt(t.entry_implementation_shortfall_bps,1)+"bp")+'</td>'+
+    '<td>'+esc(exit)+'</td><td>'+esc(t.exit_implementation_shortfall_bps==null?"—":fmt(t.exit_implementation_shortfall_bps,1)+"bp")+'</td>'+
+    '<td>'+esc(t.round_trip_is_bps==null?"—":fmt(t.round_trip_is_bps,1)+"bp")+'</td>'+
+    '<td class="'+retClass(-(Number(t.return_drag_pct)||0))+'">'+esc(t.return_drag_pct==null?"—":obsPct(t.return_drag_pct))+'</td>'+
+    '<td class="'+retClass(t.net_return_pct)+'">'+esc(t.net_return_pct==null?"—":obsPct(t.net_return_pct))+'</td></tr>';
+ }).join(""):'<tr><td colspan="13" class="muted">Shadow v2 표본 축적 중</td></tr>';
  table+='</tbody></table></div>';
  const policy=rows[0]?.entry_model?.policy||{};
  const fees='commission '+esc(policy.commission_bps??0)+'bp · sell tax '+esc(policy.sell_tax_bps??0)+'bp';
- el.innerHTML=summary+quality+table+'<div class="shadow-note">'+esc(r.model_note||r.note||"")+' · '+fees+' · 실제 bid/ask depth가 연결되면 체결 모델을 교체합니다.</div>';
+ el.innerHTML=summary+quality+table+'<div class="shadow-note">'+esc(r.model_note||r.note||"")+' · '+fees+' · BOOK_V2와 PROXY_V1은 분리해 해석합니다.</div>';
 }
 
 function renderAIDailyReview(x){
