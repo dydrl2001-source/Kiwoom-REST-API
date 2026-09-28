@@ -19,7 +19,7 @@ class ShadowExecutionModelTests(unittest.TestCase):
 
     def test_participation_cap_can_force_partial_fill(self):
         policy=FillPolicy(max_participation_pct=1.0)
-        out=estimate_fill("BUY",100_000,100,1_000_000,20,policy)
+        out=estimate_fill("BUY",100_000,100,10_000_000,20,policy)
         self.assertEqual(out["status"],"PARTIAL")
         self.assertLess(out["filled_shares"],100)
         self.assertGreater(out["filled_shares"],0)
@@ -50,6 +50,16 @@ class ShadowExecutionSourceTests(unittest.TestCase):
         for banned in ("send_order","place_order","/api/dostk/ordr"):
             self.assertNotIn(banned,text)
         self.assertIn("no broker orders",text)
+
+    def test_worker_is_forward_only_and_requires_flow_evidence(self):
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        text=(root/"shadow_execution_engine.py").read_text(encoding="utf-8")
+        self.assertIn("simulation_cutoff",text)
+        self.assertIn("MAX_REPLAY_MINUTES",text)
+        self.assertNotIn("interval '7 days'",text)
+        self.assertNotIn('ref=ref or finite(p["entry_price_krw"])',text)
+        self.assertNotIn('ref=ref or finite(s["exit_price_krw"])',text)
 
 
 if __name__=="__main__":
