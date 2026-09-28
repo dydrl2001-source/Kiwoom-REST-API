@@ -5,7 +5,7 @@ from datetime import datetime,timezone,timedelta
 import json
 import os
 import re
-from flow_core import quote, metrics, group_rows, rotation_series, segment, dt, event_from_report, report_sections, SPEC, VERSION
+from flow_core import quote, metrics, group_rows, rotation_series, candidate_watchlist, segment, dt, event_from_report, report_sections, SPEC, VERSION
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS radar_flow_quotes (
@@ -110,6 +110,22 @@ def public_leads(cur,codes):
     return out
 
 
+def latest_chart_states(cur,codes):
+    out={}
+    if not codes or not exists(cur,'chart_states'):return out
+    cur.execute("""SELECT DISTINCT ON(stock_code)
+                    stock_code,state,state_ko,score,minute_trend,daily_context,snapshot_time
+                   FROM chart_states
+                   WHERE stock_code=ANY(%s) AND snapshot_time>now()-interval '15 minutes'
+                   ORDER BY stock_code,snapshot_time DESC""",(list(codes),))
+    for r in cur.fetchall():
+        out[r['stock_code']]={'state':r['state'],'state_ko':r['state_ko'],
+            'score':r['score'],'minute_trend':r['minute_trend'],
+            'daily_context':r['daily_context'],
+            'snapshot_time':r['snapshot_time'].isoformat() if r['snapshot_time'] else None}
+    return out
+
+
 def theme_memberships(cur,codes):
     out=defaultdict(list)
     if not codes or not exists(cur,'stock_theme_memberships'):return out
@@ -134,6 +150,7 @@ def desk_payload():
         reports=saved_reports(cur,history)
         leads=public_leads(cur,history)
         themes=theme_memberships(cur,history)
+        charts=latest_chart_states(cur,history)
         automation={'enabled':False,'notice':'설정 미확인'}
         try:
             from web_research_engine import Config, usage_count
@@ -150,7 +167,8 @@ def desk_payload():
         primary_theme=(tm[0]['name'] if tm else None)
         r.update({'sector':top,'segment':top+' > '+fine,'classification':classification,
                   'themes':tm[:8],'market_theme':primary_theme,
-                  'market_group':primary_theme or top+' > '+fine})
+                  'market_group':primary_theme or top+' > '+fine,
+                  'chart':charts.get(code)})
         report=reports.get(code)
         # The report's age must never be hidden behind a current price refresh.
         fresh_report=bool(report and 0<=(now-dt(report['completed_at'])).total_seconds()<=21600)
@@ -166,12 +184,13 @@ def desk_payload():
     by_theme,_=group_rows(rows,history,'theme')
     by_sector,_=group_rows(rows,history,'sector')
     rotation=rotation_series(rows,history,10)
+    candidates=candidate_watchlist(rows,rotation,12)
     recent=sum(r['recent_trade'] for r in rows)
     theme_mapped=sum(1 for r in rows if r.get('market_theme'))
     return {'generated_at':now.isoformat(),'sample_time':newest.isoformat() if newest else None,
             'refresh_target_seconds':30,'status':'RECENT_TRADES' if recent else 'NO_RECENT_TRADE_OR_WAITING',
             'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
-            'theme_rotation':rotation,
+            'theme_rotation':rotation,'watch_candidates':candidates,
             'automation':automation,'coverage':{**coverage,'theme_mapped_stocks':theme_mapped,'observed_stocks':len(rows)},
             'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '
