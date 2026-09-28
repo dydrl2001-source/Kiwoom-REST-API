@@ -535,6 +535,13 @@ def learning_payload():
         "promotion_summary":{"hypothesis":0,"forming":0,"validated":0,"stable":0,
                              "promotion_candidate":0,"shadow_rule":0},
         "promotion_events":[],
+        "shadow_lab":{
+            "mode":"PROSPECTIVE_AB",
+            "enabled":os.getenv("MARKET_OS_SHADOW_LAB_ENABLED","1").strip().lower() in {"1","true","yes","on"},
+            "rules":[],"summaries":[],
+            "stats":{"rules":0,"enabled_rules":0,"observations":0,"matched":0,"changed":0},
+            "notice":"수동 승인 시각 이후 새 assessment만 CONTROL/CHALLENGER로 동시 기록합니다. live tier/점수/주문은 변경하지 않습니다."
+        },
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
@@ -645,6 +652,62 @@ def learning_payload():
                 x=dict(r)
                 x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
                 learning["promotion_events"].append(x)
+        if exists(cur,"market_os_shadow_rules"):
+            cur.execute("""SELECT r.shadow_rule_id,r.candidate_key,r.segment_type,r.segment_value,
+                                  r.source_horizon,r.action,r.enabled,r.approved_at,r.approved_by,
+                                  r.created_at,r.disabled_at,r.last_evaluated_at,r.note,r.spec,
+                                  COUNT(o.*) AS observations,
+                                  COUNT(o.*) FILTER(WHERE o.matched) AS matched,
+                                  COUNT(o.*) FILTER(WHERE o.changed) AS changed,
+                                  MIN(o.assessment_time) AS first_observation_at,
+                                  MAX(o.assessment_time) AS last_observation_at
+                           FROM market_os_shadow_rules r
+                           LEFT JOIN market_os_shadow_observations o
+                             ON o.shadow_rule_id=r.shadow_rule_id
+                           GROUP BY r.shadow_rule_id
+                           ORDER BY r.enabled DESC,r.approved_at DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("approved_at","created_at","disabled_at","last_evaluated_at",
+                          "first_observation_at","last_observation_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                x["observations"]=int(r["observations"] or 0)
+                x["matched"]=int(r["matched"] or 0)
+                x["changed"]=int(r["changed"] or 0)
+                learning["shadow_lab"]["rules"].append(x)
+            learning["shadow_lab"]["stats"]["rules"]=len(learning["shadow_lab"]["rules"])
+            learning["shadow_lab"]["stats"]["enabled_rules"]=sum(
+                bool(x["enabled"]) for x in learning["shadow_lab"]["rules"]
+            )
+            learning["shadow_lab"]["stats"]["observations"]=sum(
+                x["observations"] for x in learning["shadow_lab"]["rules"]
+            )
+            learning["shadow_lab"]["stats"]["matched"]=sum(
+                x["matched"] for x in learning["shadow_lab"]["rules"]
+            )
+            learning["shadow_lab"]["stats"]["changed"]=sum(
+                x["changed"] for x in learning["shadow_lab"]["rules"]
+            )
+        if exists(cur,"market_os_shadow_experiment_summary"):
+            cur.execute("""SELECT shadow_rule_id,horizon,cohort,evidence_state,membership_changes,
+                                  control_samples,control_stocks,control_days,
+                                  control_avg_return_pct,control_median_return_pct,
+                                  control_positive_rate,control_avg_mfe_pct,control_avg_mae_pct,
+                                  challenger_samples,challenger_stocks,challenger_days,
+                                  challenger_avg_return_pct,challenger_median_return_pct,
+                                  challenger_positive_rate,challenger_avg_mfe_pct,challenger_avg_mae_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct,updated_at
+                           FROM market_os_shadow_experiment_summary
+                           ORDER BY CASE evidence_state
+                               WHEN 'COMPARABLE' THEN 1 WHEN 'FORMING' THEN 2
+                               WHEN 'COLLECTING' THEN 3 ELSE 4 END,
+                               CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                    WHEN 'D+1' THEN 3 ELSE 4 END,
+                               cohort,shadow_rule_id""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["updated_at"]=r["updated_at"].isoformat() if r["updated_at"] else None
+                learning["shadow_lab"]["summaries"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
