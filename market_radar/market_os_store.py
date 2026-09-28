@@ -544,6 +544,12 @@ def learning_payload():
             "stats":{"rules":0,"enabled_rules":0,"observations":0,"matched":0,"changed":0},
             "notice":"수동 승인 시각 이후 새 assessment만 CONTROL/CHALLENGER로 동시 기록합니다. ACCEPT_CANDIDATE도 사람의 교체 검토 자격일 뿐 live tier/점수/주문을 변경하지 않습니다."
         },
+        "adoption_review":{
+            "dossiers":[],"events":[],
+            "summary":{"pending":0,"approved_dry_run":0,"rejected":0,
+                       "superseded":0,"stale_decision":0},
+            "notice":"ACCEPT_CANDIDATE의 증거·반례·영향범위·rollback 조건을 immutable revision으로 심사합니다. APPROVED_DRY_RUN도 live rule 생성이 아닙니다."
+        },
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
@@ -751,6 +757,47 @@ def learning_payload():
                 x=dict(r)
                 x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
                 learning["shadow_lab"]["decision_events"].append(x)
+        if exists(cur,"market_os_adoption_dossiers"):
+            cur.execute("""SELECT d.dossier_id,d.shadow_rule_id,d.revision,d.content_hash,
+                                  d.decision_state,d.decision_updated_at,d.review_state,
+                                  d.generated_at,d.reviewed_at,d.reviewed_by,d.review_note,d.dossier,
+                                  r.segment_type,r.segment_value,r.source_horizon,r.action
+                           FROM market_os_adoption_dossiers d
+                           LEFT JOIN market_os_shadow_rules r
+                             ON r.shadow_rule_id=d.shadow_rule_id
+                           ORDER BY CASE d.review_state
+                               WHEN 'PENDING' THEN 1
+                               WHEN 'APPROVED_DRY_RUN' THEN 2
+                               WHEN 'REJECTED' THEN 3
+                               WHEN 'STALE_DECISION' THEN 4
+                               WHEN 'SUPERSEDED' THEN 5 ELSE 6 END,
+                               d.generated_at DESC,d.revision DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("decision_updated_at","generated_at","reviewed_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["adoption_review"]["dossiers"].append(x)
+            for state,key in (
+                ("PENDING","pending"),("APPROVED_DRY_RUN","approved_dry_run"),
+                ("REJECTED","rejected"),("SUPERSEDED","superseded"),
+                ("STALE_DECISION","stale_decision")
+            ):
+                learning["adoption_review"]["summary"][key]=sum(
+                    x["review_state"]==state
+                    for x in learning["adoption_review"]["dossiers"]
+                )
+        if exists(cur,"market_os_adoption_dossier_events"):
+            cur.execute("""SELECT e.event_id,e.dossier_id,e.event_time,e.event_type,
+                                  e.from_review_state,e.to_review_state,e.note,e.evidence,
+                                  d.shadow_rule_id,d.revision
+                           FROM market_os_adoption_dossier_events e
+                           LEFT JOIN market_os_adoption_dossiers d
+                             ON d.dossier_id=e.dossier_id
+                           ORDER BY e.event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["adoption_review"]["events"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
