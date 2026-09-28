@@ -176,6 +176,21 @@ services:
       postgres:
         condition: service_healthy
 
+  kiwoom-realtime:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/kiwoom_realtime_0b.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kiwoom-feed:
+        condition: service_started
+
   market-os-learning:
     build:
       context: ../..
