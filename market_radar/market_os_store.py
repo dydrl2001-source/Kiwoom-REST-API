@@ -538,9 +538,11 @@ def learning_payload():
         "shadow_lab":{
             "mode":"PROSPECTIVE_AB",
             "enabled":os.getenv("MARKET_OS_SHADOW_LAB_ENABLED","1").strip().lower() in {"1","true","yes","on"},
-            "rules":[],"summaries":[],
+            "rules":[],"summaries":[],"decisions":[],"decision_events":[],
+            "decision_summary":{"collecting":0,"comparable":0,"consistent":0,
+                                "accept_candidate":0,"reject":0,"more_data":0},
             "stats":{"rules":0,"enabled_rules":0,"observations":0,"matched":0,"changed":0},
-            "notice":"수동 승인 시각 이후 새 assessment만 CONTROL/CHALLENGER로 동시 기록합니다. live tier/점수/주문은 변경하지 않습니다."
+            "notice":"수동 승인 시각 이후 새 assessment만 CONTROL/CHALLENGER로 동시 기록합니다. ACCEPT_CANDIDATE도 사람의 교체 검토 자격일 뿐 live tier/점수/주문을 변경하지 않습니다."
         },
         "notes":[],"daily_assessments":[],
     }
@@ -708,6 +710,47 @@ def learning_payload():
                 x=dict(r)
                 x["updated_at"]=r["updated_at"].isoformat() if r["updated_at"] else None
                 learning["shadow_lab"]["summaries"].append(x)
+        if exists(cur,"market_os_shadow_decisions"):
+            cur.execute("""SELECT d.shadow_rule_id,d.decision_state,d.review_eligible,
+                                  d.primary_cohort,d.reason_codes,d.evidence,
+                                  d.manual_decision_state,d.state_since,d.updated_at,
+                                  r.segment_type,r.segment_value,r.source_horizon,r.action,r.enabled
+                           FROM market_os_shadow_decisions d
+                           LEFT JOIN market_os_shadow_rules r
+                             ON r.shadow_rule_id=d.shadow_rule_id
+                           ORDER BY CASE d.decision_state
+                               WHEN 'ACCEPT_CANDIDATE' THEN 1
+                               WHEN 'CONSISTENT' THEN 2
+                               WHEN 'COMPARABLE' THEN 3
+                               WHEN 'MORE_DATA' THEN 4
+                               WHEN 'COLLECTING' THEN 5
+                               WHEN 'REJECT' THEN 6 ELSE 7 END,
+                               d.updated_at DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("state_since","updated_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["shadow_lab"]["decisions"].append(x)
+            for state,key in (
+                ("COLLECTING","collecting"),("COMPARABLE","comparable"),
+                ("CONSISTENT","consistent"),("ACCEPT_CANDIDATE","accept_candidate"),
+                ("REJECT","reject"),("MORE_DATA","more_data")
+            ):
+                learning["shadow_lab"]["decision_summary"][key]=sum(
+                    x["decision_state"]==state for x in learning["shadow_lab"]["decisions"]
+                )
+        if exists(cur,"market_os_shadow_decision_events"):
+            cur.execute("""SELECT e.event_id,e.shadow_rule_id,e.event_time,e.from_state,e.to_state,
+                                  e.review_eligible,e.reason_codes,
+                                  r.segment_type,r.segment_value,r.source_horizon,r.action
+                           FROM market_os_shadow_decision_events e
+                           LEFT JOIN market_os_shadow_rules r
+                             ON r.shadow_rule_id=e.shadow_rule_id
+                           ORDER BY e.event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["shadow_lab"]["decision_events"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
