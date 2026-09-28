@@ -30,7 +30,12 @@ from market_os_store import (
     _validation_candidates as store_validation_candidates,
     _promotion_stage,
 )
-from market_os_shadow import evaluate as shadow_evaluate, experiment_summaries as shadow_experiment_summaries
+from market_os_shadow import (
+    evaluate as shadow_evaluate,
+    experiment_summaries as shadow_experiment_summaries,
+    experiment_slices as shadow_experiment_slices,
+    shadow_decision,
+)
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
@@ -299,6 +304,33 @@ CREATE TABLE IF NOT EXISTS market_os_shadow_experiment_summary (
     updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY(shadow_rule_id,horizon,cohort)
 );
+
+CREATE TABLE IF NOT EXISTS market_os_shadow_decisions (
+    shadow_rule_id          TEXT PRIMARY KEY,
+    decision_state          TEXT NOT NULL,
+    review_eligible         BOOLEAN NOT NULL DEFAULT FALSE,
+    primary_cohort          TEXT,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    manual_decision_state   TEXT NOT NULL DEFAULT 'PENDING',
+    state_since             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_shadow_decision_state
+    ON market_os_shadow_decisions(decision_state,review_eligible,updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_shadow_decision_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    shadow_rule_id          TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    from_state              TEXT,
+    to_state                TEXT NOT NULL,
+    review_eligible         BOOLEAN NOT NULL DEFAULT FALSE,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_shadow_decision_events
+    ON market_os_shadow_decision_events(shadow_rule_id,event_time DESC);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -1219,18 +1251,24 @@ def refresh_shadow_summaries():
     with db() as c,c.cursor() as cur:
         if not table_exists(cur,"market_os_shadow_rules"):
             return 0
-        cur.execute("""SELECT shadow_rule_id,rule_version,approved_at
+        cur.execute("""SELECT shadow_rule_id,rule_version,approved_at,
+                              segment_type,segment_value,source_horizon,action
                        FROM market_os_shadow_rules
                        ORDER BY approved_at""")
         rules=cur.fetchall()
         for rule in rules:
             cur.execute("""SELECT o.assessment_time,o.stock_code,o.control_tier,o.challenger_tier,
+                                  a.market_stance,
                                   y.horizon,y.return_pct,y.mfe_pct,y.mae_pct
                            FROM market_os_shadow_observations o
                            JOIN market_os_assessment_outcomes y
                              ON y.assessment_time=o.assessment_time
                             AND y.stock_code=o.stock_code
                             AND y.rule_version=o.rule_version
+                           JOIN market_os_assessment_snapshots a
+                             ON a.snapshot_time=o.assessment_time
+                            AND a.stock_code=o.stock_code
+                            AND a.rule_version=o.rule_version
                            WHERE o.shadow_rule_id=%s
                              AND y.horizon IN ('5m','30m','close','D+1')
                            ORDER BY y.horizon,o.stock_code,o.assessment_time""",
@@ -1243,6 +1281,8 @@ def refresh_shadow_summaries():
                 raw.append(x)
             anchors=_episode_anchors(raw)
             summaries=shadow_experiment_summaries(anchors)
+            slices=shadow_experiment_slices(anchors)
+            decision=shadow_decision(dict(rule),summaries,slices)
             cur.execute("""DELETE FROM market_os_shadow_experiment_summary
                            WHERE shadow_rule_id=%s""",(rule["shadow_rule_id"],))
             for s in summaries:
@@ -1266,6 +1306,36 @@ def refresh_shadow_summaries():
                      challenger["avg_mfe_pct"],challenger["avg_mae_pct"],
                      s["delta_avg_return_pct"],s["delta_positive_rate_pp"],s["delta_mae_pct"]))
                 written+=1
+
+            cur.execute("""SELECT decision_state FROM market_os_shadow_decisions
+                           WHERE shadow_rule_id=%s""",(rule["shadow_rule_id"],))
+            old=cur.fetchone()
+            old_state=old["decision_state"] if old else None
+            reasons_json=json.dumps(decision.get("reason_codes") or [],ensure_ascii=False)
+            evidence_json=json.dumps(decision.get("evidence") or {},ensure_ascii=False,default=str)
+            primary=(decision.get("evidence") or {}).get("primary_cohort")
+            cur.execute("""INSERT INTO market_os_shadow_decisions(
+                    shadow_rule_id,decision_state,review_eligible,primary_cohort,
+                    reason_codes,evidence,manual_decision_state,state_since,updated_at)
+                VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb,'PENDING',now(),now())
+                ON CONFLICT(shadow_rule_id) DO UPDATE SET
+                    decision_state=excluded.decision_state,
+                    review_eligible=excluded.review_eligible,
+                    primary_cohort=excluded.primary_cohort,
+                    reason_codes=excluded.reason_codes,
+                    evidence=excluded.evidence,
+                    state_since=CASE
+                        WHEN market_os_shadow_decisions.decision_state=excluded.decision_state
+                        THEN market_os_shadow_decisions.state_since ELSE now() END,
+                    updated_at=now()""",
+                (rule["shadow_rule_id"],decision["state"],bool(decision.get("review_eligible")),
+                 primary,reasons_json,evidence_json))
+            if old_state!=decision["state"]:
+                cur.execute("""INSERT INTO market_os_shadow_decision_events(
+                        shadow_rule_id,from_state,to_state,review_eligible,reason_codes,evidence)
+                    VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb)""",
+                    (rule["shadow_rule_id"],old_state,decision["state"],
+                     bool(decision.get("review_eligible")),reasons_json,evidence_json))
     return written
 
 
