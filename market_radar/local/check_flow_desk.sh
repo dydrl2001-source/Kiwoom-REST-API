@@ -2,7 +2,7 @@
 # Read-only diagnostics, not another model call. No keys/report text are printed.
 set -eu
 cd "$(dirname "$0")"
-docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker candidate-tracker
+docker compose ps radar-api kiwoom-feed market-theme-feed chart-feed web-research-worker candidate-tracker market-regime mimosa-engine kiwoom-realtime market-os-learning
 curl --fail --silent --show-error --max-time 8 http://localhost:8080/health
 printf '\n'
 docker compose exec -T radar-api python - <<'PY'
@@ -21,6 +21,9 @@ try:
     print('CATALYST_GROUPS:',len(d.get('catalyst_groups',[])))
     print('WATCH_CANDIDATES:',len(d.get('watch_candidates',[])))
     print('TOP_ATTENTION_SCORE:',(d.get('watch_candidates') or [{}])[0].get('attention_score'))
+    print('MARKET_OS_CANDIDATES:',len(d.get('market_os_watchlist',[])))
+    print('MARKET_OS_VERSION:',d.get('market_os_version'))
+    print('MARKET_REGIME:',(d.get('market_regime') or {}).get('stable_label'))
     from collections import Counter
     counts=Counter(x.get('primary_type') for x in d.get('watch_candidates',[]) if x.get('primary_type'))
     print('WATCH_TYPE_COUNTS:',dict(counts))
@@ -38,4 +41,21 @@ except HTTPError as e:
     print('FLOW_HTTP_STATUS:',e.code);sys.exit(1)
 except Exception:
     print('FLOW_CHECK_FAILED');sys.exit(1)
+PY
+
+docker compose exec -T radar-api python - <<'PY'
+import os,json,sys
+from urllib.request import Request,urlopen
+try:
+    req=Request('http://127.0.0.1:8080/api/market-os',headers={'x-dashboard-token':os.getenv('DASHBOARD_TOKEN','')})
+    with urlopen(req,timeout=25) as r:d=json.load(r)
+    l=d.get('learning') or {};s=l.get('status') or {}
+    print('MARKET_OS_API: OK')
+    print('LEARNING_MODE:',l.get('mode'))
+    print('ASSESSMENTS_TOTAL:',s.get('assessments_total'))
+    print('OUTCOMES_TOTAL:',s.get('outcomes_total'))
+    print('LEARNING_SEGMENTS:',len(l.get('segments') or []))
+    print('No orders or paid model calls were performed by this diagnostic.')
+except Exception:
+    print('MARKET_OS_CHECK_FAILED');sys.exit(1)
 PY
