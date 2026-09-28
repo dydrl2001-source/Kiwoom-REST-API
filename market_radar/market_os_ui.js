@@ -166,6 +166,18 @@
    ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',b),el('div',note,'mos-micro'));dq.append(card);}
    body.append(el('div','Data Quality','mos-section-title'),dq);
    if((fq.cap_unresolved_pct??0)>20)body.append(el('div','시가총액 단위는 별도 참조 검증 중입니다. 거래대금·0B 학습의 READY 판정과 분리합니다.','mos-note'));
+   body.append(el('div','Validation Gate','mos-section-title'));
+   const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['승격 검토',vs.promote_review||0,'양(+) 효과 + 반복 표본 + 비교군 통과'],
+     ['축소 검토',vs.suppress_review||0,'음(-) 효과 + 반복 표본 통과'],
+     ['보류',vs.hold||0,'효과 정렬 또는 비교군 검증 미충족']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));vgGrid.append(card);}body.append(vgGrid);
+   body.append(el('div','30분·종가·D+1만 검토합니다. 평균·중앙값·양(+) 비율이 같은 방향이어야 하며, 상호작용은 부모조건의 complement 비교군까지 형성 이상이어야 합니다. 이 단계는 규칙 변경이 아니라 사람 검토 후보를 좁히는 shadow gate입니다.','mos-note'));
+   const vgScroll=el('div',null,'mos-scroll'),vgTable=el('table',null,'mos-learn-table'),vgHead=el('tr');
+   ['상태','조건','구간','N','종목','일수','품질','평균','중앙값','양(+)','Δ평균','Δ양(+)','근거'].forEach(v=>vgHead.append(el('th',v)));const vgThead=el('thead');vgThead.append(vgHead);const vgBody=el('tbody');
+   for(const s of vg.slice(0,40)){const tr=el('tr'),status=({PROMOTE_REVIEW:'승격 검토',SUPPRESS_REVIEW:'축소 검토',HOLD:'보류'})[s.status]||s.status;const cls=s.status==='PROMOTE_REVIEW'?'mos-up':s.status==='SUPPRESS_REVIEW'?'mos-down':'';tr.append(el('td',status,cls),el('td',s.segment_type+' · '+s.segment_value),el('td',s.horizon),el('td',s.samples),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',(s.quality||'—')+(s.readiness?' · '+s.readiness:'')),el('td',pct(s.avg_return_pct),s.avg_return_pct>0?'mos-up':s.avg_return_pct<0?'mos-down':''),el('td',pct(s.median_return_pct)),el('td',s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%'),el('td',s.edge_avg_return_pct==null?'—':((s.edge_avg_return_pct>=0?'+':'')+fmt(s.edge_avg_return_pct,2)+'%p')),el('td',s.edge_positive_rate_pp==null?'—':((s.edge_positive_rate_pp>=0?'+':'')+fmt(s.edge_positive_rate_pp,1)+'%p')),el('td',(s.reason_codes||[]).join(' · '),'mos-micro'));vgBody.append(tr);}
+   if(!vg.length){const tr=el('tr'),td=el('td','아직 형성 등급 이상의 30분·종가·D+1 검증 후보가 없습니다.','mos-empty');td.colSpan=13;tr.append(td);vgBody.append(tr);}vgTable.append(vgThead,vgBody);vgScroll.append(vgTable);body.append(vgScroll);
    body.append(el('div','자동 피드백 후보','mos-section-title'));const fb=el('div',null,'mos-feedback');for(const n of learn.notes||[]){const a=el('article');a.dataset.kind=n.kind;a.append(el('h4',(n.kind==='STRENGTH'?'강한 조건 후보 · ':'약한 조건 후보 · ')+n.title),el('div',n.text,'mos-micro'));fb.append(a);}if(!(learn.notes||[]).length)fb.append(el('div','표본 20개 이상이 쌓인 뒤 조건별 강·약 피드백을 냅니다. 아직 규칙을 자동 수정하지 않습니다.','mos-empty'));body.append(fb);
    body.append(el('div','Interaction Lab','mos-section-title'));
    body.append(el('div','시장 레짐 × Setup × Trigger × 0B를 미리 정한 조합만 비교합니다. Δ는 같은 부모조건 안에서 해당 child를 제외한 나머지 표본과의 차이이며, 형성/충분 등급 전에는 탐색 가설로만 봅니다.','mos-note'));
