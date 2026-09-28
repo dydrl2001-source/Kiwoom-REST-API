@@ -118,7 +118,7 @@ class ShadowRulePureTests(unittest.TestCase):
         slices=[]
         for window in ('EARLY','RECENT'):
             for h in ('30m','close'):
-                cell=self.summary_cell(h,'REVIEW',changes=10,n=40,days=3,stocks=8)
+                cell=self.summary_cell(h,'REVIEW',changes=10,n=40,days=6,stocks=8)
                 slices.append({'scope_type':'WINDOW','scope_value':window,**cell})
         for stance in ('EXPANDABLE','SELECTIVE'):
             cell=self.summary_cell('30m','REVIEW',changes=7,n=25,days=4,stocks=6)
