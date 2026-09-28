@@ -332,22 +332,35 @@ def open_new(cur):
         }
         proposed_risk=(float(sizing.get("requested_notional_krw") or 0)
                        *float(sizing.get("stop_pct") or 0)/100.0)
-        risk_gate=portfolio_risk_budget(
-            proposed_risk,p["market_theme"],p["strategy_family"],open_portfolio(cur),PORTFOLIO
-        )
         requested=int(sizing.get("shares") or 0)
-        if requested>0 and risk_gate.get("risk_scale",0)<1:
-            requested=max(0,int(math.floor(requested*float(risk_gate.get("risk_scale") or 0))))
-        if not risk_gate.get("allowed") or requested<=0:
-            fill={
-                "status":"PORTFOLIO_RISK_REJECT","requested_shares":requested,
-                "filled_shares":0,"fill_ratio":0.0,"fill_price_krw":None,
-                "model_quality":"PORTFOLIO_RISK_GATE","risk_gate":risk_gate,
+        if not sizing_ref:
+            risk_gate={
+                "allowed":False,"proposed_risk_krw":0.0,"allowed_risk_krw":0.0,
+                "risk_scale":0.0,"blockers":["NO_MARKET_REFERENCE"]
             }
-            mode="RISK_GATE"
+            fill={
+                "status":"NO_MARKET_REFERENCE","requested_shares":0,
+                "filled_shares":0,"fill_ratio":0.0,"fill_price_krw":None,
+                "model_quality":"NO_MARKET_REFERENCE","risk_gate":risk_gate,
+            }
+            mode="NO_FILL"
             context=None
         else:
-            fill,mode,context=execution_fill(cur,"BUY",p["stock_code"],p["opened_at"],requested)
+            risk_gate=portfolio_risk_budget(
+                proposed_risk,p["market_theme"],p["strategy_family"],open_portfolio(cur),PORTFOLIO
+            )
+            if requested>0 and risk_gate.get("risk_scale",0)<1:
+                requested=max(0,int(math.floor(requested*float(risk_gate.get("risk_scale") or 0))))
+            if not risk_gate.get("allowed") or requested<=0:
+                fill={
+                    "status":"PORTFOLIO_RISK_REJECT","requested_shares":requested,
+                    "filled_shares":0,"fill_ratio":0.0,"fill_price_krw":None,
+                    "model_quality":"PORTFOLIO_RISK_GATE","risk_gate":risk_gate,
+                }
+                mode="RISK_GATE"
+                context=None
+            else:
+                fill,mode,context=execution_fill(cur,"BUY",p["stock_code"],p["opened_at"],requested)
         filled=int(fill.get("filled_shares") or 0)
         entry_price=finite(fill.get("fill_price_krw"))
         stop_pct=finite(sizing.get("stop_pct"))
