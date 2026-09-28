@@ -43,6 +43,28 @@ class SectorBoardTests(unittest.TestCase):
         self.assertEqual(g['reason']['level'],'UNCONFIRMED')
         self.assertIn('공통 촉발 재료',g['reason']['summary'])
 
+    def test_theme_strength_is_bounded_and_explained(self):
+        rows=[
+          self.row('AAA','반도체',1,500,50,8.0,3,'공급계약'),
+          self.row('BBB','반도체',2,400,40,6.0,3,'양산'),
+          self.row('CCC','로봇',8,100,5,1.0,0,'미확인'),
+        ]
+        groups=api.build_sector_groups(rows)
+        semi=next(g for g in groups if g['name']=='반도체')
+        self.assertGreaterEqual(semi['theme_strength'],0)
+        self.assertLessEqual(semi['theme_strength'],100)
+        self.assertIn('money',semi['theme_strength_components'])
+        self.assertIn('수익확률이 아님',semi['theme_strength_note'])
+
+    def test_top12_count_contributes_to_theme_strength(self):
+        rows=[self.row('AAA','A',1,100,10,2.0),self.row('BBB','B',20,100,10,2.0)]
+        groups=api.build_sector_groups(rows)
+        a=next(g for g in groups if g['name']=='A')
+        b=next(g for g in groups if g['name']=='B')
+        self.assertEqual(a['surge_count'],1)
+        self.assertEqual(b['surge_count'],0)
+        self.assertGreater(a['theme_strength_components']['surge'],b['theme_strength_components']['surge'])
+
     def test_money_first_order_inside_sector(self):
         rows=[
           self.row('AAA','반도체',1,100,2,3.0),
@@ -60,6 +82,13 @@ class SectorUISourceTests(unittest.TestCase):
         self.assertIn('homeSectorMix',self.text)
         self.assertIn('renderSectorMix',self.text)
         self.assertIn('sector-chip',self.text)
+
+    def test_home_has_theme_strength(self):
+        self.assertIn('실시간 테마·섹터 보드',self.text)
+        self.assertIn('theme-strength',self.text)
+        self.assertIn('strengthBlock',self.text)
+        self.assertIn('테마강도 ',self.text)
+        self.assertIn('sectorCards(homeThemes,8,true)',self.text)
 
     def test_sector_cards_show_money_and_reason(self):
         self.assertIn('recentMoney(x)',self.text)
