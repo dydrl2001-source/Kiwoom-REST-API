@@ -175,7 +175,8 @@ def candidate_tracking_payload(current_candidates, now, sample_time):
     with db(True) as c,c.cursor() as cur:
         if not exists(cur,'radar_candidate_history'):
             return base
-        cur.execute("""SELECT updated_at,status,last_sample_time,candidate_count,rows_written,note
+        cur.execute("""SELECT updated_at,status,last_sample_time,candidate_count,rows_written,
+                              active_episodes,completed_30m,note
                        FROM radar_candidate_tracker_status WHERE id=1""")
         tracker=cur.fetchone() if exists(cur,'radar_candidate_tracker_status') else None
         base['status']=tracker['status'] if tracker else 'READY_NO_STATUS'
@@ -183,7 +184,8 @@ def candidate_tracking_payload(current_candidates, now, sample_time):
             base['tracker']={
                 'updated_at':tracker['updated_at'].isoformat() if tracker['updated_at'] else None,
                 'last_sample_time':tracker['last_sample_time'].isoformat() if tracker['last_sample_time'] else None,
-                'candidate_count':tracker['candidate_count'],'rows_written':tracker['rows_written']
+                'candidate_count':tracker['candidate_count'],'rows_written':tracker['rows_written'],
+                'active_episodes':tracker['active_episodes'],'completed_30m':tracker['completed_30m']
             }
 
         cur.execute("""SELECT snapshot_time,stock_code,stock_name,attention_score,label,primary_type,
@@ -319,6 +321,112 @@ def candidate_tracking_payload(current_candidates, now, sample_time):
     base['meaning']='후보 노출 지속성 기록; 수익확률·매수신호·체결성과가 아님'
     return base
 
+
+def candidate_journal_payload(now):
+    """Read prospective candidate episodes and observed price-path outcomes."""
+    base={'status':'NOT_INITIALIZED','episodes':[],'summary':[],
+          'completed_5m':0,'completed_15m':0,'completed_30m':0,
+          'notice':'관찰 후보 등장시점의 SOR 참조가격 경로. 실제 체결·실현손익·추천 성과가 아님'}
+    with db(True) as c,c.cursor() as cur:
+        if not exists(cur,'radar_candidate_episodes') or not exists(cur,'radar_candidate_outcomes'):
+            return base
+        base['status']='READY'
+        cur.execute("""SELECT e.id,e.stock_code,e.stock_name,e.started_at,e.last_seen_at,e.ended_at,e.status,
+                              e.candidate_version,e.entry_score,e.last_score,e.peak_score,e.entry_price_krw,
+                              e.entry_change_pct,e.primary_type,e.watch_types,e.market_theme,e.event_type,
+                              e.chart_state,e.query_rank,e.trade_rank,
+                              o.h5_state,o.h5_at,o.h5_price_krw,o.return_5m_pct,o.mfe_5m_pct,o.mae_5m_pct,
+                              o.h15_state,o.h15_at,o.h15_price_krw,o.return_15m_pct,o.mfe_15m_pct,o.mae_15m_pct,
+                              o.h30_state,o.h30_at,o.h30_price_krw,o.return_30m_pct,o.mfe_30m_pct,o.mae_30m_pct,
+                              o.exit_at,o.exit_price_krw,o.exit_return_pct
+                       FROM radar_candidate_episodes e
+                       JOIN radar_candidate_outcomes o ON o.episode_id=e.id
+                       WHERE e.started_at >= now()-interval '1 day'
+                       ORDER BY e.started_at DESC
+                       LIMIT 40""")
+        episodes=[]
+        for r in cur.fetchall():
+            def f(v):
+                try:return float(v) if v is not None else None
+                except (TypeError,ValueError):return None
+            episodes.append({
+                'id':r['id'],'code':r['stock_code'],'name':r['stock_name'],
+                'started_at':r['started_at'].isoformat(),'last_seen_at':r['last_seen_at'].isoformat(),
+                'ended_at':r['ended_at'].isoformat() if r['ended_at'] else None,'status':r['status'],
+                'candidate_version':r['candidate_version'],'entry_score':r['entry_score'],
+                'last_score':r['last_score'],'peak_score':r['peak_score'],
+                'entry_price_krw':f(r['entry_price_krw']),'entry_change_pct':f(r['entry_change_pct']),
+                'primary_type':r['primary_type'],'watch_types':r['watch_types'] or [],
+                'market_theme':r['market_theme'],'event_type':r['event_type'],
+                'chart_state':r['chart_state'],'query_rank':r['query_rank'],'trade_rank':r['trade_rank'],
+                'horizons':{
+                    '5':{'state':r['h5_state'],'at':r['h5_at'].isoformat() if r['h5_at'] else None,
+                         'price_krw':f(r['h5_price_krw']),'return_pct':f(r['return_5m_pct']),
+                         'mfe_pct':f(r['mfe_5m_pct']),'mae_pct':f(r['mae_5m_pct'])},
+                    '15':{'state':r['h15_state'],'at':r['h15_at'].isoformat() if r['h15_at'] else None,
+                          'price_krw':f(r['h15_price_krw']),'return_pct':f(r['return_15m_pct']),
+                          'mfe_pct':f(r['mfe_15m_pct']),'mae_pct':f(r['mae_15m_pct'])},
+                    '30':{'state':r['h30_state'],'at':r['h30_at'].isoformat() if r['h30_at'] else None,
+                          'price_krw':f(r['h30_price_krw']),'return_pct':f(r['return_30m_pct']),
+                          'mfe_pct':f(r['mfe_30m_pct']),'mae_pct':f(r['mae_30m_pct'])},
+                },
+                'exit':{'at':r['exit_at'].isoformat() if r['exit_at'] else None,
+                        'price_krw':f(r['exit_price_krw']),'return_pct':f(r['exit_return_pct'])}
+            })
+        base['episodes']=episodes
+        base['completed_5m']=sum(x['horizons']['5']['state']=='READY' for x in episodes)
+        base['completed_15m']=sum(x['horizons']['15']['state']=='READY' for x in episodes)
+        base['completed_30m']=sum(x['horizons']['30']['state']=='READY' for x in episodes)
+
+        cur.execute("""SELECT e.candidate_version,e.primary_type,
+                              COUNT(*) FILTER(WHERE o.h5_state='READY') AS n5,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.return_5m_pct)
+                                FILTER(WHERE o.h5_state='READY') AS median_r5,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.mfe_5m_pct)
+                                FILTER(WHERE o.h5_state='READY') AS median_mfe5,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.mae_5m_pct)
+                                FILTER(WHERE o.h5_state='READY') AS median_mae5,
+                              COUNT(*) FILTER(WHERE o.h15_state='READY') AS n15,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.return_15m_pct)
+                                FILTER(WHERE o.h15_state='READY') AS median_r15,
+                              AVG(CASE WHEN o.h15_state='READY' THEN CASE WHEN o.return_15m_pct>0 THEN 1.0 ELSE 0.0 END END) AS positive15,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.mfe_15m_pct)
+                                FILTER(WHERE o.h15_state='READY') AS median_mfe15,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.mae_15m_pct)
+                                FILTER(WHERE o.h15_state='READY') AS median_mae15,
+                              COUNT(*) FILTER(WHERE o.h30_state='READY') AS n30,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.return_30m_pct)
+                                FILTER(WHERE o.h30_state='READY') AS median_r30,
+                              AVG(CASE WHEN o.h30_state='READY' THEN CASE WHEN o.return_30m_pct>0 THEN 1.0 ELSE 0.0 END END) AS positive30,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.mfe_30m_pct)
+                                FILTER(WHERE o.h30_state='READY') AS median_mfe30,
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY o.mae_30m_pct)
+                                FILTER(WHERE o.h30_state='READY') AS median_mae30
+                       FROM radar_candidate_episodes e
+                       JOIN radar_candidate_outcomes o ON o.episode_id=e.id
+                       WHERE e.started_at >= now()-interval '30 days'
+                       GROUP BY e.candidate_version,e.primary_type
+                       ORDER BY e.candidate_version,e.primary_type""")
+        summary=[]
+        for r in cur.fetchall():
+            def f(v):
+                try:return float(v) if v is not None else None
+                except (TypeError,ValueError):return None
+            summary.append({
+                'candidate_version':r['candidate_version'],'primary_type':r['primary_type'],
+                'n5':int(r['n5'] or 0),'median_return_5m_pct':f(r['median_r5']),
+                'median_mfe_5m_pct':f(r['median_mfe5']),'median_mae_5m_pct':f(r['median_mae5']),
+                'n15':int(r['n15'] or 0),'median_return_15m_pct':f(r['median_r15']),
+                'positive_15m_pct':f(r['positive15'])*100 if r['positive15'] is not None else None,
+                'median_mfe_15m_pct':f(r['median_mfe15']),'median_mae_15m_pct':f(r['median_mae15']),
+                'n30':int(r['n30'] or 0),'median_return_30m_pct':f(r['median_r30']),
+                'positive_30m_pct':f(r['positive30'])*100 if r['positive30'] is not None else None,
+                'median_mfe_30m_pct':f(r['median_mfe30']),'median_mae_30m_pct':f(r['median_mae30']),
+                'small_sample':int(r['n15'] or 0)<10
+            })
+        base['summary']=summary
+    return base
+
 def desk_payload(include_tracking=True):
     now=datetime.now(timezone.utc)
     with db(True) as c,c.cursor() as cur:
@@ -366,12 +474,17 @@ def desk_payload(include_tracking=True):
         'status':'SKIPPED_FOR_SNAPSHOT','current_count':len(candidates),
         'recent_dropouts':[],'theme_persistence':[],'state_counts':{}
     }
+    journal=candidate_journal_payload(now) if include_tracking else {
+        'status':'SKIPPED_FOR_SNAPSHOT','episodes':[],'summary':[],
+        'completed_5m':0,'completed_15m':0,'completed_30m':0
+    }
     recent=sum(r['recent_trade'] for r in rows)
     theme_mapped=sum(1 for r in rows if r.get('market_theme'))
     return {'generated_at':now.isoformat(),'sample_time':newest.isoformat() if newest else None,
             'refresh_target_seconds':30,'status':'RECENT_TRADES' if recent else 'NO_RECENT_TRADE_OR_WAITING',
             'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
             'theme_rotation':rotation,'watch_candidates':candidates,'candidate_tracking':tracking,
+            'candidate_journal':journal,
             'automation':automation,'coverage':{**coverage,'theme_mapped_stocks':theme_mapped,'observed_stocks':len(rows)},
             'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '
