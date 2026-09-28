@@ -29,6 +29,19 @@ def _quality(n):
     return "탐색"
 
 
+def _current_session():
+    from zoneinfo import ZoneInfo
+    from datetime import time as dtime
+    t=datetime.now(ZoneInfo("Asia/Seoul")).time()
+    if t<dtime(9,0):return "PRE"
+    if t<dtime(9,20):return "OPEN_20"
+    if t<dtime(11,30):return "MORNING"
+    if t<dtime(13,30):return "MIDDAY"
+    if t<dtime(14,50):return "AFTERNOON"
+    if t<=dtime(15,30):return "CLOSE"
+    return "AFTER"
+
+
 def learning_payload():
     current=desk_payload()
     learning={
@@ -99,6 +112,32 @@ def learning_payload():
                 "samples":s["samples"]
             })
     learning["notes"]=sorted(learning["notes"],key=lambda x:-x["samples"])[:12]
+
+    # Attach shadow historical evidence to current candidates without changing
+    # their live tier. Matching uses only already-resolved outcomes.
+    seg_index={(s["segment_type"],s["segment_value"],s["horizon"]):s for s in learning["segments"]}
+    for x in current.get("market_os_watchlist",[]):
+        keys=[
+            ("STANCE_TRIGGER",(x.get("market_stance") or "UNKNOWN")+" | "+(x.get("trigger_state") or "UNKNOWN")),
+            ("TIER_SESSION",(x.get("watch_tier") or "UNKNOWN")+" | "+_current_session()),
+            ("TRIGGER",x.get("trigger_state") or "UNKNOWN"),
+            ("STANCE",x.get("market_stance") or "UNKNOWN"),
+            ("TIER",x.get("watch_tier") or "UNKNOWN"),
+        ]
+        evidence=[]
+        for horizon in ("30m","close","5m"):
+            for kind,value in keys:
+                s=seg_index.get((kind,value,horizon))
+                if s and s["samples"]>=20:
+                    evidence.append({
+                        "segment_type":kind,"segment_value":value,"horizon":horizon,
+                        "samples":s["samples"],"quality":s["quality"],
+                        "avg_return_pct":s["avg_return_pct"],"median_return_pct":s["median_return_pct"],
+                        "positive_rate":s["positive_rate"],"avg_mfe_pct":s["avg_mfe_pct"],"avg_mae_pct":s["avg_mae_pct"]
+                    })
+            if evidence:break
+        x["learning_context"]=sorted(evidence,key=lambda z:-z["samples"])[:3]
+
     current["learning"]=learning
     return current
 
