@@ -1,4 +1,5 @@
 import os,sys,unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -87,6 +88,22 @@ class SectorBoardTests(unittest.TestCase):
         api.apply_rank_movement(row,{'000004':{'rank_30s':None,'rank_5m':None,'had_earlier':True}})
         self.assertEqual(row['rank_history']['movement'],'RE')
 
+    def test_leader_desk_filters_four_percent_and_groups_themes(self):
+        trade={
+          '000001':{'name':'A','rank':1,'trade_value':500,'change_rate':8.0,'current_price':1000,'theme':'반도체','sector':'전기전자'},
+          '000002':{'name':'B','rank':2,'trade_value':400,'change_rate':5.0,'current_price':2000,'theme':'반도체','sector':'전기전자'},
+          '000003':{'name':'C','rank':3,'trade_value':300,'change_rate':3.9,'current_price':3000,'theme':'로봇','sector':'기계'},
+          '000004':{'name':'TIGER 테스트','rank':4,'trade_value':200,'change_rate':12.0,'current_price':4000,'theme':'ETF','sector':'ETF'},
+        }
+        rows=[{'code':'000001','market_theme':'반도체','rank':3,'rank_history':{'movement':'▲2'}},
+              {'code':'000002','market_theme':'반도체','rank':6,'rank_history':{'movement':'NEW'}}]
+        with patch.object(api,'build_leader_calendar',return_value={'cells':[],'observed_days':0}):
+            out=api.build_leader_desk(None,trade,rows,api.datetime.now(api.timezone.utc))
+        self.assertEqual(len(out['strong_stocks']),2)
+        self.assertEqual(out['leading_sectors'][0]['name'],'반도체')
+        self.assertEqual(out['leading_sectors'][0]['count'],2)
+        self.assertEqual(out['threshold_pct'],4)
+
     def test_money_first_order_inside_sector(self):
         rows=[
           self.row('AAA','반도체',1,100,2,3.0),
@@ -106,11 +123,11 @@ class SectorUISourceTests(unittest.TestCase):
         self.assertIn('sector-chip',self.text)
 
     def test_home_has_theme_strength(self):
-        self.assertIn('실시간 테마·섹터 보드',self.text)
+        self.assertIn('상세 테마·섹터',self.text)
         self.assertIn('theme-strength',self.text)
         self.assertIn('strengthBlock',self.text)
         self.assertIn('테마강도 ',self.text)
-        self.assertIn('sectorCards(homeThemes,8,true)',self.text)
+        self.assertIn('sectorCards(homeThemes,6,true)',self.text)
 
     def test_home_material_colors_and_os_exist(self):
         self.assertIn('homeMaterialLegend',self.text)
@@ -123,8 +140,16 @@ class SectorUISourceTests(unittest.TestCase):
     def test_home_rank_history_and_density(self):
         self.assertIn('rankMovement',self.text)
         self.assertIn('sectorCards(homeThemes,6,true)',self.text)
-        self.assertIn('slice(0,4).map',self.text)
         self.assertIn('.sector-grid{grid-template-columns:1fr;gap:7px}',self.text)
+
+    def test_reference_style_leader_desk_is_on_home(self):
+        self.assertIn('오늘 주도 흐름',self.text)
+        self.assertIn('homeLeaderSectors',self.text)
+        self.assertIn('homeStrongTurnover',self.text)
+        self.assertIn('homeLeaderCalendar',self.text)
+        self.assertIn('renderLeaderSectors',self.text)
+        self.assertIn('renderStrongTurnover',self.text)
+        self.assertIn('renderLeaderCalendar',self.text)
 
     def test_sector_cards_show_money_and_reason(self):
         self.assertIn('recentMoney(x)',self.text)
