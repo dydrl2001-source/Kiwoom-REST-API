@@ -6,6 +6,7 @@ import json
 import os
 import re
 from flow_core import quote, metrics, group_rows, rotation_series, candidate_watchlist, segment, dt, event_from_report, report_sections, SPEC, VERSION, KST
+from market_os_rule_engine import market_os_watchlist, VERSION as MARKET_OS_VERSION
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS radar_flow_quotes (
@@ -160,6 +161,39 @@ def theme_memberships(cur,codes):
         })
     return out
 
+
+
+def latest_market_regime(cur):
+    """Read the newest persisted market regime without changing it."""
+    if not exists(cur,'market_regime_snapshots'):
+        return None
+    cur.execute("""SELECT snapshot_time,candidate_trend_state,candidate_flow_state,candidate_sentiment_state,
+                    candidate_label,stable_label,confidence,data_freshness_sec,rank_turnover_5m,
+                    top5_trade_share,top10_trade_share,top_sector_share,top3_sector_share,
+                    largecap_trade_share,positive_rank_share,avg_rank_change_rate,sector_count_top20
+                   FROM market_regime_snapshots ORDER BY snapshot_time DESC LIMIT 1""")
+    r=cur.fetchone()
+    if not r:return None
+    snap=r['snapshot_time'];now=datetime.now(timezone.utc)
+    age=max(0,int((now-snap).total_seconds())) if snap else None
+    freshness=r['data_freshness_sec']
+    stale=bool((freshness is not None and freshness>120) or (age is not None and age>150))
+    return {
+        'snapshot_time':snap.isoformat() if snap else None,
+        'candidate_trend_state':r['candidate_trend_state'],
+        'candidate_flow_state':r['candidate_flow_state'],
+        'candidate_sentiment_state':r['candidate_sentiment_state'],
+        'candidate_label':r['candidate_label'],'stable_label':r['stable_label'],
+        'confidence':r['confidence'],'data_freshness_sec':freshness,
+        'snapshot_age_sec':age,'stale':stale,
+        'rank_turnover_5m':r['rank_turnover_5m'],
+        'top5_trade_share':r['top5_trade_share'],'top10_trade_share':r['top10_trade_share'],
+        'top_sector_share':r['top_sector_share'],'top3_sector_share':r['top3_sector_share'],
+        'largecap_trade_share':r['largecap_trade_share'],
+        'positive_rank_share':r['positive_rank_share'],
+        'avg_rank_change_rate':r['avg_rank_change_rate'],
+        'sector_count_top20':r['sector_count_top20']
+    }
 
 
 def candidate_tracking_payload(current_candidates, now, sample_time):
@@ -436,6 +470,7 @@ def desk_payload(include_tracking=True):
         themes=theme_memberships(cur,history)
         charts=latest_chart_states(cur,history)
         strategies=latest_strategy_signals(cur,history)
+        market_regime=latest_market_regime(cur)
         automation={'enabled':False,'notice':'설정 미확인'}
         try:
             from web_research_engine import Config, usage_count
@@ -470,6 +505,7 @@ def desk_payload(include_tracking=True):
     by_sector,_=group_rows(rows,history,'sector')
     rotation=rotation_series(rows,history,10)
     candidates=candidate_watchlist(rows,rotation,12)
+    market_os=market_os_watchlist(rows,rotation,market_regime,12)
     tracking=candidate_tracking_payload(candidates,now,newest) if include_tracking else {
         'status':'SKIPPED_FOR_SNAPSHOT','current_count':len(candidates),
         'recent_dropouts':[],'theme_persistence':[],'state_counts':{}
@@ -485,6 +521,7 @@ def desk_payload(include_tracking=True):
             'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
             'theme_rotation':rotation,'watch_candidates':candidates,'candidate_tracking':tracking,
             'candidate_journal':journal,
+            'market_os_watchlist':market_os,'market_regime':market_regime,'market_os_version':MARKET_OS_VERSION,
             'automation':automation,'coverage':{**coverage,'theme_mapped_stocks':theme_mapped,'observed_stocks':len(rows)},
             'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '
