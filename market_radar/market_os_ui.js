@@ -31,12 +31,12 @@
 
  const head=el('div',null,'mos-head'),title=el('div',null,'mos-title');title.append(el('div','MARKET OPERATING SYSTEM','mos-kicker'),el('h2','오늘 시장 · 관심종목 · 학습'),el('div','시장→테마→종목→재료→차트→Trigger를 한 화면에서 봅니다.','mos-sub'));
  const toolbar=el('div',null,'mos-toolbar'),tabs=el('div',null,'mos-tabs');
- const tableBtn=el('button','Screener'),heatBtn=el('button','Heatmap'),learnBtn=el('button','Learning'),refresh=el('button','새로고침','mos-btn');
- [tableBtn,heatBtn,learnBtn].forEach(b=>tabs.append(b));toolbar.append(tabs,refresh);head.append(title,toolbar);
+ const tableBtn=el('button','Screener'),chartBtn=el('button','Charts'),heatBtn=el('button','Heatmap'),learnBtn=el('button','Learning'),refresh=el('button','새로고침','mos-btn');
+ [tableBtn,chartBtn,heatBtn,learnBtn].forEach(b=>tabs.append(b));toolbar.append(tabs,refresh);head.append(title,toolbar);
  const strip=el('div',null,'mos-strip'),content=el('div');view.append(head,strip,content);
  const dialog=el('dialog',null,'mos-dialog mos');document.body.append(dialog);
 
- let DATA=null,mode='table',selected=null,tier='ALL',query='',busy=false,lastLoaded=0;
+ let DATA=null,mode='table',selected=null,tier='ALL',query='',busy=false,lastLoaded=0,chartRenderVersion=0;
  const fmt=(n,d=1)=>Number(n).toLocaleString('ko-KR',{maximumFractionDigits:d});
  const pct=n=>n==null?'—':(n>0?'+':'')+fmt(n,2)+'%';
  const money=n=>n==null?'—':Math.abs(n)>=1e12?fmt(n/1e12,2)+'조':Math.abs(n)>=1e8?fmt(n/1e8,1)+'억':fmt(n,0)+'원';
@@ -106,10 +106,25 @@
    box.append(el('h4','Invalidation / Risk'));box.append(el('div',(x.risk_flags||[]).length?(x.risk_flags||[]).join(' · '):'현재 등록된 위험 플래그 없음','mos-risk'));
    if(r.research){box.append(el('h4','Catalyst evidence'),el('div',(x.catalyst_note||'인용 포함 보고서')+' · '+stamp(r.research.completed_at),'mos-note'));const sec=r.research.sections||{};if(sec['핵심 재료'])box.append(el('div',sec['핵심 재료'].text,'mos-research'));}
    else box.append(el('h4','Catalyst evidence'),el('div',x.catalyst_note||'종합 검증 대기','mos-note'));
-   const actions=el('div',null,'mos-toolbar'),hist=el('button','학습 기록','mos-btn');hist.onclick=()=>openHistory(x.code,x.name);const flow=el('button','30초 흐름 보기','mos-btn');flow.onclick=()=>{if(typeof window.setView==='function')window.setView('flow');};actions.append(hist,flow);box.append(el('h4','Review'),actions);
+   const actions=el('div',null,'mos-toolbar'),hist=el('button','학습 기록','mos-btn');hist.onclick=()=>openHistory(x.code,x.name);const flow=el('button','30초 흐름 보기','mos-btn');flow.onclick=()=>{const b=document.querySelector('[data-view="flow"]');if(b)b.click();else if(typeof window.setView==='function')window.setView('flow');};actions.append(hist,flow);box.append(el('h4','Review'),actions);
  }
 
  function tileSize(x,rank){if(rank<2)return'big';if(rank<6)return'mid';return'';}
+ function drawMiniChart(info,box){
+   box.replaceChildren();const rows=(info?.minute||[]).filter(r=>['open','high','low','close'].every(k=>Number.isFinite(Number(r[k]))&&Number(r[k])>0)).slice(-60);
+   if(rows.length<2){box.append(el('div','저장된 3분봉 대기','mos-empty'));return;}
+   const W=520,H=170,l=46,r=8,t=8,b=18,lo0=Math.min(...rows.map(x=>Number(x.low))),hi0=Math.max(...rows.map(x=>Number(x.high))),pad=(hi0-lo0||hi0*.01)*.06,lo=lo0-pad,hi=hi0+pad,span=hi-lo||1,x=i=>l+(i+.5)*(W-l-r)/rows.length,y=v=>t+(hi-v)/(span)*(H-t-b),bw=Math.max(1,(W-l-r)/rows.length*.55),s=svg('svg',{viewBox:'0 0 '+W+' '+H,role:'img','aria-label':'3분봉 차트'});
+   for(let i=0;i<4;i++){const v=lo+span*i/3,yy=y(v);s.append(svg('line',{x1:l,x2:W-r,y1:yy,y2:yy,stroke:'#e4eaf3'}));const tx=svg('text',{x:l-5,y:yy+3,'text-anchor':'end','font-size':9,fill:'#7b8799'});tx.textContent=fmt(v,0);s.append(tx);}
+   rows.forEach((q,i)=>{const up=Number(q.close)>=Number(q.open),col=up?'#c44d58':'#4775b9',g=svg('g',{opacity:q.provisional?.55:1});g.append(svg('line',{x1:x(i),x2:x(i),y1:y(q.high),y2:y(q.low),stroke:col,'stroke-width':1}));g.append(svg('rect',{x:x(i)-bw/2,y:Math.min(y(q.open),y(q.close)),width:bw,height:Math.max(1,Math.abs(y(q.open)-y(q.close))),fill:up?'#fff':col,stroke:col,'stroke-width':1}));s.append(g);});
+   box.append(s);
+ }
+ async function renderCharts(){
+   const version=++chartRenderVersion,panel=el('section',null,'mos-panel'),ph=el('div',null,'mos-panel-head');ph.append(el('h3','Chart Grid'),el('div','저장된 KRX 3분봉 · 상위 후보 최대 8개','mos-micro'));panel.append(ph,filterBar());const grid=el('div',null,'mos-feedback');panel.append(grid);content.replaceChildren(panel);
+   const xs=candidates().slice(0,8);if(!xs.length){grid.append(el('div','차트로 볼 후보가 없습니다.','mos-empty'));return;}
+   for(const x of xs){const card=el('article');card.style.borderLeftColor=x.watch_tier==='FOCUS'?'#15917d':x.watch_tier==='PREP'?'#d18a26':'#7186b8';const hd=el('div',null,'mos-head'),lt=el('div');lt.append(el('h4',x.name+' · '+x.code),el('div',(x.market_theme||'테마 미확인')+' · '+tierKo(x.watch_tier),'mos-micro'));hd.append(lt,el('strong',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''));const chart=el('div','차트 불러오는 중…','mos-empty');card.append(hd,chart);card.onclick=()=>{selected=x.code;mode='table';syncTabs();renderContent();};grid.append(card);
+     get('/api/flow-chart/'+encodeURIComponent(x.code)).then(info=>{if(version===chartRenderVersion)drawMiniChart(info,chart);}).catch(()=>{if(version===chartRenderVersion)chart.textContent='저장 차트 대기';});
+   }
+ }
  function renderHeatmap(){
    const panel=el('section',null,'mos-panel'),ph=el('div',null,'mos-panel-head');ph.append(el('h3','관심종목 Heatmap'),el('div','타일 크기 = 최근 구간 거래대금 순위 · 색상 = 검토 단계','mos-micro'));panel.append(ph,filterBar());
    const grid=el('div',null,'mos-heat');const xs=candidates().sort((a,b)=>(b.interval_turnover_krw||0)-(a.interval_turnover_krw||0));
@@ -130,10 +145,10 @@
    body.append(el('div','조건별 실제 결과','mos-section-title'));const scroll=el('div',null,'mos-scroll'),table=el('table',null,'mos-learn-table'),th=el('tr');['조건','구간','N','품질','평균','중앙값','양(+)','MFE','MAE'].forEach(v=>th.append(el('th',v)));const thead=el('thead');thead.append(th);const tb=el('tbody');for(const s of segs.filter(x=>x.samples>=5).slice(0,120)){const tr=el('tr');tr.append(el('td',s.segment_type+' · '+s.segment_value),el('td',s.horizon),el('td',s.samples),el('td',s.quality),el('td',pct(s.avg_return_pct),s.avg_return_pct>0?'mos-up':s.avg_return_pct<0?'mos-down':''),el('td',pct(s.median_return_pct)),el('td',s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%'),el('td',pct(s.avg_mfe_pct)),el('td',pct(s.avg_mae_pct)));tb.append(tr);}table.append(thead,tb);scroll.append(table);body.append(scroll);wrap.append(body);content.replaceChildren(wrap);
  }
 
- function renderContent(){renderStrip();if(mode==='table')renderTableView();else if(mode==='heat')renderHeatmap();else renderLearning();}
- function renderBodyOnly(){if(mode==='table')renderTableView();else if(mode==='heat')renderHeatmap();}
- function syncTabs(){tableBtn.setAttribute('aria-pressed',String(mode==='table'));heatBtn.setAttribute('aria-pressed',String(mode==='heat'));learnBtn.setAttribute('aria-pressed',String(mode==='learn'));}
- tableBtn.onclick=()=>{mode='table';syncTabs();renderContent();};heatBtn.onclick=()=>{mode='heat';syncTabs();renderContent();};learnBtn.onclick=()=>{mode='learn';syncTabs();renderContent();};refresh.onclick=()=>load(true);syncTabs();
+ function renderContent(){renderStrip();if(mode==='table')renderTableView();else if(mode==='charts')renderCharts();else if(mode==='heat')renderHeatmap();else renderLearning();}
+ function renderBodyOnly(){if(mode==='table')renderTableView();else if(mode==='charts')renderCharts();else if(mode==='heat')renderHeatmap();}
+ function syncTabs(){tableBtn.setAttribute('aria-pressed',String(mode==='table'));chartBtn.setAttribute('aria-pressed',String(mode==='charts'));heatBtn.setAttribute('aria-pressed',String(mode==='heat'));learnBtn.setAttribute('aria-pressed',String(mode==='learn'));}
+ tableBtn.onclick=()=>{mode='table';syncTabs();renderContent();};chartBtn.onclick=()=>{mode='charts';syncTabs();renderContent();};heatBtn.onclick=()=>{mode='heat';syncTabs();renderContent();};learnBtn.onclick=()=>{mode='learn';syncTabs();renderContent();};refresh.onclick=()=>load(true);syncTabs();
 
  async function openHistory(code,name){
    dialog.replaceChildren();const top=el('div',null,'mos-head'),ttl=el('div');ttl.append(el('div','LEARNING HISTORY','mos-kicker'),el('h3',name+' · '+code));const close=el('button','닫기','mos-btn');close.onclick=()=>dialog.close();top.append(ttl,close);dialog.append(top,el('div','과거 스냅샷의 이후 결과를 보는 복기 자료입니다. 현재 매수·매도 판단을 대신하지 않습니다.','mos-note'));if(!dialog.open)dialog.showModal();
