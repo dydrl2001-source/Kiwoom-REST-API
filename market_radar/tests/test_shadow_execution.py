@@ -5,6 +5,7 @@ from ai_brokerage.execution_model import (
     FillPolicy,
     PortfolioRiskPolicy,
     SizingPolicy,
+    estimate_book_capacity,
     estimate_book_fill,
     estimate_fill,
     implementation_shortfall_summary,
@@ -55,6 +56,26 @@ class ShadowExecutionModelTests(unittest.TestCase):
         self.assertAlmostEqual(out["fill_price_krw"],(1010+510)/15)
         self.assertGreater(out["implementation_shortfall_bps"],0)
         self.assertGreater(out["depth_slippage_bps"],0)
+
+    def test_book_capacity_stops_at_is_limit(self):
+        book={
+            "best_ask_krw":101.0,"best_bid_krw":100.0,
+            "asks":[
+                {"level":1,"price_krw":101.0,"qty":100},
+                {"level":2,"price_krw":103.0,"qty":100},
+                {"level":3,"price_krw":110.0,"qty":100},
+            ],
+            "bids":[{"level":1,"price_krw":100.0,"qty":100}],
+        }
+        out=estimate_book_capacity(
+            "BUY",book,
+            BookPolicy(displayed_liquidity_haircut=1.0,max_spread_bps=500),
+            max_implementation_shortfall_bps=200
+        )
+        self.assertEqual(out["status"],"OK")
+        self.assertGreater(out["capacity_shares"],0)
+        self.assertLess(out["capacity_shares"],300)
+        self.assertLessEqual(out["capacity_is_bps"],200)
 
     def test_book_depth_can_force_partial_fill(self):
         book={
