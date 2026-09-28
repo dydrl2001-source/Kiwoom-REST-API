@@ -143,6 +143,34 @@ CREATE TABLE IF NOT EXISTS market_os_interaction_edges (
     PRIMARY KEY(segment_type,segment_value,horizon)
 );
 
+CREATE TABLE IF NOT EXISTS market_os_walk_forward_windows (
+    segment_type             TEXT NOT NULL,
+    segment_value            TEXT NOT NULL,
+    horizon                  TEXT NOT NULL,
+    window_name              TEXT NOT NULL,
+    start_day                DATE,
+    end_day                  DATE,
+    samples                  INTEGER NOT NULL,
+    distinct_stocks          INTEGER NOT NULL DEFAULT 0,
+    distinct_days            INTEGER NOT NULL DEFAULT 0,
+    avg_return_pct           DOUBLE PRECISION,
+    median_return_pct        DOUBLE PRECISION,
+    positive_rate            DOUBLE PRECISION,
+    avg_mfe_pct              DOUBLE PRECISION,
+    avg_mae_pct              DOUBLE PRECISION,
+    comparator_samples       INTEGER,
+    comparator_stocks        INTEGER,
+    comparator_days          INTEGER,
+    comparator_avg_return_pct DOUBLE PRECISION,
+    comparator_positive_rate DOUBLE PRECISION,
+    comparator_avg_mae_pct   DOUBLE PRECISION,
+    delta_avg_return_pct     DOUBLE PRECISION,
+    delta_positive_rate_pp   DOUBLE PRECISION,
+    delta_mae_pct            DOUBLE PRECISION,
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(segment_type,segment_value,horizon,window_name)
+);
+
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
     updated_at          TIMESTAMPTZ NOT NULL,
@@ -503,6 +531,56 @@ def _aggregate(values):
     }
 
 
+def _walk_forward_windows(values,comparator=None):
+    """Split a segment by complete trade days into early/recent halves.
+
+    Day-level splitting prevents observations from the same trading day leaking
+    across both halves. Comparator rows, when supplied, are restricted to the
+    exact same day sets so interaction deltas remain time-aligned.
+    """
+    days=sorted({x.get("trade_day") for x in values if x.get("trade_day")})
+    if len(days)<4:
+        return []
+    cut=len(days)//2
+    early_days=set(days[:cut]);recent_days=set(days[cut:])
+    out=[]
+    for name,dayset in (("EARLY",early_days),("RECENT",recent_days)):
+        child_vals=[x for x in values if x.get("trade_day") in dayset]
+        child=_aggregate(child_vals)
+        if not child:
+            continue
+        row={
+            "window_name":name,
+            "start_day":min(dayset),"end_day":max(dayset),
+            **child,
+            "comparator_samples":None,"comparator_stocks":None,"comparator_days":None,
+            "comparator_avg_return_pct":None,"comparator_positive_rate":None,
+            "comparator_avg_mae_pct":None,
+            "delta_avg_return_pct":None,"delta_positive_rate_pp":None,"delta_mae_pct":None,
+        }
+        if comparator is not None:
+            comp_vals=[x for x in comparator if x.get("trade_day") in dayset]
+            comp=_aggregate(comp_vals)
+            if comp:
+                row.update({
+                    "comparator_samples":comp["samples"],
+                    "comparator_stocks":comp["distinct_stocks"],
+                    "comparator_days":comp["distinct_days"],
+                    "comparator_avg_return_pct":comp["avg_return_pct"],
+                    "comparator_positive_rate":comp["positive_rate"],
+                    "comparator_avg_mae_pct":comp["avg_mae_pct"],
+                    "delta_avg_return_pct":child["avg_return_pct"]-comp["avg_return_pct"],
+                    "delta_positive_rate_pp":(child["positive_rate"]-comp["positive_rate"])*100,
+                    "delta_mae_pct":(
+                        child["avg_mae_pct"]-comp["avg_mae_pct"]
+                        if child["avg_mae_pct"] is not None and comp["avg_mae_pct"] is not None
+                        else None
+                    ),
+                })
+        out.append(row)
+    return out
+
+
 def _sample_basis(horizon):
     if horizon=="5m":return "NON_OVERLAP_5M"
     if horizon=="30m":return "NON_OVERLAP_30M"
@@ -715,6 +793,45 @@ def refresh_segments():
               child_avg_mae_pct,comparator_avg_mae_pct,delta_mae_pct,updated_at)
               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
               edge_payload)
+        cur.execute("DELETE FROM market_os_walk_forward_windows")
+        wf_payload=[]
+        for (kind,value,horizon),child_vals in groups.items():
+            comparator=None
+            if _segment_depth(kind)>=2:
+                parent=_parent_key(kind,value)
+                parent_vals=groups.get((parent[0],parent[1],horizon)) if parent else None
+                if parent_vals:
+                    if kind.endswith("_MICRO"):
+                        parent_vals=[
+                            r for r in parent_vals
+                            if int(r["micro_tick_count_15s"] or 0)>0
+                            and int(r["micro_gap_count_15s"] or 0)==0
+                            and _micro_state(r["micro_strength"],r["micro_buy_share_15s"])!="NO_DATA"
+                        ]
+                    child_ids={(r["stock_code"],r["snapshot_time"]) for r in child_vals}
+                    comparator=[
+                        r for r in parent_vals
+                        if (r["stock_code"],r["snapshot_time"]) not in child_ids
+                    ]
+            for w in _walk_forward_windows(child_vals,comparator):
+                wf_payload.append((
+                    kind,value,horizon,w["window_name"],w["start_day"],w["end_day"],
+                    w["samples"],w["distinct_stocks"],w["distinct_days"],
+                    w["avg_return_pct"],w["median_return_pct"],w["positive_rate"],
+                    w["avg_mfe_pct"],w["avg_mae_pct"],
+                    w["comparator_samples"],w["comparator_stocks"],w["comparator_days"],
+                    w["comparator_avg_return_pct"],w["comparator_positive_rate"],
+                    w["comparator_avg_mae_pct"],w["delta_avg_return_pct"],
+                    w["delta_positive_rate_pp"],w["delta_mae_pct"]
+                ))
+        cur.executemany("""INSERT INTO market_os_walk_forward_windows(
+              segment_type,segment_value,horizon,window_name,start_day,end_day,
+              samples,distinct_stocks,distinct_days,avg_return_pct,median_return_pct,positive_rate,
+              avg_mfe_pct,avg_mae_pct,comparator_samples,comparator_stocks,comparator_days,
+              comparator_avg_return_pct,comparator_positive_rate,comparator_avg_mae_pct,
+              delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct,updated_at)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
+              wf_payload)
         return len(segment_payload)
 
 
