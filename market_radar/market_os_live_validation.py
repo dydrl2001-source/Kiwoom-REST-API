@@ -23,6 +23,7 @@ TABLES={
     "theme":"stock_theme_memberships",
     "assessment":"market_os_assessment_snapshots",
     "outcome":"market_os_assessment_outcomes",
+    "realtime":"market_realtime_minute_bars",
 }
 
 TIME_COLUMNS={
@@ -34,6 +35,7 @@ TIME_COLUMNS={
     "stock_theme_memberships":"refreshed_at",
     "market_os_assessment_snapshots":"snapshot_time",
     "market_os_assessment_outcomes":"calculated_at",
+    "market_realtime_minute_bars":"minute_time",
 }
 
 
@@ -67,7 +69,7 @@ def _freshness_level(key,age,session):
     if session=="OFF_HOURS":return "HISTORICAL"
     limits={
         "rank":120,"trade":120,"flow":120,"regime":180,
-        "chart":300,"theme":86400,"assessment":180,"outcome":86400,
+        "chart":300,"theme":86400,"assessment":180,"outcome":86400,"realtime":120,
     }
     limit=limits.get(key,300)
     if age<=limit:return "OK"
@@ -112,6 +114,28 @@ def _kiwoom_status(cur,now):
         "updated_at":r["updated_at"].isoformat() if r["updated_at"] else None,
         "note":r["note"],
         "last_error_type":(r["last_error"] or "").split(":",1)[0][:80] or None,
+    }
+
+
+def _realtime_status(cur,now):
+    enabled=os.getenv("KIWOOM_REALTIME_ENABLED","0").strip()=="1"
+    if not exists(cur,"kiwoom_realtime_status"):
+        return {"enabled":enabled,"exists":False,"status":"MISSING","connected":False,
+                "last_message_at":None,"age_sec":None}
+    cur.execute("""SELECT status,mode,connected,last_message_at,subscribed_count,tick_count,gap_count,note,updated_at
+                   FROM kiwoom_realtime_status WHERE id=1""")
+    r=cur.fetchone()
+    if not r:
+        return {"enabled":enabled,"exists":True,"status":"EMPTY","connected":False,
+                "last_message_at":None,"age_sec":None}
+    return {
+        "enabled":enabled,"exists":True,"status":r["status"],"mode":r["mode"],
+        "connected":bool(r["connected"]),
+        "last_message_at":r["last_message_at"].isoformat() if r["last_message_at"] else None,
+        "age_sec":_age_seconds(r["last_message_at"],now),
+        "subscribed_count":int(r["subscribed_count"] or 0),
+        "tick_count":int(r["tick_count"] or 0),"gap_count":int(r["gap_count"] or 0),
+        "note":r["note"],"updated_at":r["updated_at"].isoformat() if r["updated_at"] else None,
     }
 
 
@@ -161,6 +185,7 @@ def payload():
         tables=[_latest_table(cur,k,t,now,session) for k,t in TABLES.items()]
         ks=_kiwoom_status(cur,now)
         quality=_flow_quality(cur)
+        realtime=_realtime_status(cur,now)
         coverage=_coverage(cur)
     blockers=[];warnings=[]
     by={x["key"]:x for x in tables}
@@ -172,6 +197,11 @@ def payload():
             warnings.append(f"{key}:STALE")
     if session=="SESSION" and ks.get("status") in ("WAITING_FOR_CREDENTIALS","ERROR","MISSING","EMPTY"):
         blockers.append("kiwoom:"+str(ks.get("status")))
+    if realtime.get("enabled") and session=="SESSION":
+        if realtime.get("status")!="OK" or not realtime.get("connected"):
+            warnings.append("realtime:"+str(realtime.get("status")))
+        elif realtime.get("age_sec") is None or realtime.get("age_sec")>120:
+            warnings.append("realtime:STALE")
     unresolved=quality.get("unit_unresolved_pct")
     if unresolved is not None and unresolved>20:
         warnings.append(f"money_unit_unresolved:{unresolved:.1f}%")
@@ -186,6 +216,6 @@ def payload():
     return {
         "generated_at":now.isoformat(),"market_session":session,"overall":overall,
         "blockers":blockers,"warnings":warnings,"kiwoom":ks,"tables":tables,
-        "flow_quality":quality,"coverage":coverage,
+        "flow_quality":quality,"realtime":realtime,"coverage":coverage,
         "notice":"읽기 전용 진단. API 호출·키 변경·주문·AI 호출 없음."
     }
