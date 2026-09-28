@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS market_os_learning_segments (
     segment_value       TEXT NOT NULL,
     horizon             TEXT NOT NULL,
     samples             INTEGER NOT NULL,
+    distinct_stocks     INTEGER NOT NULL DEFAULT 0,
+    distinct_days       INTEGER NOT NULL DEFAULT 0,
+    sample_basis        TEXT NOT NULL DEFAULT 'RAW',
     avg_return_pct      DOUBLE PRECISION,
     median_return_pct   DOUBLE PRECISION,
     positive_rate       DOUBLE PRECISION,
@@ -97,3 +100,11 @@ CREATE TABLE IF NOT EXISTS market_os_learning_status (
 -- 0B microstructure is captured as shadow evidence only.
 -- Recommended analysis dimensions: MICRO_STRENGTH / MICRO_BUY_SHARE.
 -- Do not feed these features into live Radar/Setup scoring until sample-backed validation.
+
+
+-- Episode-anchor learning policy:
+-- 5m: non-overlapping 5-minute anchors per stock.
+-- 30m: non-overlapping 30-minute anchors per stock.
+-- close/D+1: one anchor per stock per KST trade day.
+-- Raw assessment snapshots remain intact for audit; segment sample counts use anchors.
+-- Confidence additionally requires stock diversity and multiple trade days.
