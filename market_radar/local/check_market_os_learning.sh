@@ -401,6 +401,56 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                 print(f"{r['event_time']} {r['ruleset_id']} {r['event_type']} "
                       f"{r['from_status'] or '—'}->{r['to_status']}")
 
+        print('\n[RULESET SUCCESSION GATE v1.9]')
+        if not exists('market_os_ruleset_succession_decisions'):
+            print('ruleset succession table missing')
+        else:
+            cur.execute("""SELECT d.ruleset_id,d.decision_state,d.review_eligible,
+                                  d.primary_cohort,d.reason_codes,d.evidence,
+                                  d.manual_review_state,d.state_since,d.updated_at,
+                                  r.version_label,r.status,r.source_dossier_id
+                           FROM market_os_ruleset_succession_decisions d
+                           LEFT JOIN market_os_versioned_rulesets r
+                             ON r.ruleset_id=d.ruleset_id
+                           ORDER BY CASE d.decision_state
+                               WHEN 'SUCCESSION_CANDIDATE' THEN 1
+                               WHEN 'RULESET_STABLE' THEN 2
+                               WHEN 'RULESET_COMPARABLE' THEN 3
+                               WHEN 'RULESET_MORE_DATA' THEN 4
+                               WHEN 'RULESET_COLLECTING' THEN 5
+                               WHEN 'RULESET_REJECT' THEN 6 ELSE 7 END,
+                               d.updated_at DESC""")
+            rows=cur.fetchall()
+            if not rows:
+                print('succession decision 없음')
+            for r in rows:
+                ev=r['evidence'] or {}
+                conc=ev.get('concentration') or {}
+                ret=ev.get('shadow_effect_retention') or {}
+                print(f"{r['decision_state']} eligible={r['review_eligible']} "
+                      f"{r['ruleset_id']} version={r['version_label'] or '—'} "
+                      f"status={r['status'] or '—'} cohort={r['primary_cohort'] or '—'} "
+                      f"30m={ev.get('overall_30m','—')} close={ev.get('overall_close','—')} "
+                      f"D+1={ev.get('overall_d1','—')} "
+                      f"changed={conc.get('changed_episodes','—')} "
+                      f"topStock={conc.get('top_stock_share','—')} topDay={conc.get('top_day_share','—')} "
+                      f"shadowRet30={ret.get('30m','—')} shadowRetClose={ret.get('close','—')} "
+                      f"reasons={','.join(r['reason_codes'] or [])}")
+        if exists('market_os_ruleset_succession_events'):
+            print('\n[RULESET SUCCESSION TRANSITIONS]')
+            cur.execute("""SELECT event_time,ruleset_id,from_state,to_state,
+                                  review_eligible,reason_codes
+                           FROM market_os_ruleset_succession_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            rows=cur.fetchall()
+            if not rows:
+                print('succession transition history 없음')
+            for r in rows:
+                print(f"{r['event_time']} {r['ruleset_id']} "
+                      f"{r['from_state'] or '—'}->{r['to_state']} "
+                      f"eligible={r['review_eligible']} "
+                      f"reasons={','.join(r['reason_codes'] or [])}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -436,5 +486,6 @@ print('Shadow Rule Lab v1.5: only manually approved rules are observed; pre-appr
 print('Shadow Decision Gate v1.6: 30m+close, time-split stability, membership changes and stance reproduction are required before ACCEPT_CANDIDATE; no automatic live adoption.')
 print('Adoption Review Dossier v1.7: one immutable dossier revision is generated per ACCEPT_CANDIDATE transition; human review can only approve a future dry-run or reject it.')
 print('Versioned Ruleset v1.8: APPROVED_DRY_RUN still requires explicit dry-run-start; activation creates a new prospective boundary and source Decision invalidation => STALE_SOURCE.')
+print('Ruleset Succession Gate v1.9: 30m+close, time splits, stance replication, impact concentration, frozen Shadow-effect retention and D+1 degradation are required before SUCCESSION_CANDIDATE; no live promotion.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
