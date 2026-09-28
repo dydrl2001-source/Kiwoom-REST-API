@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS market_os_assessment_snapshots (
     burst_multiple      DOUBLE PRECISION,
     theme_share_change_pp DOUBLE PRECISION,
     chart_state         TEXT,
+    micro_trade_value_15s_krw NUMERIC,
+    micro_buy_share_15s DOUBLE PRECISION,
+    micro_tick_count_15s INTEGER,
+    micro_gap_count_15s INTEGER,
+    micro_strength      DOUBLE PRECISION,
+    micro_buy_ratio     DOUBLE PRECISION,
     axis_reasons        JSONB NOT NULL DEFAULT '{}'::jsonb,
     risk_flags          JSONB NOT NULL DEFAULT '[]'::jsonb,
     evidence_ref        JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -87,3 +93,7 @@ CREATE TABLE IF NOT EXISTS market_os_learning_status (
 -- 2. keep rule_version on every row;
 -- 3. compare market stance + time-of-day before changing thresholds;
 -- 4. shadow feedback requires >=20 samples; rule changes remain manual/versioned in v1.
+
+-- 0B microstructure is captured as shadow evidence only.
+-- Recommended analysis dimensions: MICRO_STRENGTH / MICRO_BUY_SHARE.
+-- Do not feed these features into live Radar/Setup scoring until sample-backed validation.
