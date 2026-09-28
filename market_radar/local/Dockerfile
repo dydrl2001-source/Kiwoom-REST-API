@@ -11,4 +11,5 @@ RUN python -m pip check \
         flow_core.py flow_store.py flow_routes.py flow_collector.py flow_chart_feed.py \
         flow_news_feed.py flow_research_worker.py market_theme_feed.py \
         market_os_rule_engine.py market_os_learning.py market_os_store.py market_os_routes.py \
+        market_os_live_validation.py \
     && python -c "import radar_web_app; assert radar_web_app.app is not None; print('Radar API import check passed')"
