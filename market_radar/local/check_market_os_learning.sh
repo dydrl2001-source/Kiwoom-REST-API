@@ -127,19 +127,35 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
         if not shown:
             print('상호작용 표본 5개 이상 없음')
 
-        gates=_validation_candidates(segments)
-        print('\n[VALIDATION GATE]')
+        wf_rows=[]
+        if exists('market_os_walk_forward_windows'):
+            cur.execute("""SELECT segment_type,segment_value,horizon,window_name,start_day,end_day,
+                                  samples,distinct_stocks,distinct_days,avg_return_pct,median_return_pct,
+                                  positive_rate,avg_mfe_pct,avg_mae_pct,comparator_samples,
+                                  comparator_stocks,comparator_days,comparator_avg_return_pct,
+                                  comparator_positive_rate,comparator_avg_mae_pct,delta_avg_return_pct,
+                                  delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_walk_forward_windows""")
+            wf_rows=[dict(x) for x in cur.fetchall()]
+        gates=_validation_candidates(segments,wf_rows)
+        print('\n[VALIDATION GATE v1.3 WALK-FORWARD]')
         if not gates:
             print('형성 등급 이상의 30m/close/D+1 검증 후보 없음')
         else:
             for g in gates[:30]:
                 edge=g.get('edge_avg_return_pct')
                 edge_txt=(f"{edge:+.3f}pp" if edge is not None else '—')
+                wf=g.get('walk_forward') or {}
+                early=wf.get('early') or {};recent=wf.get('recent') or {}
+                ea=early.get('avg_return_pct');ra=recent.get('avg_return_pct')
                 print(f"{g['status']} {g['horizon']} {g['segment_type']}={g['segment_value']} "
                       f"N={g['samples']} stocks={g['distinct_stocks']} days={g['distinct_days']} "
-                      f"q={g['quality']} avg={g['avg_return_pct']:.3f}% "
-                      f"med={g['median_return_pct']:.3f}% pos={(g['positive_rate'] or 0)*100:.1f}% "
-                      f"dAvg={edge_txt} reasons={','.join(g.get('reason_codes') or [])}")
+                      f"q={g['quality']} wf={wf.get('status','—')} "
+                      f"earlyAvg={(f'{ea:+.3f}%' if ea is not None else '—')} "
+                      f"recentAvg={(f'{ra:+.3f}%' if ra is not None else '—')} "
+                      f"avg={g['avg_return_pct']:.3f}% med={g['median_return_pct']:.3f}% "
+                      f"pos={(g['positive_rate'] or 0)*100:.1f}% dAvg={edge_txt} "
+                      f"reasons={','.join(g.get('reason_codes') or [])}")
 
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
@@ -170,6 +186,6 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
 
 print('\nSampling: 5m=non-overlap 5m, 30m=non-overlap 30m, close/D+1=one per stock-day.')
 print('Interaction policy: only pre-registered regime/setup/trigger/micro combinations are tested; no arbitrary combination search.')
-print('Validation gate: 30m/close/D+1 only; aligned mean+median+positive-rate, and interaction parent-complement checks. Review-only; no live score change.')
+print('Validation gate v1.3: cumulative gate + day-split EARLY/RECENT walk-forward stability; recent reversal/weakening/comparator gaps => HOLD.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
