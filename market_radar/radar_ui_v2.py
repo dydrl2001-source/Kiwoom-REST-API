@@ -542,7 +542,9 @@ function renderShadowExecution(x){
  table+='</tbody></table></div>';
  const policy=rows[0]?.entry_model?.policy||{};
  const fees='commission '+esc(policy.commission_bps??0)+'bp · sell tax '+esc(policy.sell_tax_bps??0)+'bp';
- el.innerHTML=summary+quality+table+'<div class="shadow-note">'+esc(r.model_note||r.note||"")+' · '+fees+' · BOOK_V2와 PROXY_V1은 분리해 해석합니다.</div>';
+ const ob=r.orderbook_feed||{};
+ const bookHealth='호가수집 '+esc(ob.status||"미연결")+' · 대상 '+esc(ob.target_count??0)+' / 저장 '+esc(ob.saved_count??0);
+ el.innerHTML=summary+quality+table+'<div class="shadow-note">'+bookHealth+' · '+esc(r.model_note||r.note||"")+' · '+fees+' · BOOK_V2와 PROXY_V1은 분리해 해석합니다.</div>';
 }
 
 function renderAIDailyReview(x){
