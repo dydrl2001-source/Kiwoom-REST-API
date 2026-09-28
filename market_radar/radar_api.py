@@ -18,6 +18,13 @@ try:
     from report_library import clean_report as radar_clean_report
 except Exception:
     radar_clean_report = None
+try:
+    from evidence_identity import identity_quality, usable_as_catalyst, usable_for_theme, stock_context
+except Exception:
+    def identity_quality(name,text,source_kind="",official_sector=None): return "NAME_MATCH"
+    def usable_as_catalyst(q): return q not in ("ENTITY_CONFLICT","LIST_MENTION","MISSING_NAME")
+    def usable_for_theme(q): return q in ("VERIFIED","CONTEXT_VERIFIED")
+    def stock_context(text,name,radius=130): return str(text or "")
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
@@ -95,8 +102,10 @@ def choose_market_theme(name, official_sector, catalyst):
     if name in STOCK_THEME_HINTS:
         return STOCK_THEME_HINTS[name]
     strength=int((catalyst or {}).get("material_strength") or 0)
-    if strength >= 2:
-        t=infer_theme((catalyst or {}).get("best_text") or "")
+    # Theme inference is accepted only when the evidence was identity/context verified
+    # and the theme came from text close to the actual stock name.
+    if strength >= 2 and usable_for_theme((catalyst or {}).get("best_identity_quality")):
+        t=(catalyst or {}).get("theme")
         if t:
             return t
     return official_sector or "미분류"
@@ -145,18 +154,27 @@ def extract_links(text):
             links.append(u)
     return links[:8]
 
-def catalyst_for_stock(messages, code, name):
+def catalyst_for_stock(messages, code, name, official_sector=None):
     aliases = stock_aliases(code, name)
     matched = []
+    rejected = 0
     for m in messages:
         txt = m["text"] or ""
         compact = re.sub(r"\s+", "", txt)
-        if any((a in txt) or (len(a) >= 2 and a in compact) for a in aliases):
-            matched.append(m)
+        if not any((a in txt) or (len(a) >= 2 and a in compact) for a in aliases):
+            continue
+        q=identity_quality(name,txt,"Telegram",official_sector)
+        if not usable_as_catalyst(q):
+            rejected += 1
+            continue
+        mm=dict(m)
+        mm["identity_quality"]=q
+        matched.append(mm)
     if not matched:
         return {
             "summary": None, "status": "NO_MATCH", "channels": 0, "theme": None,
             "first_seen": None, "last_seen": None, "items": [], "article_links": [],
+            "identity_rejected":rejected,
             "note": "최근 24시간 Telegram 직접 일치 재료 미확인"
         }
 
@@ -177,7 +195,11 @@ def catalyst_for_stock(messages, code, name):
 
     theme = None
     for x in reversed(matched):
-        theme = infer_theme(x["text"])
+        q=x.get("identity_quality")
+        if not usable_for_theme(q):
+            continue
+        context=stock_context(x.get("text") or "",name)
+        theme = infer_theme(context)
         if theme:
             break
 
@@ -195,6 +217,7 @@ def catalyst_for_stock(messages, code, name):
             "text": txt[:6000],
             "telegram_url": x.get("message_url"),
             "links": links,
+            "identity_quality":x.get("identity_quality"),
         })
     summary = re.sub(r"\s+", " ", last["text"] or "").strip()
     return {
@@ -206,6 +229,7 @@ def catalyst_for_stock(messages, code, name):
         "last_seen": iso(last_dt),
         "items": items,
         "article_links": article_links[:8],
+        "identity_rejected":rejected,
         "note": None,
     }
 
@@ -620,22 +644,34 @@ def evidence_strength(text):
         return 2,"SECTOR"
     return 1,"MENTION"
 
-def enrich_catalyst(cat, stock_name=None):
+def enrich_catalyst(cat, stock_name=None, official_sector=None):
     candidates=[]
+    warnings=[]
     for d in cat.get("dart") or []:
         txt=d.get("report_nm") or ""
-        candidates.append((4,"DART","DART",txt,d))
+        candidates.append((4,"DART","DART",txt,d,"VERIFIED"))
     for n in cat.get("external_news") or []:
         txt=n.get("title") or ""
+        q=identity_quality(stock_name,txt,"NEWS",official_sector)
+        if not usable_as_catalyst(q):
+            warnings.append({"source":"뉴스","quality":q,"text":txt[:180]})
+            continue
         score,kind=evidence_strength(txt)
-        candidates.append((score,kind,"뉴스",txt,n))
+        candidates.append((score,kind,"뉴스",txt,n,q))
     for it in cat.get("items") or []:
         txt=it.get("text") or ""
+        q=it.get("identity_quality") or identity_quality(stock_name,txt,"Telegram",official_sector)
+        if not usable_as_catalyst(q):
+            warnings.append({"source":"Telegram","quality":q,"text":txt[:180]})
+            continue
         score,kind=evidence_strength(txt)
-        candidates.append((score,kind,"Telegram",txt,it))
-    candidates.sort(key=lambda x:x[0],reverse=True)
-    best=candidates[0] if candidates else (0,"NONE","미확인","",None)
-    inferred=infer_theme(best[3]) if best and best[3] else None
+        candidates.append((score,kind,"Telegram",txt,it,q))
+    candidates.sort(key=lambda x:(x[0], 1 if x[5] in ("VERIFIED","CONTEXT_VERIFIED") else 0),reverse=True)
+    best=candidates[0] if candidates else (0,"NONE","미확인","",None,"UNVERIFIED")
+    # Only infer a theme from verified/context-verified text adjacent to the stock name.
+    inferred=None
+    if usable_for_theme(best[5]):
+        inferred=infer_theme(stock_context(best[3],stock_name))
     if inferred:
         cat["theme"]=inferred
     cat["material_strength"]=best[0]
@@ -643,8 +679,14 @@ def enrich_catalyst(cat, stock_name=None):
     cat["best_source"]=best[2]
     cat["best_text"]=best[3]
     cat["best_evidence"]=best[4]
+    cat["best_identity_quality"]=best[5]
+    cat["identity_warnings"]=warnings[:4]
     if best[1] == "DART":
-        cat["quality_note"]="DART 공식 공시"
+        cat["quality_note"]="DART 공식 공시 · 종목 신원 확인"
+    elif best[5]=="CONTEXT_VERIFIED" and best[0]>=2:
+        cat["quality_note"]="종목명+업종 문맥 확인된 공개 재료"
+    elif best[5]=="NAME_MATCH" and best[0]>=2:
+        cat["quality_note"]="종목명 일치 · 동명이인/맥락 추가 확인 필요"
     elif best[0] == 0 and candidates:
         cat["quality_note"]="가격 설명력이 낮은 시황·리스트·매매콘텐츠 가능성"
     elif best[0] == 1:
@@ -1213,13 +1255,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         ratio = float(trade_value)/float(cap2)*100
                 except Exception:
                     ratio = None
-                cat = catalyst_for_stock(messages, code, name)
+                cat = catalyst_for_stock(messages, code, name, sector2)
                 cat["external_news"] = news_map.get(code, [])
                 cat["dart"] = dart_map.get(code, [])
                 if cat["status"] == "NO_MATCH" and (cat["external_news"] or cat["dart"]):
                     cat["status"] = "NEWS_ONLY"
                     cat["note"] = "Telegram 직접매칭 없음 · 외부뉴스/공시 fallback"
-                cat=enrich_catalyst(cat,name)
+                cat=enrich_catalyst(cat,name,sector2)
                 theme2 = choose_market_theme(name, sector2, cat)
                 flow = stock_flow_state(rank_no, rank_change, tv.get("rank"), cat)
                 row = {
@@ -1268,12 +1310,12 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         trade_rows.append(x)
                     continue
                 name=tv.get("name") or code
-                cat=catalyst_for_stock(messages,code,name)
+                cat=catalyst_for_stock(messages,code,name,tv.get("sector"))
                 cat["external_news"]=news_map.get(code,[])
                 cat["dart"]=dart_map.get(code,[])
                 if cat["status"]=="NO_MATCH" and (cat["external_news"] or cat["dart"]):
                     cat["status"]="NEWS_ONLY";cat["note"]="Telegram 직접매칭 없음 · 외부뉴스/공시 fallback"
-                cat=enrich_catalyst(cat,name)
+                cat=enrich_catalyst(cat,name,tv.get("sector"))
                 cap=tv.get("market_cap"); value=tv.get("trade_value")
                 ratio=(float(value)/float(cap)*100) if value is not None and cap and float(cap)>0 else None
                 theme=choose_market_theme(name, tv.get("sector"), cat)
