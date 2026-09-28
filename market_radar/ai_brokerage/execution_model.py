@@ -150,3 +150,149 @@ def round_trip_result(entry: dict[str,Any], exit: dict[str,Any]) -> dict[str,Any
         "net_pnl_krw":pnl,
         "costs_krw":entry_cost+exit_cost,
     }
+
+
+@dataclass(frozen=True)
+class BookPolicy:
+    displayed_liquidity_haircut: float = 0.50
+    max_levels: int = 10
+    max_spread_bps: float = 120.0
+    commission_bps: float = 0.0
+    sell_tax_bps: float = 0.0
+
+
+def estimate_book_fill(
+    side: Side,
+    requested_shares: int,
+    book: dict[str,Any],
+    policy: BookPolicy | None=None,
+) -> dict[str,Any]:
+    p=policy or BookPolicy()
+    shares=max(0,int(requested_shares or 0))
+    asks=list(book.get("asks") or [])
+    bids=list(book.get("bids") or [])
+    levels=asks if side=="BUY" else bids
+    levels=levels[:max(1,int(p.max_levels))]
+    best_ask=finite(book.get("best_ask_krw"))
+    best_bid=finite(book.get("best_bid_krw"))
+    if shares<=0:
+        return {"status":"INVALID_REQUEST","filled_shares":0,"fill_ratio":0.0,"fill_price_krw":None,
+                "implementation_shortfall_bps":None,"model_quality":"BOOK_INVALID"}
+    if best_ask is None or best_bid is None or best_ask<=0 or best_bid<=0 or best_ask<best_bid:
+        return {"status":"INVALID_BOOK","filled_shares":0,"fill_ratio":0.0,"fill_price_krw":None,
+                "implementation_shortfall_bps":None,"model_quality":"BOOK_INVALID"}
+    mid=(best_ask+best_bid)/2.0
+    spread_bps=(best_ask-best_bid)/mid*10_000.0 if mid>0 else None
+    if spread_bps is not None and spread_bps>p.max_spread_bps:
+        return {"status":"SPREAD_TOO_WIDE","filled_shares":0,"fill_ratio":0.0,"fill_price_krw":None,
+                "arrival_mid_krw":mid,"spread_bps":spread_bps,
+                "implementation_shortfall_bps":None,"model_quality":"BOOK_SPREAD_BLOCK"}
+    remaining=shares
+    fills=[]
+    haircut=clamp(p.displayed_liquidity_haircut,0.0,1.0)
+    for level in levels:
+        price=finite(level.get("price_krw"))
+        raw_qty=max(0,int(level.get("qty") or 0))
+        available=max(0,int(math.floor(raw_qty*haircut)))
+        if price is None or price<=0 or available<=0:
+            continue
+        take=min(remaining,available)
+        if take<=0:
+            continue
+        fills.append({"level":int(level.get("level") or 0),"price_krw":price,
+                      "displayed_qty":raw_qty,"usable_qty":available,"filled_qty":take})
+        remaining-=take
+        if remaining<=0:
+            break
+    filled=shares-remaining
+    if filled<=0:
+        return {"status":"NO_BOOK_LIQUIDITY","requested_shares":shares,"filled_shares":0,
+                "fill_ratio":0.0,"fill_price_krw":None,"arrival_mid_krw":mid,
+                "spread_bps":spread_bps,"implementation_shortfall_bps":None,
+                "model_quality":"BOOK_DEPTH_ZERO","fills":[]}
+    notional=sum(x["price_krw"]*x["filled_qty"] for x in fills)
+    vwap=notional/filled
+    direction=1.0 if side=="BUY" else -1.0
+    shortfall=direction*(vwap/mid-1.0)*10_000.0
+    best=best_ask if side=="BUY" else best_bid
+    depth_slip=direction*(vwap/best-1.0)*10_000.0 if best and best>0 else None
+    commission=notional*(p.commission_bps/10_000.0)
+    tax=notional*(p.sell_tax_bps/10_000.0) if side=="SELL" else 0.0
+    return {
+        "status":"FILLED" if filled==shares else "PARTIAL",
+        "requested_shares":shares,"filled_shares":filled,"remaining_shares":remaining,
+        "fill_ratio":filled/shares,"fill_price_krw":vwap,"filled_notional_krw":notional,
+        "arrival_mid_krw":mid,"best_ask_krw":best_ask,"best_bid_krw":best_bid,
+        "spread_bps":spread_bps,"implementation_shortfall_bps":shortfall,
+        "depth_slippage_bps":depth_slip,"levels_used":len(fills),"fills":fills,
+        "commission_krw":commission,"tax_krw":tax,
+        "model_quality":"ORDER_BOOK_10L","policy":asdict(p),
+    }
+
+
+@dataclass(frozen=True)
+class PortfolioRiskPolicy:
+    account_equity_krw: float = 100_000_000
+    max_total_risk_pct: float = 2.0
+    max_theme_risk_pct: float = 0.8
+    max_family_risk_pct: float = 1.2
+    max_open_positions: int = 5
+
+
+def portfolio_risk_budget(
+    proposed_risk_krw: float,
+    market_theme: str | None,
+    strategy_family: str | None,
+    open_positions: list[dict[str,Any]],
+    policy: PortfolioRiskPolicy | None=None,
+) -> dict[str,Any]:
+    p=policy or PortfolioRiskPolicy()
+    proposed=max(0.0,float(proposed_risk_krw or 0))
+    theme=str(market_theme or "UNKNOWN")
+    family=str(strategy_family or "UNKNOWN")
+    open_count=len(open_positions)
+    total=sum(max(0.0,float(x.get("risk_krw") or 0)) for x in open_positions)
+    theme_used=sum(max(0.0,float(x.get("risk_krw") or 0)) for x in open_positions
+                   if str(x.get("market_theme") or "UNKNOWN")==theme)
+    family_used=sum(max(0.0,float(x.get("risk_krw") or 0)) for x in open_positions
+                    if str(x.get("strategy_family") or "UNKNOWN")==family)
+    total_cap=p.account_equity_krw*p.max_total_risk_pct/100.0
+    theme_cap=p.account_equity_krw*p.max_theme_risk_pct/100.0
+    family_cap=p.account_equity_krw*p.max_family_risk_pct/100.0
+    capacities={
+        "total":max(0.0,total_cap-total),
+        "theme":max(0.0,theme_cap-theme_used),
+        "family":max(0.0,family_cap-family_used),
+    }
+    allowed=min([proposed,*capacities.values()])
+    blockers=[]
+    if open_count>=p.max_open_positions:blockers.append("MAX_OPEN_POSITIONS")
+    if capacities["total"]<=0:blockers.append("TOTAL_RISK_CAP")
+    if capacities["theme"]<=0:blockers.append("THEME_RISK_CAP")
+    if capacities["family"]<=0:blockers.append("FAMILY_RISK_CAP")
+    if blockers:allowed=0.0
+    scale=(allowed/proposed) if proposed>0 else 0.0
+    return {
+        "allowed":allowed>0 and not blockers,
+        "proposed_risk_krw":proposed,"allowed_risk_krw":allowed,
+        "risk_scale":clamp(scale,0.0,1.0),
+        "open_positions":open_count,"market_theme":theme,"strategy_family":family,
+        "used":{"total":total,"theme":theme_used,"family":family_used},
+        "caps":{"total":total_cap,"theme":theme_cap,"family":family_cap},
+        "remaining":capacities,"blockers":blockers,"policy":asdict(p),
+    }
+
+
+def implementation_shortfall_summary(entry: dict[str,Any], exit: dict[str,Any] | None=None) -> dict[str,Any]:
+    entry_is=finite(entry.get("implementation_shortfall_bps"))
+    exit_is=finite((exit or {}).get("implementation_shortfall_bps"))
+    total=(entry_is or 0)+(exit_is or 0) if entry_is is not None or exit_is is not None else None
+    return {
+        "entry_is_bps":entry_is,
+        "exit_is_bps":exit_is,
+        "round_trip_is_bps":total,
+        "entry_spread_bps":finite(entry.get("spread_bps")),
+        "exit_spread_bps":finite((exit or {}).get("spread_bps")),
+        "entry_depth_slippage_bps":finite(entry.get("depth_slippage_bps")),
+        "exit_depth_slippage_bps":finite((exit or {}).get("depth_slippage_bps")),
+    }
