@@ -126,6 +126,24 @@ def latest_chart_states(cur,codes):
     return out
 
 
+def latest_strategy_signals(cur,codes):
+    out=defaultdict(dict)
+    if not codes or not exists(cur,'mimosa_strategy_signals'):return out
+    cur.execute("""SELECT DISTINCT ON(stock_code,strategy)
+                    stock_code,strategy,state,state_ko,score,metrics,reasons,source_note,snapshot_time
+                   FROM mimosa_strategy_signals
+                   WHERE stock_code=ANY(%s) AND snapshot_time>now()-interval '15 minutes'
+                   ORDER BY stock_code,strategy,snapshot_time DESC""",(list(codes),))
+    for r in cur.fetchall():
+        out[r['stock_code']][r['strategy']]={
+            'state':r['state'],'state_ko':r['state_ko'],'score':r['score'],
+            'metrics':r['metrics'] or {},'reasons':r['reasons'] or [],
+            'source_note':r['source_note'],
+            'snapshot_time':r['snapshot_time'].isoformat() if r['snapshot_time'] else None
+        }
+    return out
+
+
 def theme_memberships(cur,codes):
     out=defaultdict(list)
     if not codes or not exists(cur,'stock_theme_memberships'):return out
@@ -151,6 +169,7 @@ def desk_payload():
         leads=public_leads(cur,history)
         themes=theme_memberships(cur,history)
         charts=latest_chart_states(cur,history)
+        strategies=latest_strategy_signals(cur,history)
         automation={'enabled':False,'notice':'설정 미확인'}
         try:
             from web_research_engine import Config, usage_count
@@ -168,7 +187,7 @@ def desk_payload():
         r.update({'sector':top,'segment':top+' > '+fine,'classification':classification,
                   'themes':tm[:8],'market_theme':primary_theme,
                   'market_group':primary_theme or top+' > '+fine,
-                  'chart':charts.get(code)})
+                  'chart':charts.get(code),'strategy_signals':strategies.get(code,{})})
         report=reports.get(code)
         # The report's age must never be hidden behind a current price refresh.
         fresh_report=bool(report and 0<=(now-dt(report['completed_at'])).total_seconds()<=21600)
