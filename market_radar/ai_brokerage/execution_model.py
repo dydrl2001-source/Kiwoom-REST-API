@@ -105,8 +105,9 @@ def estimate_fill(
     slip=clamp(slip,p.min_slippage_bps,p.max_slippage_bps)
     direction=1.0 if side=="BUY" else -1.0
     fill_price=ref*(1.0+direction*slip/10_000.0)
-    commission=filled_notional*(p.commission_bps/10_000.0)
-    tax=(filled_shares*fill_price)*(p.sell_tax_bps/10_000.0) if side=="SELL" else 0.0
+    executed_notional=filled_shares*fill_price
+    commission=executed_notional*(p.commission_bps/10_000.0)
+    tax=executed_notional*(p.sell_tax_bps/10_000.0) if side=="SELL" else 0.0
     return {
         "status":"FILLED" if filled_shares==shares else "PARTIAL",
         "requested_shares":shares,
