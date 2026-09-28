@@ -39,7 +39,8 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
         return cur.fetchone()["name"] is not None
 
     required=["market_os_promotion_registry","market_os_promotion_events",
-              "market_os_shadow_rules","market_os_shadow_observations"]
+              "market_os_shadow_rules","market_os_shadow_observations",
+              "market_os_shadow_decisions"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
@@ -60,15 +61,21 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"stocks={r['distinct_stocks']} days={r['distinct_days']} "
                   f"q={r['quality']} wf={r['walk_forward_status']} manual={r['manual_review_state']}")
         print("\n=== SHADOW RULES ===")
-        cur.execute("""SELECT shadow_rule_id,candidate_key,action,enabled,approved_at,approved_by,
-                              segment_type,segment_value,source_horizon,last_evaluated_at
-                       FROM market_os_shadow_rules
-                       ORDER BY approved_at DESC""")
+        cur.execute("""SELECT r.shadow_rule_id,r.candidate_key,r.action,r.enabled,r.approved_at,
+                              r.approved_by,r.segment_type,r.segment_value,r.source_horizon,
+                              r.last_evaluated_at,d.decision_state,d.review_eligible,
+                              d.manual_decision_state
+                       FROM market_os_shadow_rules r
+                       LEFT JOIN market_os_shadow_decisions d
+                         ON d.shadow_rule_id=r.shadow_rule_id
+                       ORDER BY r.approved_at DESC""")
         rules=cur.fetchall()
         if not rules:print("none")
         for r in rules:
             print(f"{r['shadow_rule_id']} | {'ON' if r['enabled'] else 'OFF'} | {r['action']} | "
                   f"{r['source_horizon']} | {r['segment_type']}={r['segment_value']} | "
+                  f"decision={r['decision_state'] or '—'} eligible={r['review_eligible'] or False} "
+                  f"manual={r['manual_decision_state'] or 'PENDING'} | "
                   f"approved={r['approved_at']} last_eval={r['last_evaluated_at']}")
         print("\nRead-only list. No live scores, thresholds or orders were changed.")
         raise SystemExit(0)
