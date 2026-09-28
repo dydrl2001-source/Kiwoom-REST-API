@@ -528,6 +528,55 @@ def _bucket_buy_share(v):
     return "<45%"
 
 
+def _micro_state(strength,buy_share):
+    """Pre-registered shadow heuristic; not a live trade signal."""
+    s=safe_num(strength);b=safe_num(buy_share)
+    if s is None or b is None:return "NO_DATA"
+    if s>=120 and b>=.65:return "STRONG_CONFIRM"
+    if s<80 and b<.45:return "WEAK_CONFIRM"
+    if s>=100 and b>=.55:return "POSITIVE"
+    if s<100 and b<.45:return "NEGATIVE"
+    return "MIXED"
+
+
+def _learning_dims(r):
+    """Return pre-registered single and interaction dimensions.
+
+    Keeping the interaction list explicit prevents an uncontrolled combinatorial
+    search over every possible feature combination.
+    """
+    tier=r["watch_tier"] or "UNKNOWN"
+    stance=r["market_stance"] or "UNKNOWN"
+    trigger=r["trigger_state"] or "UNKNOWN"
+    session=r["session_bucket"] or "UNKNOWN"
+    setup=_bucket_setup(r["setup_score"])
+    dims={
+        "TIER":tier,
+        "STANCE":stance,
+        "TRIGGER":trigger,
+        "SESSION":session,
+        "CATALYST":r["catalyst_grade"] or "UNKNOWN",
+        "SETUP":setup,
+        "STANCE_TRIGGER":stance+" | "+trigger,
+        "TIER_SESSION":tier+" | "+session,
+        "STANCE_SETUP":stance+" | "+setup,
+        "SETUP_TRIGGER":setup+" | "+trigger,
+        "STANCE_SETUP_TRIGGER":stance+" | "+setup+" | "+trigger,
+    }
+    clean_micro=int(r["micro_tick_count_15s"] or 0)>0 and int(r["micro_gap_count_15s"] or 0)==0
+    if clean_micro:
+        strength=_bucket_strength(r["micro_strength"])
+        buy_share=_bucket_buy_share(r["micro_buy_share_15s"])
+        micro=_micro_state(r["micro_strength"],r["micro_buy_share_15s"])
+        dims["MICRO_STRENGTH"]=strength
+        dims["MICRO_BUY_SHARE"]=buy_share
+        dims["MICRO_STATE"]=micro
+        dims["STANCE_TRIGGER_MICRO"]=stance+" | "+trigger+" | "+micro
+        dims["SETUP_TRIGGER_MICRO"]=setup+" | "+trigger+" | "+micro
+        dims["STANCE_SETUP_TRIGGER_MICRO"]=stance+" | "+setup+" | "+trigger+" | "+micro
+    return dims
+
+
 def refresh_segments():
     with db() as c,c.cursor() as cur:
         cur.execute("""SELECT a.snapshot_time,a.stock_code,
@@ -546,23 +595,7 @@ def refresh_segments():
         groups=defaultdict(list)
         for r in rows:
             horizon=r["horizon"]
-            tier=r["watch_tier"] or "UNKNOWN"
-            stance=r["market_stance"] or "UNKNOWN"
-            trigger=r["trigger_state"] or "UNKNOWN"
-            session=r["session_bucket"] or "UNKNOWN"
-            dims={
-                "TIER":tier,
-                "STANCE":stance,
-                "TRIGGER":trigger,
-                "SESSION":session,
-                "CATALYST":r["catalyst_grade"] or "UNKNOWN",
-                "SETUP":_bucket_setup(r["setup_score"]),
-                "STANCE_TRIGGER":stance+" | "+trigger,
-                "TIER_SESSION":tier+" | "+session,
-            }
-            if int(r["micro_tick_count_15s"] or 0)>0 and int(r["micro_gap_count_15s"] or 0)==0:
-                dims["MICRO_STRENGTH"]=_bucket_strength(r["micro_strength"])
-                dims["MICRO_BUY_SHARE"]=_bucket_buy_share(r["micro_buy_share_15s"])
+            dims=_learning_dims(r)
             for kind,value in dims.items():
                 groups[(kind,value,horizon)].append(r)
         cur.execute("DELETE FROM market_os_learning_segments")
