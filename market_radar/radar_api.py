@@ -1,4 +1,4 @@
-import os, json, re, secrets
+import os, json, re, secrets, threading, time as pytime
 from datetime import datetime, timedelta, timezone, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -14,10 +14,30 @@ try:
 except Exception:
     radar_flow_delta = None
     radar_reversal_signals = None
+try:
+    from report_library import clean_report as radar_clean_report
+except Exception:
+    radar_clean_report = None
+try:
+    from evidence_identity import identity_quality, usable_as_catalyst, usable_for_theme, stock_context
+except Exception:
+    def identity_quality(name,text,source_kind="",official_sector=None): return "NAME_MATCH"
+    def usable_as_catalyst(q): return q not in ("ENTITY_CONFLICT","LIST_MENTION","MISSING_NAME")
+    def usable_for_theme(q): return q in ("VERIFIED","CONTEXT_VERIFIED")
+    def stock_context(text,name,radius=130): return str(text or "")
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
 KIWOOM_INGEST_TOKEN = os.getenv("KIWOOM_INGEST_TOKEN", "")
+DASHBOARD_CACHE_SECONDS = max(5, min(60, int(os.getenv("DASHBOARD_CACHE_SECONDS", "20"))))
+_LEADER_CALENDAR_CACHE_SECONDS = max(60, min(3600, int(os.getenv("LEADER_CALENDAR_CACHE_SECONDS", "300"))))
+_DASH_CACHE_LOCK = threading.Lock()
+_DASH_CACHE = None
+_DASH_CACHE_AT = 0.0
+_LEADER_CAL_CACHE_LOCK = threading.Lock()
+_LEADER_CAL_CACHE = None
+_LEADER_CAL_CACHE_AT = 0.0
+_LEADER_CAL_CACHE_KEY = None
 app = FastAPI(title="Market Radar", version="0.6.1")
 
 THEME_KEYWORDS = {
@@ -35,6 +55,7 @@ THEME_KEYWORDS = {
     "항공/여행": ["항공", "대한항공", "여객", "여행", "공항"],
     "정유/유가": ["정유", "유가", "WTI", "브렌트", "석유"],
     "화장품": ["화장품", "뷰티"],
+    "태양광/에너지": ["태양광", "솔라", "태양광 모듈", "폴리실리콘"],
     "금융": ["은행", "금융", "증권", "보험"],
 }
 
@@ -55,6 +76,8 @@ STOCK_THEME_HINTS = {
     "효성중공업":"전력/변압기/케이블","HD현대일렉트릭":"전력/변압기/케이블",
     "대한항공":"항공/여행",
     "현대차":"자동차/EV","기아":"자동차/EV",
+    "OCI홀딩스":"태양광/에너지","한화솔루션":"태양광/에너지",
+    "SK이노베이션":"2차전지/배터리",
 }
 
 def is_etf_like(name):
@@ -82,8 +105,10 @@ def choose_market_theme(name, official_sector, catalyst):
     if name in STOCK_THEME_HINTS:
         return STOCK_THEME_HINTS[name]
     strength=int((catalyst or {}).get("material_strength") or 0)
-    if strength >= 2:
-        t=infer_theme((catalyst or {}).get("best_text") or "")
+    # Theme inference is accepted only when the evidence was identity/context verified
+    # and the theme came from text close to the actual stock name.
+    if strength >= 2 and usable_for_theme((catalyst or {}).get("best_identity_quality")):
+        t=(catalyst or {}).get("theme")
         if t:
             return t
     return official_sector or "미분류"
@@ -119,7 +144,8 @@ def stock_aliases(code, name):
         if x and str(x).strip():
             out.append(str(x).strip())
     if name:
-        compact = re.sub(r"[\s㈜()주식회사]+", "", str(name))
+        compact = str(name).replace("주식회사","").replace("㈜","")
+        compact = re.sub(r"[\s()]+", "", compact)
         if len(compact) >= 2 and compact not in out:
             out.append(compact)
     return out
@@ -132,18 +158,27 @@ def extract_links(text):
             links.append(u)
     return links[:8]
 
-def catalyst_for_stock(messages, code, name):
+def catalyst_for_stock(messages, code, name, official_sector=None):
     aliases = stock_aliases(code, name)
     matched = []
+    rejected = 0
     for m in messages:
         txt = m["text"] or ""
         compact = re.sub(r"\s+", "", txt)
-        if any((a in txt) or (len(a) >= 2 and a in compact) for a in aliases):
-            matched.append(m)
+        if not any((a in txt) or (len(a) >= 2 and a in compact) for a in aliases):
+            continue
+        q=identity_quality(name,txt,"Telegram",official_sector)
+        if not usable_as_catalyst(q):
+            rejected += 1
+            continue
+        mm=dict(m)
+        mm["identity_quality"]=q
+        matched.append(mm)
     if not matched:
         return {
             "summary": None, "status": "NO_MATCH", "channels": 0, "theme": None,
             "first_seen": None, "last_seen": None, "items": [], "article_links": [],
+            "identity_rejected":rejected,
             "note": "최근 24시간 Telegram 직접 일치 재료 미확인"
         }
 
@@ -164,7 +199,11 @@ def catalyst_for_stock(messages, code, name):
 
     theme = None
     for x in reversed(matched):
-        theme = infer_theme(x["text"])
+        q=x.get("identity_quality")
+        if not usable_for_theme(q):
+            continue
+        context=stock_context(x.get("text") or "",name)
+        theme = infer_theme(context)
         if theme:
             break
 
@@ -182,6 +221,7 @@ def catalyst_for_stock(messages, code, name):
             "text": txt[:6000],
             "telegram_url": x.get("message_url"),
             "links": links,
+            "identity_quality":x.get("identity_quality"),
         })
     summary = re.sub(r"\s+", " ", last["text"] or "").strip()
     return {
@@ -193,6 +233,7 @@ def catalyst_for_stock(messages, code, name):
         "last_seen": iso(last_dt),
         "items": items,
         "article_links": article_links[:8],
+        "identity_rejected":rejected,
         "note": None,
     }
 
@@ -203,33 +244,41 @@ def sector_reason_summary(group):
     for x in stocks:
         d=x.get("material_digest") or {}
         strength=int(d.get("material_strength") or 0)
+        identity=d.get("identity_quality") or "UNVERIFIED"
         if strength>=2:
             evidence.append({
                 "code":x.get("code"),"name":x.get("name"),
                 "summary":d.get("summary"),"assessment":d.get("assessment"),
-                "source_kind":d.get("source_kind"),"strength":strength
+                "source_kind":d.get("source_kind"),"strength":strength,
+                "material_type":d.get("material_type"),"identity_quality":identity
             })
-    evidence.sort(key=lambda x:(-x["strength"],x.get("name") or ""))
-    direct=[x for x in evidence if x["strength"]>=3]
+    evidence.sort(key=lambda x:(-x["strength"],0 if x["identity_quality"] in ("VERIFIED","CONTEXT_VERIFIED") else 1,x.get("name") or ""))
+    verified_direct=[x for x in evidence if x["strength"]>=3 and x["identity_quality"] in ("VERIFIED","CONTEXT_VERIFIED")]
+    name_direct=[x for x in evidence if x["strength"]>=3 and x["identity_quality"]=="NAME_MATCH"]
     sector=[x for x in evidence if x["strength"]==2]
     positive=int(group.get("positive") or 0)
     count=int(group.get("change_n") or group.get("count") or 0)
     breadth=f"{positive}/{count}종목 상승" if count else "상승폭 표본 부족"
     recent=group.get("recent_turnover_krw") or 0
 
-    if len(direct)>=2:
-        names=", ".join(x["name"] for x in direct[:3] if x.get("name"))
-        reason=f"복수 종목에서 직접 재료가 확인됨({names}). {breadth}이며 거래대금 동행 여부를 함께 확인하는 구간."
-        level="SUPPORTED"
-        label="복수 직접재료"
-    elif direct:
-        x=direct[0]
-        reason=f"{x.get('name')}: {x.get('summary') or '직접 재료 확인'}. 섹터 전체 공통 원인으로 단정하긴 어렵지만 {breadth}."
+    if len(verified_direct)>=2:
+        names=", ".join(x["name"] for x in verified_direct[:3] if x.get("name"))
+        reason=f"복수 종목에 신원 확인된 개별 재료가 있음({names}). {breadth}. 다만 서로 다른 사건일 수 있어 섹터 공통 원인으로 확정하지 않음."
         level="PARTIAL"
-        label="개별 직접재료"
+        label="복수 개별재료"
+    elif verified_direct:
+        x=verified_direct[0]
+        reason=f"{x.get('name')}: {x.get('summary') or '직접 재료 확인'}. {breadth}. 섹터 전체 공통 원인 여부는 미확인."
+        level="PARTIAL"
+        label="신원확인 직접재료"
+    elif name_direct:
+        x=name_direct[0]
+        reason=f"{x.get('name')} 관련 직접재료 후보가 있으나 종목명 일치 수준이라 동명이인·맥락 확인이 더 필요함. {breadth}."
+        level="UNCONFIRMED"
+        label="신원 추가확인"
     elif sector:
         x=sector[0]
-        reason=f"업종·테마형 재료가 관측됨: {x.get('summary') or x.get('assessment') or '테마 재료'}. {breadth}."
+        reason=f"업종·테마형 재료가 관측됨: {x.get('summary') or x.get('assessment') or '테마 재료'}. {breadth}. 공통 촉발 원인은 미확정."
         level="PARTIAL"
         label="테마형 재료"
     elif recent and recent>0:
@@ -243,9 +292,8 @@ def sector_reason_summary(group):
     return {
         "summary":reason,"level":level,"label":label,
         "evidence":evidence[:4],
-        "note":"섹터 구성종목의 뉴스·공시·Telegram·거래 관측을 묶은 설명이며 인과관계 확정이 아님"
+        "note":"섹터 구성종목의 뉴스·공시·Telegram·거래 관측 요약. 신원 검증과 공통 인과는 별개"
     }
-
 
 def theme_strength_for_groups(groups):
     """Operational 0-100 *current-theme observation strength*, not return probability.
@@ -362,6 +410,166 @@ def build_sector_groups(rows):
         g["sector_rank"] = i
     return out
 
+def build_leader_calendar(cur, now):
+    """Recent four work-week grid from locally stored end-of-day-like trade snapshots.
+
+    Each date uses the latest stored trade-value snapshot for that KST date, then
+    groups stocks that were up at least 4%. Missing days stay blank; no history is invented.
+    """
+    global _LEADER_CAL_CACHE,_LEADER_CAL_CACHE_AT,_LEADER_CAL_CACHE_KEY
+    cache_key=now.astimezone(KST).date().isoformat()
+    with _LEADER_CAL_CACHE_LOCK:
+        if (_LEADER_CAL_CACHE is not None and _LEADER_CAL_CACHE_KEY==cache_key
+                and pytime.monotonic()-_LEADER_CAL_CACHE_AT<_LEADER_CALENDAR_CACHE_SECONDS):
+            return _LEADER_CAL_CACHE
+    monday=(now.astimezone(KST)-timedelta(days=now.astimezone(KST).weekday())).date()
+    start=monday-timedelta(days=21)
+    end=monday+timedelta(days=4)
+    agg={}
+    if table_exists(cur,"market_trade_value_snapshots"):
+        try:
+            cur.execute("""WITH day_last AS (
+                             SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,
+                                    MAX(snapshot_time) AS t
+                             FROM market_trade_value_snapshots
+                             WHERE snapshot_time >= %s AND snapshot_time < %s
+                             GROUP BY 1
+                           ), strong AS (
+                             SELECT (m.snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,
+                                    COALESCE(NULLIF(m.market_theme,''),NULLIF(m.official_sector,''),'미분류') AS theme,
+                                    m.stock_code,m.trade_value_krw,m.change_rate
+                             FROM market_trade_value_snapshots m
+                             JOIN day_last dl ON m.snapshot_time=dl.t
+                             WHERE m.change_rate>=4 AND COALESCE(m.rank_no,999)<=100
+                           )
+                           SELECT d,theme,COUNT(*),COALESCE(SUM(trade_value_krw),0),
+                                  AVG(change_rate)
+                           FROM strong
+                           GROUP BY d,theme
+                           ORDER BY d,COUNT(*) DESC,SUM(trade_value_krw) DESC""",
+                        (datetime.combine(start,dtime.min,tzinfo=KST).astimezone(timezone.utc),
+                         datetime.combine(end+timedelta(days=1),dtime.min,tzinfo=KST).astimezone(timezone.utc)))
+            for d,theme,count,total,avg in cur.fetchall():
+                agg.setdefault(d,[]).append({
+                    "theme":theme,"count":int(count or 0),
+                    "trade_value_krw":float(total or 0),
+                    "avg_change_rate":float(avg) if avg is not None else None
+                })
+        except Exception:
+            agg={}
+    cells=[]
+    today=now.astimezone(KST).date()
+    d=start
+    while d<=end:
+        if d.weekday()<5:
+            themes=sorted(agg.get(d,[]),key=lambda x:(-x["count"],-x["trade_value_krw"]))[:3]
+            cells.append({
+                "date":d.isoformat(),"day":d.day,"weekday":d.weekday(),
+                "future":d>today,"themes":themes
+            })
+        d+=timedelta(days=1)
+    observed=[x["date"] for x in cells if x["themes"]]
+    payload={
+        "start":start.isoformat(),"end":end.isoformat(),"cells":cells,
+        "observed_days":len(observed),
+        "coverage_start":min(observed) if observed else None,
+        "note":"각 날짜의 마지막 저장 거래대금 스냅샷에서 +4% 이상 종목을 테마별 집계. 데이터가 없는 과거 날짜는 비워 둠"
+    }
+    with _LEADER_CAL_CACHE_LOCK:
+        _LEADER_CAL_CACHE=payload
+        _LEADER_CAL_CACHE_AT=pytime.monotonic()
+        _LEADER_CAL_CACHE_KEY=cache_key
+    return payload
+
+
+def build_leader_desk(cur, trade_map, query_rows, now, sector_groups=None):
+    """Reference-style home leader desk using current local market observations."""
+    qmap={x.get("code"):x for x in query_rows}
+    strong=[]
+    for code,tv in sorted(trade_map.items(),key=lambda kv:(kv[1].get("rank") is None,kv[1].get("rank") or 999)):
+        name=tv.get("name") or code
+        if is_etf_like(name):continue
+        chg=tv.get("change_rate")
+        try:
+            if chg is None or float(chg)<4:continue
+        except (TypeError,ValueError):
+            continue
+        q=qmap.get(code) or {}
+        theme=q.get("market_theme") or STOCK_THEME_HINTS.get(name) or tv.get("theme") or tv.get("sector") or "미분류"
+        strong.append({
+            "code":code,"name":name,"trade_rank":tv.get("rank"),
+            "trade_value_krw":tv.get("trade_value"),
+            "change_rate":float(chg),"current_price_krw":tv.get("current_price"),
+            "theme":theme,"query_rank":q.get("rank"),
+            "rank_history":q.get("rank_history") or {},
+            "material_type":(q.get("material_digest") or {}).get("material_type"),
+        })
+        if len(strong)>=16:break
+
+    groups={}
+    for x in strong:
+        g=groups.setdefault(x["theme"],{"name":x["theme"],"count":0,"trade_value_krw":0.0,
+                                       "change_sum":0.0,"stocks":[]})
+        g["count"]+=1
+        g["trade_value_krw"]+=float(x.get("trade_value_krw") or 0)
+        g["change_sum"]+=float(x.get("change_rate") or 0)
+        g["stocks"].append(x)
+    sectors=[]
+    for g in groups.values():
+        g["avg_change_rate"]=g["change_sum"]/g["count"] if g["count"] else None
+        g["stocks"]=sorted(g["stocks"],key=lambda x:(x.get("trade_rank") is None,x.get("trade_rank") or 999))[:5]
+        sectors.append(g)
+    sectors.sort(key=lambda g:(-g["count"],-g["trade_value_krw"],-(g["avg_change_rate"] or 0)))
+    sector_info={g.get("name"):g for g in (sector_groups or [])}
+    for g in sectors:
+        ref=sector_info.get(g.get("name")) or {}
+        g["theme_strength"]=ref.get("theme_strength")
+        g["theme_strength_label"]=ref.get("theme_strength_label")
+        g["reason"]=ref.get("reason") or {}
+
+    return {
+        "threshold_pct":4,
+        "strong_stocks":strong[:12],
+        "leading_sectors":sectors[:4],
+        "calendar":build_leader_calendar(cur,now),
+        "note":"거래대금 상위 100 표본 중 +4% 이상 종목을 현재 테마로 묶은 실시간 관찰. 전체 시장 전수·매수추천이 아님"
+    }
+
+
+def build_home_candidates(cur, rows):
+    """Read the current local candidate tracker for a compact Home Top5."""
+    if not table_exists(cur,"radar_candidate_episodes"):
+        return []
+    rowmap={x.get("code"):x for x in rows}
+    try:
+        cur.execute("""SELECT stock_code,stock_name,entry_score,last_score,peak_score,primary_type,
+                              market_theme,event_type,chart_state,started_at,last_seen_at
+                       FROM radar_candidate_episodes
+                       WHERE status='ACTIVE' AND last_seen_at>now()-interval '10 minutes'
+                       ORDER BY last_score DESC,peak_score DESC,last_seen_at DESC
+                       LIMIT 12""")
+        out=[]
+        for code,name,entry,last,peak,ptype,theme,event,chart,started,last_seen in cur.fetchall():
+            r=rowmap.get(code) or {}
+            out.append({
+                "code":code,"name":name or r.get("name") or code,
+                "attention_score":last,"entry_score":entry,"peak_score":peak,
+                "primary_type":ptype,"market_theme":theme or r.get("market_theme"),
+                "event_type":event or (r.get("material_digest") or {}).get("material_type"),
+                "chart_state":chart or r.get("chart_state"),
+                "started_at":iso(started),"last_seen_at":iso(last_seen),
+                "change_rate":r.get("change_rate"),
+                "rank":r.get("rank"),"trade_rank":r.get("trade_rank"),
+                "trade_value_krw":r.get("trade_value_krw"),
+                "recent_turnover_krw":r.get("recent_turnover_krw"),
+                "rank_history":r.get("rank_history") or {},
+                "reversal_signal":r.get("reversal_signal"),
+            })
+        return out[:5]
+    except Exception:
+        return []
+
+
 def stock_flow_state(rank_no, rank_change, trade_rank, catalyst):
     material = int(catalyst.get("material_strength") or 0) >= 2
     money = trade_rank is not None and int(trade_rank) <= 20
@@ -423,7 +631,8 @@ def clean_material_text(text):
 
 NOISE_PATTERNS = [
     "상한가 및 상승종목","상승종목","급등주","오늘의 종목","관심종목","공략법","매매전략",
-    "장마감","마감시황","종목추천","추천주","vs ","수익률","급등일보","유튜브","youtube"
+    "장마감","마감시황","종목추천","추천주","vs ","수익률","급등일보","유튜브","youtube",
+    "상한가 및 급등","특징 상한가","특징주 정리","급등종목","테마주 정리","관련주 정리"
 ]
 DIRECT_PATTERNS = [
     "공시","공급계약","수주","계약 체결","mou","승인","허가","fda","임상","특허","양산",
@@ -447,22 +656,38 @@ def evidence_strength(text):
         return 2,"SECTOR"
     return 1,"MENTION"
 
-def enrich_catalyst(cat, stock_name=None):
+def enrich_catalyst(cat, stock_name=None, official_sector=None):
     candidates=[]
+    warnings=[]
     for d in cat.get("dart") or []:
         txt=d.get("report_nm") or ""
-        candidates.append((4,"DART","DART",txt,d))
+        score,kind=evidence_strength(txt)
+        # DART verifies identity/source authenticity, not causal relevance.
+        # Generic filings remain weak; contract/earnings/approval text can score higher.
+        score=max(1,score)
+        candidates.append((score,kind if kind!="NONE" else "DART","DART",txt,d,"VERIFIED"))
     for n in cat.get("external_news") or []:
         txt=n.get("title") or ""
+        q=identity_quality(stock_name,txt,"NEWS",official_sector)
+        if not usable_as_catalyst(q):
+            warnings.append({"source":"뉴스","quality":q,"text":txt[:180]})
+            continue
         score,kind=evidence_strength(txt)
-        candidates.append((score,kind,"뉴스",txt,n))
+        candidates.append((score,kind,"뉴스",txt,n,q))
     for it in cat.get("items") or []:
         txt=it.get("text") or ""
+        q=it.get("identity_quality") or identity_quality(stock_name,txt,"Telegram",official_sector)
+        if not usable_as_catalyst(q):
+            warnings.append({"source":"Telegram","quality":q,"text":txt[:180]})
+            continue
         score,kind=evidence_strength(txt)
-        candidates.append((score,kind,"Telegram",txt,it))
-    candidates.sort(key=lambda x:x[0],reverse=True)
-    best=candidates[0] if candidates else (0,"NONE","미확인","",None)
-    inferred=infer_theme(best[3]) if best and best[3] else None
+        candidates.append((score,kind,"Telegram",txt,it,q))
+    candidates.sort(key=lambda x:(x[0], 1 if x[5] in ("VERIFIED","CONTEXT_VERIFIED") else 0),reverse=True)
+    best=candidates[0] if candidates else (0,"NONE","미확인","",None,"UNVERIFIED")
+    # Only infer a theme from verified/context-verified text adjacent to the stock name.
+    inferred=None
+    if usable_for_theme(best[5]):
+        inferred=infer_theme(stock_context(best[3],stock_name))
     if inferred:
         cat["theme"]=inferred
     cat["material_strength"]=best[0]
@@ -470,8 +695,14 @@ def enrich_catalyst(cat, stock_name=None):
     cat["best_source"]=best[2]
     cat["best_text"]=best[3]
     cat["best_evidence"]=best[4]
+    cat["best_identity_quality"]=best[5]
+    cat["identity_warnings"]=warnings[:4]
     if best[1] == "DART":
-        cat["quality_note"]="DART 공식 공시"
+        cat["quality_note"]="DART 공식 공시 · 종목 신원 확인"
+    elif best[5]=="CONTEXT_VERIFIED" and best[0]>=2:
+        cat["quality_note"]="종목명+업종 문맥 확인된 공개 재료"
+    elif best[5]=="NAME_MATCH" and best[0]>=2:
+        cat["quality_note"]="종목명 일치 · 동명이인/맥락 추가 확인 필요"
     elif best[0] == 0 and candidates:
         cat["quality_note"]="가격 설명력이 낮은 시황·리스트·매매콘텐츠 가능성"
     elif best[0] == 1:
@@ -483,6 +714,120 @@ def enrich_catalyst(cat, stock_name=None):
     else:
         cat["quality_note"]="직접 재료 미확인"
     return cat
+
+def classify_material_type(cat, external_event=None):
+    """Stable visual category for the home dashboard; not a causal verdict."""
+    allowed={"수주·공급계약","실적·가이던스","기술·제품·양산","정책·규제",
+             "승인·임상","자본·주주환원","업황·가격","인수·사업재편","기타·미확인"}
+    if external_event in allowed and external_event!="기타·미확인":
+        return external_event
+    text=" ".join([
+        str(cat.get("best_text") or ""),
+        " ".join(str(x.get("report_nm") or "") for x in (cat.get("dart") or [])[:3]),
+        " ".join(str(x.get("title") or "") for x in (cat.get("external_news") or [])[:3]),
+    ]).lower()
+    rules=[
+        ("승인·임상",("fda","임상","승인","허가","nda","bnda")),
+        ("수주·공급계약",("공급계약","수주","계약 체결","mou","납품","공급 계약")),
+        ("실적·가이던스",("영업이익","매출","실적","가이던스","전망","흑자","적자")),
+        ("자본·주주환원",("자사주","배당","소각","유상증자","무상증자","전환사채","cb")),
+        ("인수·사업재편",("인수","합병","m&a","분할","매각","지분 취득")),
+        ("기술·제품·양산",("특허","양산","신제품","출시","기술 확보","개발 완료","인증")),
+        ("정책·규제",("정책","법안","관세","규제","정부","지원책")),
+        ("업황·가격",("업황","가격 상승","가격 인상","수요","공급 부족","hbm","반도체","원전","로봇","전력")),
+    ]
+    for name,words in rules:
+        if any(w in text for w in words):
+            return name
+    return "기타·미확인"
+
+
+def compact_external_report(report, completed_at=None, model=None):
+    if not radar_clean_report:
+        return None
+    clean=radar_clean_report(report)
+    if not clean:return None
+    text=clean.get("text") or ""
+    event=None
+    m=re.search(r"(?m)^\s*재료분류\s*[:：]\s*([^\n]+)",text)
+    if m:event=m.group(1).strip().strip("*")
+    # Home shows only the 핵심 재료 section or a compact first paragraph.
+    sec=re.search(r"(?ms)(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*\*)?핵심 재료(?:\*\*)?\s*[:：]?\s*\n?(.*?)(?=\n\s*(?:#{1,4}\s*)?(?:\*\*)?(?:새로움과 반복|시장 연결|반대 근거·미확인)|\Z)",text)
+    body=(sec.group(1) if sec else text).strip()
+    body=re.sub(r"\s+"," ",body)
+    body=re.sub(r"\[[^\]]{0,40}\]"," ",body)
+    body=re.sub(r"\s+"," ",body).strip()
+    summary=(body[:190]+"…") if len(body)>190 else body
+    age_sec=None
+    try:
+        age_sec=int((datetime.now(timezone.utc)-completed_at).total_seconds()) if completed_at else None
+    except Exception:
+        age_sec=None
+    return {
+        "summary":summary or "인용 포함 외부 조사 보고서",
+        "event_type":event,
+        "citation_count":len(clean.get("citations") or []),
+        "source_count":len(clean.get("sources") or []),
+        "sources":(clean.get("sources") or [])[:3],
+        "completed_at":iso(completed_at),
+        "age_sec":age_sec,
+        "stale":bool(age_sec is not None and age_sec>21600),
+        "model":model,
+        "status":"CITED_REPORT"
+    }
+
+
+def build_rank_history(cur, current_time, codes):
+    out={code:{"rank_30s":None,"rank_5m":None,"best_today":None,"first_today":None,
+               "movement":"—","movement_kind":"FLAT"} for code in codes}
+    if not codes or not current_time or not table_exists(cur,"market_rank_snapshots"):
+        return out
+    day_start=current_time.astimezone(KST).replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+    queries=[
+        ("rank_30s",current_time-timedelta(seconds=20),current_time-timedelta(seconds=100)),
+        ("rank_5m",current_time-timedelta(minutes=4,seconds=30),current_time-timedelta(minutes=7)),
+    ]
+    for key,upper,lower in queries:
+        cur.execute("""SELECT DISTINCT ON(stock_code) stock_code,rank_no,snapshot_time
+                       FROM market_rank_snapshots
+                       WHERE stock_code=ANY(%s) AND snapshot_time<=%s AND snapshot_time>=%s
+                       ORDER BY stock_code,snapshot_time DESC""",(list(codes),upper,lower))
+        for code,rank_no,snapshot_time in cur.fetchall():
+            if code in out:out[code][key]=rank_no
+    cur.execute("""SELECT stock_code,MIN(rank_no),MIN(snapshot_time),COUNT(*)
+                   FROM market_rank_snapshots
+                   WHERE stock_code=ANY(%s) AND snapshot_time>=%s AND snapshot_time<=%s
+                   GROUP BY stock_code""",(list(codes),day_start,current_time))
+    for code,best,first_seen,count in cur.fetchall():
+        if code in out:
+            out[code]["best_today"]=best
+            out[code]["first_today"]=iso(first_seen)
+            out[code]["seen_today"]=int(count or 0)
+            out[code]["had_earlier"]=bool(first_seen and first_seen < current_time-timedelta(minutes=2))
+    return out
+
+
+def apply_rank_movement(row, history):
+    h=history.get(row.get("code")) or {}
+    current=row.get("rank")
+    prior=h.get("rank_30s")
+    five=h.get("rank_5m")
+    best=h.get("best_today")
+    movement="—";kind="FLAT";delta=None
+    if current is not None and prior is not None:
+        delta=int(prior)-int(current)
+        if delta>0:movement=f"▲{delta}";kind="UP"
+        elif delta<0:movement=f"▼{abs(delta)}";kind="DOWN"
+    elif current is not None:
+        # If it was seen materially earlier today but vanished from the recent comparison window, call it re-entry.
+        if five is not None or h.get("had_earlier"):movement="RE";kind="REENTRY"
+        else:movement="NEW";kind="NEW"
+    row["rank_history"]={
+        **h,"delta_30s":delta,"movement":movement,"movement_kind":kind,
+        "current":current,"best_today":best
+    }
+    return row
+
 
 def material_digest(cat, flow_state, stock_name=None):
     news=cat.get("external_news") or []
@@ -544,6 +889,9 @@ def material_digest(cat, flow_state, stock_name=None):
         "material_strength": strength,
         "material_class": mclass,
         "quality_note": cat.get("quality_note"),
+        "identity_quality": cat.get("best_identity_quality") or "UNVERIFIED",
+        "identity_warning_count": len(cat.get("identity_warnings") or []) + int(cat.get("identity_rejected") or 0),
+        "material_type": classify_material_type(cat),
     }
 
 def response_band(query_rank, trade_rank, trade_value=None):
@@ -656,7 +1004,12 @@ def feedback(payload: dict = Body(...), x_dashboard_token: Optional[str] = Heade
 
 @app.get("/api/dashboard")
 def dashboard(x_dashboard_token: Optional[str] = Header(None)):
+    global _DASH_CACHE,_DASH_CACHE_AT
     require_token(x_dashboard_token)
+    now_mono=pytime.monotonic()
+    with _DASH_CACHE_LOCK:
+        if _DASH_CACHE is not None and now_mono-_DASH_CACHE_AT<DASHBOARD_CACHE_SECONDS:
+            return _DASH_CACHE
     with get_db() as c:
         with c.cursor() as cur:
             # system
@@ -876,6 +1229,15 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         current=h[0] if h else None
                         previous=h[1] if len(h)>1 else None
                         value,state,seconds=radar_flow_delta(current,previous) if current else (None,"NO_SAMPLE",None)
+                        exchange_at=None
+                        try:
+                            exchange_at=datetime.fromisoformat(current.get("exchange_at")) if current and current.get("exchange_at") else None
+                            if exchange_at and exchange_at.tzinfo is None:exchange_at=exchange_at.replace(tzinfo=timezone.utc)
+                        except Exception:
+                            exchange_at=None
+                        if state=="OK" and (not exchange_at or (datetime.now(timezone.utc)-exchange_at.astimezone(timezone.utc)).total_seconds()>120):
+                            value=None
+                            state="STALE_EXCHANGE"
                         flow_map[code]={
                             "recent_turnover_krw":value if state=="OK" else None,
                             "recent_turnover_seconds":seconds,
@@ -885,6 +1247,26 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         }
                 except Exception:
                     flow_map={}
+
+            # Cached cited OS/web research for home cards. Read-only; does not trigger a model call.
+            external_report_map={}
+            if radar_clean_report and table_exists(cur,"web_research_runs") and ranks:
+                try:
+                    rank_codes=[x[0] for x in ranks if x and x[0]]
+                    cur.execute("""SELECT DISTINCT ON(stock_code)
+                                          stock_code,completed_at,model,report
+                                   FROM web_research_runs
+                                   WHERE stock_code=ANY(%s) AND status='CITED_REPORT'
+                                     AND completed_at>now()-interval '7 days'
+                                   ORDER BY stock_code,completed_at DESC,id DESC""",(rank_codes,))
+                    for code,completed_at,model,report in cur.fetchall():
+                        compact=compact_external_report(report,completed_at,model)
+                        if compact:external_report_map[code]=compact
+                except Exception:
+                    external_report_map={}
+
+            rank_codes=[x[0] for x in ranks if x and x[0]]
+            rank_history_map=build_rank_history(cur,rank_time,rank_codes)
 
             rows = []
             for r in ranks:
@@ -900,13 +1282,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         ratio = float(trade_value)/float(cap2)*100
                 except Exception:
                     ratio = None
-                cat = catalyst_for_stock(messages, code, name)
+                cat = catalyst_for_stock(messages, code, name, sector2)
                 cat["external_news"] = news_map.get(code, [])
                 cat["dart"] = dart_map.get(code, [])
                 if cat["status"] == "NO_MATCH" and (cat["external_news"] or cat["dart"]):
                     cat["status"] = "NEWS_ONLY"
                     cat["note"] = "Telegram 직접매칭 없음 · 외부뉴스/공시 fallback"
-                cat=enrich_catalyst(cat,name)
+                cat=enrich_catalyst(cat,name,sector2)
                 theme2 = choose_market_theme(name, sector2, cat)
                 flow = stock_flow_state(rank_no, rank_change, tv.get("rank"), cat)
                 row = {
@@ -930,9 +1312,16 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 row["material_digest"].update(material_synthesis(
                     row["material_digest"],rank_no,tv.get("rank"),chg,flow
                 ))
+                row["external_research"]=external_report_map.get(code)
+                if row["external_research"]:
+                    event=row["external_research"].get("event_type")
+                    row["material_digest"]["material_type"]=classify_material_type(cat,event)
+                apply_rank_movement(row,rank_history_map)
                 rows.append(row)
 
             sector_groups = build_sector_groups(rows)
+            leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc),sector_groups)
+            home_candidates=build_home_candidates(cur,rows)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -948,12 +1337,12 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         trade_rows.append(x)
                     continue
                 name=tv.get("name") or code
-                cat=catalyst_for_stock(messages,code,name)
+                cat=catalyst_for_stock(messages,code,name,tv.get("sector"))
                 cat["external_news"]=news_map.get(code,[])
                 cat["dart"]=dart_map.get(code,[])
                 if cat["status"]=="NO_MATCH" and (cat["external_news"] or cat["dart"]):
                     cat["status"]="NEWS_ONLY";cat["note"]="Telegram 직접매칭 없음 · 외부뉴스/공시 fallback"
-                cat=enrich_catalyst(cat,name)
+                cat=enrich_catalyst(cat,name,tv.get("sector"))
                 cap=tv.get("market_cap"); value=tv.get("trade_value")
                 ratio=(float(value)/float(cap)*100) if value is not None and cap and float(cap)>0 else None
                 theme=choose_market_theme(name, tv.get("sector"), cat)
@@ -976,6 +1365,10 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 x["material_digest"].update(material_synthesis(
                     x["material_digest"],None,tv.get("rank"),tv.get("change_rate"),flow
                 ))
+                x["external_research"]=external_report_map.get(code)
+                if x["external_research"]:
+                    x["material_digest"]["material_type"]=classify_material_type(cat,x["external_research"].get("event_type"))
+                x["rank_history"]={"movement":"—","movement_kind":"FLAT","current":None,"rank_30s":None,"rank_5m":None,"best_today":None}
                 if is_etf_like(name):
                     etf_trade_rows.append(x)
                 else:
@@ -1041,6 +1434,24 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 f"재료 품질: 직접 재료 후보 {material_stats['direct']}개, 테마형 {material_stats['sector']}개, "
                 f"약한 언급/미확인 {material_stats['weak']}개."
             )
+            home_strength=sorted(sector_groups,key=lambda g:(g.get("theme_strength") or 0),reverse=True)
+            strongest=home_strength[0] if home_strength else None
+            fastest=sorted(sector_groups,key=lambda g:(g.get("recent_turnover_krw") or 0),reverse=True)
+            fastest=fastest[0] if fastest and (fastest[0].get("recent_turnover_krw") or 0)>0 else None
+            top_up=sum(1 for x in rows[:12] if (x.get("rank_history") or {}).get("movement_kind")=="UP")
+            top_new=sum(1 for x in rows[:12] if (x.get("rank_history") or {}).get("movement_kind") in ("NEW","REENTRY"))
+            cited=sum(1 for x in rows[:12] if x.get("external_research"))
+            brief_bits=[]
+            if strongest:brief_bits.append(f"테마강도 {strongest['name']} {strongest.get('theme_strength','-')}")
+            if fastest and (not strongest or fastest.get("name")!=strongest.get("name")):
+                brief_bits.append(f"최근대금 {fastest['name']} +{int((fastest.get('recent_turnover_krw') or 0)/100000000):,}억")
+            if top_up:brief_bits.append(f"순위상승 {top_up}종목")
+            if top_new:brief_bits.append(f"신규·재진입 {top_new}종목")
+            if cited:brief_bits.append(f"OS검증 {cited}종목")
+            home_brief={"headline":" · ".join(brief_bits) if brief_bits else "시장 관측 축적 중",
+                        "strongest_theme":strongest.get("name") if strongest else None,
+                        "top_up":top_up,"top_new":top_new,"os_verified":cited}
+
             latest_market=max([x for x in (rank_time,trade_time) if x],default=None)
             market_age_sec=int((datetime.now(timezone.utc)-latest_market).total_seconds()) if latest_market else None
             session=market_session_state()
@@ -1126,7 +1537,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "links":extract_links(m["text"] or "")
                 })
 
-    return {
+    payload={
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research, "deepresearch": deepresearch},
         "regime": regime,
@@ -1138,8 +1549,10 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "trade_ranking": trade_rows,
         "etf_trade_ranking": etf_trade_rows,
         "sector_rankings": sector_groups,
+        "leader_desk": leader_desk,
         "materials": material_rows,
         "material_stats": material_stats,
+        "home_brief": home_brief,
         "market_snapshot": market_snapshot,
         "mimosa_rows": mimosa_rows,
         "mimosa_strategies": strategy_lists,
@@ -1153,7 +1566,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         },
         "sectors": sectors,
         "telegram_recent": recent_telegram,
+        "home_candidates": home_candidates,
+        "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
+    with _DASH_CACHE_LOCK:
+        _DASH_CACHE=payload
+        _DASH_CACHE_AT=pytime.monotonic()
+    return payload
 
 DASHBOARD_HTML = r"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
