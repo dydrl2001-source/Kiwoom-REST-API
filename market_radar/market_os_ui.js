@@ -166,6 +166,26 @@
    ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',b),el('div',note,'mos-micro'));dq.append(card);}
    body.append(el('div','Data Quality','mos-section-title'),dq);
    if((fq.cap_unresolved_pct??0)>20)body.append(el('div','시가총액 단위는 별도 참조 검증 중입니다. 거래대금·0B 학습의 READY 판정과 분리합니다.','mos-note'));
+   body.append(el('div','Promotion Registry','mos-section-title'));
+   const ps=learn.promotion_summary||{},pr=learn.promotion_registry||[],pe=learn.promotion_events||[],prGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['가설',ps.hypothesis||0,'탐색 단계'],
+     ['형성',ps.forming||0,'초기·누적 검증 대기'],
+     ['검증',ps.validated||0,'누적 gate 통과'],
+     ['안정',ps.stable||0,'walk-forward 통과'],
+     ['승격후보',ps.promotion_candidate||0,'사람 검토 대기'],
+     ['Shadow rule',ps.shadow_rule||0,'수동 승인만 가능']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));prGrid.append(card);}body.append(prGrid);
+   body.append(el('div','가설의 현재 단계와 전이 이력을 지속 보존합니다. 자동 학습은 PROMOTION_CANDIDATE까지만 올릴 수 있으며 SHADOW_RULE은 수동 승인 상태를 별도로 요구합니다.','mos-note'));
+   const stageKo=x=>({HYPOTHESIS:'가설',FORMING:'형성',VALIDATED:'검증',STABLE:'안정',PROMOTION_CANDIDATE:'승격후보',SHADOW_RULE:'Shadow rule'})[x]||x||'—';
+   const actionKo=x=>({PROMOTE:'강화검토',SUPPRESS:'축소검토',NONE:'관찰'})[x]||x||'—';
+   const prScroll=el('div',null,'mos-scroll'),prTable=el('table',null,'mos-learn-table'),prHead=el('tr');
+   ['단계','행동','조건','구간','품질','WF','N','종목','일수','과거평균','최근평균','수동상태'].forEach(v=>prHead.append(el('th',v)));const prThead=el('thead');prThead.append(prHead);const prBody=el('tbody');
+   for(const s of pr.slice(0,60)){const tr=el('tr');const stageCls=s.current_stage==='PROMOTION_CANDIDATE'?'mos-up':s.current_stage==='SHADOW_RULE'?'mos-up':'';tr.append(el('td',stageKo(s.current_stage),stageCls),el('td',actionKo(s.review_action)),el('td',s.segment_type+' · '+s.segment_value),el('td',s.horizon),el('td',s.quality||'—'),el('td',s.walk_forward_status||'—'),el('td',s.samples??'—'),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',pct(s.early_avg_return_pct)),el('td',pct(s.recent_avg_return_pct),s.recent_avg_return_pct>0?'mos-up':s.recent_avg_return_pct<0?'mos-down':''),el('td',s.manual_review_state||'PENDING'));prBody.append(tr);}
+   if(!pr.length){const tr=el('tr'),td=el('td','아직 Promotion Registry에 등록된 장기 horizon 가설이 없습니다.','mos-empty');td.colSpan=12;tr.append(td);prBody.append(tr);}prTable.append(prThead,prBody);prScroll.append(prTable);body.append(prScroll);
+   body.append(el('div','최근 단계 전이','mos-section-title'));const evScroll=el('div',null,'mos-scroll'),evTable=el('table',null,'mos-learn-table'),evHead=el('tr');['시각','조건','구간','이벤트','이전','현재','방향','행동'].forEach(v=>evHead.append(el('th',v)));const evThead=el('thead');evThead.append(evHead);const evBody=el('tbody');
+   for(const e of pe.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.segment_type||'—')+' · '+(e.segment_value||'—')),el('td',e.horizon||'—'),el('td',e.event_type||'—'),el('td',stageKo(e.from_stage)),el('td',stageKo(e.to_stage)),el('td',e.direction||'—'),el('td',actionKo(e.review_action)));evBody.append(tr);}
+   if(!pe.length){const tr=el('tr'),td=el('td','아직 단계 전이 이력이 없습니다.','mos-empty');td.colSpan=8;tr.append(td);evBody.append(tr);}evTable.append(evThead,evBody);evScroll.append(evTable);body.append(evScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
