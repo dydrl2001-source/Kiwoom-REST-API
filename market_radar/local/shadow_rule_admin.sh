@@ -61,7 +61,8 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
               "market_os_shadow_decisions","market_os_adoption_dossiers",
               "market_os_adoption_dossier_events","market_os_versioned_rulesets",
               "market_os_ruleset_dry_run_observations","market_os_ruleset_dry_run_summary",
-              "market_os_ruleset_events"]
+              "market_os_ruleset_events","market_os_ruleset_succession_decisions",
+              "market_os_ruleset_succession_events"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
@@ -117,18 +118,23 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
         cur.execute("""SELECT vr.ruleset_id,vr.version_label,vr.base_rule_version,
                               vr.source_dossier_id,vr.source_shadow_rule_id,vr.status,
                               vr.activated_at,vr.stopped_at,vr.stale_at,vr.last_evaluated_at,
+                              sd.decision_state AS succession_state,
+                              sd.review_eligible AS succession_eligible,
                               COUNT(o.*) AS observations,
                               COUNT(o.*) FILTER(WHERE o.changed) AS changed
                        FROM market_os_versioned_rulesets vr
                        LEFT JOIN market_os_ruleset_dry_run_observations o
                          ON o.ruleset_id=vr.ruleset_id
-                       GROUP BY vr.ruleset_id
+                       LEFT JOIN market_os_ruleset_succession_decisions sd
+                         ON sd.ruleset_id=vr.ruleset_id
+                       GROUP BY vr.ruleset_id,sd.decision_state,sd.review_eligible
                        ORDER BY vr.activated_at DESC""")
         rulesets=cur.fetchall()
         if not rulesets:print("none")
         for r in rulesets:
             print(f"{r['ruleset_id']} | {r['status']} | {r['version_label']} | "
                   f"base={r['base_rule_version']} dossier={r['source_dossier_id']} "
+                  f"succession={r['succession_state'] or '—'} eligible={r['succession_eligible'] or False} "
                   f"obs={r['observations']} changed={r['changed']} "
                   f"activated={r['activated_at']} last_eval={r['last_evaluated_at']}")
 
@@ -160,6 +166,19 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"candidateN={x['candidate_samples']} "
                   f"dAvg={x['delta_avg_return_pct']} dPos={x['delta_positive_rate_pp']} "
                   f"dMAE={x['delta_mae_pct']}")
+        print("\n=== SUCCESSION GATE ===")
+        cur.execute("""SELECT decision_state,review_eligible,primary_cohort,
+                              reason_codes,evidence,manual_review_state,state_since,updated_at
+                       FROM market_os_ruleset_succession_decisions
+                       WHERE ruleset_id=%s""",(ident,))
+        sd=cur.fetchone()
+        if not sd:
+            print("succession evidence 대기")
+        else:
+            print("State:",sd["decision_state"],"Eligible:",sd["review_eligible"],
+                  "Cohort:",sd["primary_cohort"],"Manual:",sd["manual_review_state"])
+            print("Reasons:",",".join(sd["reason_codes"] or []))
+            print(json.dumps(sd["evidence"],ensure_ascii=False,indent=2,default=str))
         print("\nRead-only ruleset view. No live scores, tiers or orders were changed.")
         raise SystemExit(0)
 
