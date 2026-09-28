@@ -246,6 +246,54 @@ def sector_reason_summary(group):
     }
 
 
+def theme_strength_for_groups(groups):
+    """Operational 0-100 *current-theme observation strength*, not return probability.
+
+    Components:
+      interest 20  = relative query concentration in the current sample
+      money    30  = relative recent SOR turnover; cumulative turnover fallback is capped
+      breadth  20  = share of observed sector stocks currently positive
+      price    10  = positive average move, capped at +8%
+      surge    10  = count represented in query Top12, capped at 4 stocks
+      material 10  = evidence coverage (supported / partial / unconfirmed)
+    """
+    if not groups:
+        return groups
+    max_query=max([float(g.get("query_score") or 0) for g in groups] or [0])
+    max_recent=max([float(g.get("recent_turnover_krw") or 0) for g in groups] or [0])
+    max_total=max([float(g.get("trade_value_krw") or 0) for g in groups] or [0])
+    for g in groups:
+        interest=20*(float(g.get("query_score") or 0)/max_query) if max_query>0 else 0
+        if g.get("recent_turnover_known") and max_recent>0:
+            money=30*(float(g.get("recent_turnover_krw") or 0)/max_recent)
+            money_basis="RECENT_SOR"
+        else:
+            # Fallback is deliberately capped below the real-time component.
+            money=20*(float(g.get("trade_value_krw") or 0)/max_total) if max_total>0 else 0
+            money_basis="CUMULATIVE_FALLBACK"
+        breadth=20*max(0,min(1,float(g.get("positive_ratio") or 0)))
+        avg=float(g.get("avg_change_rate") or 0)
+        price=10*max(0,min(1,avg/8.0))
+        surge=10*max(0,min(1,float(g.get("surge_count") or 0)/4.0))
+        level=(g.get("reason") or {}).get("level")
+        material=10 if level=="SUPPORTED" else 5 if level=="PARTIAL" else 0
+        score=round(max(0,min(100,interest+money+breadth+price+surge+material)))
+        if score>=80: label="매우 강"
+        elif score>=65: label="강"
+        elif score>=50: label="보통"
+        elif score>=35: label="약"
+        else: label="미약"
+        g["theme_strength"]=score
+        g["theme_strength_label"]=label
+        g["theme_strength_components"]={
+            "interest":round(interest,1),"money":round(money,1),"breadth":round(breadth,1),
+            "price":round(price,1),"surge":round(surge,1),"material":round(material,1)
+        }
+        g["theme_strength_money_basis"]=money_basis
+        g["theme_strength_note"]="현재 조회·거래대금·상승확산·가격·급부상종목수·재료근거를 합친 운영 관찰도이며 수익확률이 아님"
+    return groups
+
+
 def build_sector_groups(rows):
     groups = {}
     for x in rows:
@@ -254,13 +302,15 @@ def build_sector_groups(rows):
             "name": sector, "count": 0, "query_score": 0.0, "rank_sum": 0.0,
             "change_sum": 0.0, "change_n": 0, "positive": 0,
             "trade_value_krw": 0.0, "recent_turnover_krw": 0.0,
-            "recent_turnover_known": 0, "stocks": []
+            "recent_turnover_known": 0, "surge_count": 0, "stocks": []
         })
         rank = x.get("rank")
         g["count"] += 1
         if rank is not None:
             g["query_score"] += max(1, 31 - int(rank))
             g["rank_sum"] += float(rank)
+            if int(rank) <= 12:
+                g["surge_count"] += 1
         chg = x.get("change_rate")
         if chg is not None:
             g["change_sum"] += float(chg)
@@ -300,6 +350,7 @@ def build_sector_groups(rows):
         )[:8]
         g["reason"]=sector_reason_summary(g)
         out.append(g)
+    theme_strength_for_groups(out)
     out.sort(
         key=lambda z:(z["query_score"],
                       z.get("recent_turnover_krw") or 0,
