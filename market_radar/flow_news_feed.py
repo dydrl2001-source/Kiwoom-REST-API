@@ -27,7 +27,7 @@ def cycle():
     ok=bad=0
     for _,r in pending[:6]:
         status='OK'
-        try:base.fetch_news(r['code'],r['name']);ok+=1
+        try:base.fetch_news(r['code'],r['name'],r.get('sector'));ok+=1
         except Exception as exc:status='ERROR';bad+=1;print('News fetch:',type(exc).__name__,flush=True)
         with db() as c,c.cursor() as cur:
             cur.execute('INSERT INTO radar_news_checks(stock_code,checked_at,status) VALUES(%s,now(),%s) '
