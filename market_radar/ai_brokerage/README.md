@@ -92,3 +92,35 @@ Lifecycle 변경은 자동 적용하지 않습니다.
 - `SAMPLE_BUILDING` — 표본 부족
 
 모든 판정에는 `auto_apply=false`가 붙습니다. 실제 lifecycle 변경은 별도 검토·버전 변경으로만 수행합니다.
+
+
+## Shadow Execution
+
+Paper Trade가 전략 신호 자체를 검증한다면, Shadow Execution은 **그 신호를 실제 주문으로 냈다고 가정했을 때의 실행 품질**을 검증합니다.
+
+v1은 실제 주문을 보내지 않으며, 현재 저장 데이터에 실제 bid/ask depth가 없기 때문에 다음 관측치만 사용합니다.
+
+- 이벤트 시점과 가까운 SOR 체결가
+- 최근 관측구간 거래대금
+- 최근 3분봉 단기 변동성
+- 주문 참여율 상한
+- 가정 계좌자산 / 거래당 위험예산 / 최대 포지션 비중
+- 사용자가 명시한 수수료·매도세 비용
+
+유동성 근거가 없으면 체결을 추정하지 않고 `NO_LIQUIDITY_EVIDENCE` 또는 `REJECTED`로 남깁니다.
+
+부분체결은 전량체결로 간주하지 않습니다. 출구에서 잔여수량이 생기면 `CLOSED_PARTIAL_LIQUIDITY`로 분리하며, 완전청산 표본만 대표 수익 통계에 포함합니다.
+
+Shadow 검증은 prospective 원칙을 유지합니다. worker 시작 이전의 과거 Paper Trade를 장기간 백필하지 않고, 재시작 장애 복구를 위한 짧은 replay window만 허용합니다.
+
+### Shadow v1 position sizing
+
+- risk budget = account equity × risk per trade
+- stop distance = 최근 변동성 기반, 최소/최대 범위 제한
+- target notional = risk budget / stop distance
+- final notional = target notional과 max position cap 중 작은 값
+- fillable notional = 최근 거래대금 × max participation
+
+### Important limitation
+
+현재 v1의 slippage는 **실제 호가 스프레드가 아니라 proxy**입니다. 실제 최우선 호가·잔량이 수집되면 execution model의 입력을 교체하고 v1 proxy 결과와 분리해 버전 관리해야 합니다.
