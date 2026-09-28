@@ -29,6 +29,18 @@ class RealtimePureTests(unittest.TestCase):
         self.assertEqual(p['ticks'],1)
         self.assertEqual(p['gaps'],0)
 
+    def test_five_second_buckets_split_without_splitting_minute(self):
+        a=rt.Aggregator()
+        a.add({'type':'0B','item':'005930','values':{'10':'80000','15':'+10','13':'100','20':'103001'}},
+              datetime(2026,9,28,1,30,1,tzinfo=timezone.utc))
+        a.add({'type':'0B','item':'005930','values':{'10':'80100','15':'+10','13':'110','20':'103006'}},
+              datetime(2026,9,28,1,30,6,tzinfo=timezone.utc))
+        self.assertEqual(len(a.pending_minute),1)
+        self.assertEqual(len(a.pending_5s),2)
+        vals=sorted(a.pending_5s.values(),key=lambda x:x['bucket'])
+        self.assertEqual(vals[0]['open'],80000)
+        self.assertEqual(vals[1]['open'],80100)
+
     def test_duplicate_cumulative_volume_is_skipped(self):
         a=rt.Aggregator()
         t=datetime(2026,9,28,1,30,1,tzinfo=timezone.utc)
