@@ -29,7 +29,7 @@ PY
 fi
 
 echo '=== Update only market/read-only UI/research workers; keep PostgreSQL and Telegram intact ==='
-docker compose up -d --no-deps --build kiwoom-feed market-theme-feed news-feed chart-feed radar-api web-research-worker candidate-tracker paper-trade-engine
+docker compose up -d --no-deps --build kiwoom-feed market-theme-feed news-feed chart-feed radar-api web-research-worker candidate-tracker paper-trade-engine paper-feedback-engine
 ready=0
 for n in $(seq 1 30); do
  if curl --fail --silent --max-time 3 http://localhost:8080/health >/dev/null 2>&1; then ready=1;break;fi
