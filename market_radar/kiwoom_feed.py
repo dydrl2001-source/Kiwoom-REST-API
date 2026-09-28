@@ -39,6 +39,7 @@ def schema():
           official_sector TEXT,
           size_class TEXT,
           nxt_enabled TEXT,
+          listed_shares NUMERIC,
           updated_at TIMESTAMPTZ NOT NULL
         );
         CREATE TABLE IF NOT EXISTS market_rank_snapshots(
@@ -93,6 +94,7 @@ def schema():
           PRIMARY KEY(snapshot_time,index_code)
         );
         CREATE INDEX IF NOT EXISTS idx_index_time ON market_index_snapshots(snapshot_time DESC);
+        ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS listed_shares NUMERIC;
         ALTER TABLE market_rank_snapshots ADD COLUMN IF NOT EXISTS current_price_krw NUMERIC;
         ALTER TABLE market_trade_value_snapshots ADD COLUMN IF NOT EXISTS current_price_krw NUMERIC;
         """)
@@ -178,14 +180,17 @@ def refresh_meta():
         for r in rows:
             code=str(r.get("code") or "").replace("_AL","").replace("_NX","")
             if not code: continue
-            meta[code]={"name":r.get("name"),"market":r.get("marketName"),"sector":r.get("upName"),"size":r.get("upSizeName"),"nxt":r.get("nxtEnable")}
+            meta[code]={"name":r.get("name"),"market":r.get("marketName"),"sector":r.get("upName"),
+                        "size":r.get("upSizeName"),"nxt":r.get("nxtEnable"),
+                        "listed_shares":n(r.get("listCount"))}
     with db() as c, c.cursor() as cur:
         for code,m in meta.items():
-            cur.execute("""INSERT INTO stock_master(stock_code,stock_name,market_name,official_sector,size_class,nxt_enabled,updated_at)
-                           VALUES(%s,%s,%s,%s,%s,%s,now())
+            cur.execute("""INSERT INTO stock_master(stock_code,stock_name,market_name,official_sector,size_class,nxt_enabled,listed_shares,updated_at)
+                           VALUES(%s,%s,%s,%s,%s,%s,%s,now())
                            ON CONFLICT(stock_code) DO UPDATE SET stock_name=excluded.stock_name,market_name=excluded.market_name,
-                           official_sector=excluded.official_sector,size_class=excluded.size_class,nxt_enabled=excluded.nxt_enabled,updated_at=now()""",
-                        (code,m["name"],m["market"],m["sector"],m["size"],m["nxt"]))
+                           official_sector=excluded.official_sector,size_class=excluded.size_class,nxt_enabled=excluded.nxt_enabled,
+                           listed_shares=excluded.listed_shares,updated_at=now()""",
+                        (code,m["name"],m["market"],m["sector"],m["size"],m["nxt"],m.get("listed_shares")))
         c.commit()
     stock_meta=meta
     last_meta_refresh=datetime.now(timezone.utc)
