@@ -37,6 +37,7 @@ from market_os_shadow import (
     shadow_decision,
 )
 from market_os_dossier import build_dossier as build_adoption_dossier, dossier_hash as adoption_dossier_hash
+from market_os_ruleset import evaluate as ruleset_evaluate, dry_run_summaries as ruleset_dry_run_summaries
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
@@ -372,6 +373,82 @@ CREATE TABLE IF NOT EXISTS market_os_adoption_dossier_events (
 );
 CREATE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_events
     ON market_os_adoption_dossier_events(dossier_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_versioned_rulesets (
+    ruleset_id              TEXT PRIMARY KEY,
+    version_label           TEXT NOT NULL UNIQUE,
+    base_rule_version       TEXT NOT NULL,
+    source_dossier_id       TEXT NOT NULL UNIQUE,
+    source_shadow_rule_id   TEXT NOT NULL,
+    status                  TEXT NOT NULL CHECK(status IN (
+                                'DRY_RUN_ACTIVE','DRY_RUN_STOPPED','STALE_SOURCE')),
+    spec_hash               TEXT NOT NULL,
+    spec                    JSONB NOT NULL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    activated_at            TIMESTAMPTZ NOT NULL,
+    stopped_at              TIMESTAMPTZ,
+    stale_at                TIMESTAMPTZ,
+    last_evaluated_at       TIMESTAMPTZ,
+    note                    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_ruleset_status
+    ON market_os_versioned_rulesets(status,activated_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_ruleset_dry_run_observations (
+    assessment_time         TIMESTAMPTZ NOT NULL,
+    stock_code              TEXT NOT NULL,
+    control_rule_version    TEXT NOT NULL,
+    ruleset_id              TEXT NOT NULL,
+    observed_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    control_tier            TEXT NOT NULL,
+    candidate_tier          TEXT NOT NULL,
+    changed                 BOOLEAN NOT NULL,
+    matched_overlays        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    PRIMARY KEY(assessment_time,stock_code,control_rule_version,ruleset_id)
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_ruleset_obs_time
+    ON market_os_ruleset_dry_run_observations(ruleset_id,assessment_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_ruleset_dry_run_summary (
+    ruleset_id                  TEXT NOT NULL,
+    horizon                     TEXT NOT NULL,
+    cohort                      TEXT NOT NULL,
+    evidence_state              TEXT NOT NULL,
+    membership_changes          INTEGER NOT NULL DEFAULT 0,
+    control_samples             INTEGER NOT NULL DEFAULT 0,
+    control_stocks              INTEGER NOT NULL DEFAULT 0,
+    control_days                INTEGER NOT NULL DEFAULT 0,
+    control_avg_return_pct      DOUBLE PRECISION,
+    control_median_return_pct   DOUBLE PRECISION,
+    control_positive_rate       DOUBLE PRECISION,
+    control_avg_mfe_pct         DOUBLE PRECISION,
+    control_avg_mae_pct         DOUBLE PRECISION,
+    candidate_samples           INTEGER NOT NULL DEFAULT 0,
+    candidate_stocks            INTEGER NOT NULL DEFAULT 0,
+    candidate_days              INTEGER NOT NULL DEFAULT 0,
+    candidate_avg_return_pct    DOUBLE PRECISION,
+    candidate_median_return_pct DOUBLE PRECISION,
+    candidate_positive_rate     DOUBLE PRECISION,
+    candidate_avg_mfe_pct       DOUBLE PRECISION,
+    candidate_avg_mae_pct       DOUBLE PRECISION,
+    delta_avg_return_pct        DOUBLE PRECISION,
+    delta_positive_rate_pp      DOUBLE PRECISION,
+    delta_mae_pct               DOUBLE PRECISION,
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(ruleset_id,horizon,cohort)
+);
+
+CREATE TABLE IF NOT EXISTS market_os_ruleset_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    ruleset_id              TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type              TEXT NOT NULL,
+    from_status             TEXT,
+    to_status               TEXT NOT NULL,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_ruleset_events
+    ON market_os_ruleset_events(ruleset_id,event_time DESC);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -1537,6 +1614,139 @@ def refresh_adoption_dossiers():
     return {"generated":generated,"staled":staled}
 
 
+def capture_ruleset_dry_run_observations(limit_per_ruleset=800):
+    """Evaluate active versioned candidate rulesets prospectively beside CONTROL."""
+    inserted=0;staled=0
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_versioned_rulesets"):
+            return {"inserted":0,"staled":0}
+        cur.execute("""SELECT vr.ruleset_id,vr.base_rule_version,vr.source_dossier_id,
+                              vr.source_shadow_rule_id,vr.status,vr.spec,vr.activated_at,
+                              d.decision_state,d.review_eligible,
+                              sr.enabled AS shadow_rule_enabled
+                       FROM market_os_versioned_rulesets vr
+                       LEFT JOIN market_os_shadow_decisions d
+                         ON d.shadow_rule_id=vr.source_shadow_rule_id
+                       LEFT JOIN market_os_shadow_rules sr
+                         ON sr.shadow_rule_id=vr.source_shadow_rule_id
+                       WHERE vr.status='DRY_RUN_ACTIVE'
+                       ORDER BY vr.activated_at""")
+        rulesets=cur.fetchall()
+        for rs in rulesets:
+            source_ok=bool(
+                rs["decision_state"]=="ACCEPT_CANDIDATE"
+                and rs["review_eligible"]
+                and rs["shadow_rule_enabled"]
+            )
+            if not source_ok:
+                cur.execute("""UPDATE market_os_versioned_rulesets
+                               SET status='STALE_SOURCE',stale_at=now(),
+                                   note='Source Shadow Decision or rule no longer eligible'
+                               WHERE ruleset_id=%s AND status='DRY_RUN_ACTIVE'""",
+                            (rs["ruleset_id"],))
+                if cur.rowcount:
+                    cur.execute("""INSERT INTO market_os_ruleset_events(
+                            ruleset_id,event_type,from_status,to_status,evidence)
+                        VALUES(%s,'SOURCE_STALE','DRY_RUN_ACTIVE','STALE_SOURCE',%s::jsonb)""",
+                        (rs["ruleset_id"],json.dumps({
+                            "decision_state":rs["decision_state"],
+                            "review_eligible":bool(rs["review_eligible"]),
+                            "shadow_rule_enabled":bool(rs["shadow_rule_enabled"]),
+                        },ensure_ascii=False)))
+                    staled+=1
+                continue
+
+            cur.execute("""SELECT a.*
+                           FROM market_os_assessment_snapshots a
+                           WHERE a.rule_version=%s
+                             AND a.snapshot_time>=%s
+                             AND NOT EXISTS(
+                                 SELECT 1 FROM market_os_ruleset_dry_run_observations o
+                                 WHERE o.assessment_time=a.snapshot_time
+                                   AND o.stock_code=a.stock_code
+                                   AND o.control_rule_version=a.rule_version
+                                   AND o.ruleset_id=%s
+                             )
+                           ORDER BY a.snapshot_time,a.stock_code
+                           LIMIT %s""",
+                        (rs["base_rule_version"],rs["activated_at"],rs["ruleset_id"],limit_per_ruleset))
+            rows=[]
+            for a in cur.fetchall():
+                result=ruleset_evaluate(dict(a),rs["spec"] or {})
+                rows.append((
+                    a["snapshot_time"],a["stock_code"],a["rule_version"],rs["ruleset_id"],
+                    result["control_tier"],result["candidate_tier"],result["changed"],
+                    json.dumps(result["matched_overlays"],ensure_ascii=False)
+                ))
+            if rows:
+                cur.executemany("""INSERT INTO market_os_ruleset_dry_run_observations(
+                        assessment_time,stock_code,control_rule_version,ruleset_id,
+                        control_tier,candidate_tier,changed,matched_overlays)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                    ON CONFLICT DO NOTHING""",rows)
+                inserted+=cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(rows)
+                cur.execute("""UPDATE market_os_versioned_rulesets
+                               SET last_evaluated_at=now()
+                               WHERE ruleset_id=%s""",(rs["ruleset_id"],))
+    return {"inserted":inserted,"staled":staled}
+
+
+def refresh_ruleset_dry_run_summaries():
+    """Summarize versioned CONTROL vs CANDIDATE on resolved prospective outcomes."""
+    written=0
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_versioned_rulesets"):
+            return 0
+        cur.execute("""SELECT ruleset_id,base_rule_version,activated_at
+                       FROM market_os_versioned_rulesets
+                       ORDER BY activated_at""")
+        for rs in cur.fetchall():
+            cur.execute("""SELECT o.assessment_time,o.stock_code,
+                                  o.control_tier,o.candidate_tier,
+                                  y.horizon,y.return_pct,y.mfe_pct,y.mae_pct
+                           FROM market_os_ruleset_dry_run_observations o
+                           JOIN market_os_assessment_outcomes y
+                             ON y.assessment_time=o.assessment_time
+                            AND y.stock_code=o.stock_code
+                            AND y.rule_version=o.control_rule_version
+                           WHERE o.ruleset_id=%s
+                             AND y.horizon IN ('5m','30m','close','D+1')
+                           ORDER BY y.horizon,o.stock_code,o.assessment_time""",
+                        (rs["ruleset_id"],))
+            raw=[]
+            for r in cur.fetchall():
+                x=dict(r)
+                x["snapshot_time"]=r["assessment_time"]
+                x["trade_day"]=r["assessment_time"].astimezone(KST).date().isoformat()
+                raw.append(x)
+            anchors=_episode_anchors(raw)
+            summaries=ruleset_dry_run_summaries(anchors)
+            cur.execute("""DELETE FROM market_os_ruleset_dry_run_summary
+                           WHERE ruleset_id=%s""",(rs["ruleset_id"],))
+            for s in summaries:
+                control=s["control"];candidate=s["challenger"]
+                state=_shadow_evidence_state(s)
+                cur.execute("""INSERT INTO market_os_ruleset_dry_run_summary(
+                        ruleset_id,horizon,cohort,evidence_state,membership_changes,
+                        control_samples,control_stocks,control_days,control_avg_return_pct,
+                        control_median_return_pct,control_positive_rate,control_avg_mfe_pct,control_avg_mae_pct,
+                        candidate_samples,candidate_stocks,candidate_days,candidate_avg_return_pct,
+                        candidate_median_return_pct,candidate_positive_rate,candidate_avg_mfe_pct,
+                        candidate_avg_mae_pct,delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct,updated_at)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                           %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
+                    (rs["ruleset_id"],s["horizon"],s["cohort"],state,s["membership_changes"],
+                     control["samples"],control["distinct_stocks"],control["distinct_days"],
+                     control["avg_return_pct"],control["median_return_pct"],control["positive_rate"],
+                     control["avg_mfe_pct"],control["avg_mae_pct"],
+                     candidate["samples"],candidate["distinct_stocks"],candidate["distinct_days"],
+                     candidate["avg_return_pct"],candidate["median_return_pct"],candidate["positive_rate"],
+                     candidate["avg_mfe_pct"],candidate["avg_mae_pct"],
+                     s["delta_avg_return_pct"],s["delta_positive_rate_pp"],s["delta_mae_pct"]))
+                written+=1
+    return written
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(RULE_VERSION,))
@@ -1561,15 +1771,20 @@ def cycle():
     registry=refresh_promotion_registry()
     shadow_summaries=refresh_shadow_summaries()
     dossiers=refresh_adoption_dossiers()
+    ruleset_obs=capture_ruleset_dry_run_observations()
+    ruleset_summaries=refresh_ruleset_dry_run_summaries()
     update_status(
         "OK",
         f"captured={captured} shadow_obs={shadow_obs} outcomes={outcomes} segments={segments} "
         f"registry_active={registry['active']} promotion_candidates={registry['promotion_candidates']} "
         f"registry_transitions={registry['transitions']} shadow_summaries={shadow_summaries} "
-        f"dossiers_generated={dossiers['generated']} dossiers_staled={dossiers['staled']}",
+        f"dossiers_generated={dossiers['generated']} dossiers_staled={dossiers['staled']} "
+        f"ruleset_obs={ruleset_obs['inserted']} ruleset_stale={ruleset_obs['staled']} "
+        f"ruleset_summaries={ruleset_summaries}",
         last_snapshot=snap,last_outcome=bool(outcomes)
     )
-    return captured,outcomes,segments,registry,shadow_obs,shadow_summaries,dossiers
+    return (captured,outcomes,segments,registry,shadow_obs,shadow_summaries,dossiers,
+            ruleset_obs,ruleset_summaries)
 
 
 if __name__=="__main__":
@@ -1577,13 +1792,15 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s,r,so,ss,ad=cycle()
-            if a or o or so or r.get("transitions") or ad.get("generated") or ad.get("staled"):
+            a,o,s,r,so,ss,ad,ro,rs=cycle()
+            if (a or o or so or r.get("transitions") or ad.get("generated")
+                    or ad.get("staled") or ro.get("inserted") or ro.get("staled")):
                 print(
                     f"learning cycle assessments={a} shadow_obs={so} outcomes={o} segments={s} "
                     f"registry={r['active']} candidates={r['promotion_candidates']} "
                     f"transitions={r['transitions']} shadow_summaries={ss} "
-                    f"dossiers={ad['generated']} stale={ad['staled']}",
+                    f"dossiers={ad['generated']} dossier_stale={ad['staled']} "
+                    f"ruleset_obs={ro['inserted']} ruleset_stale={ro['staled']} summaries={rs}",
                     flush=True
                 )
         except Exception as exc:
