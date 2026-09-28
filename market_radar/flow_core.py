@@ -305,6 +305,111 @@ def rotation_series(rows,history_by_code,max_intervals=10):
             'meaning':'고정 공통표본의 구간 거래대금 비중 변화; 순매수 자금이동이 아님'}
 
 
+def candidate_watchlist(rows, theme_rotation, limit=12):
+    """Rank *observation* candidates, never trade instructions.
+
+    This score only compresses current local observations so the user can decide
+    what to inspect first. It does not forecast returns and does not generate
+    buy/sell orders.
+    """
+    theme_move={x.get('name'):x for x in (theme_rotation or {}).get('series',[])}
+    eligible=[]
+    valid_money=[r for r in rows
+                 if r.get('sector')!='ETF·ETN'
+                 and r.get('recent_trade')
+                 and r.get('delta_state')=='OK'
+                 and (r.get('interval_turnover_krw') or 0)>0
+                 and not any(str(x).startswith('TURNOVER_') for x in r.get('quality_flags',[]))]
+    money_order={r['code']:i+1 for i,r in enumerate(
+        sorted(valid_money,key=lambda x:-(x.get('interval_turnover_krw') or 0)))}
+
+    positive_chart={
+        'BREAKOUT_HOLD':(18,'돌파 후 지지'),
+        'NEW_HIGH':(14,'전고·신고가 상단'),
+        'M_BREAKOUT_TEST':(14,'수렴 후 돌파 시도'),
+        'M_CONTRACTION':(8,'변동폭 수렴'),
+        'PULLBACK_INTACT':(8,'분봉 추세 유지'),
+        'PREV_HIGH_APPROACH':(5,'전고점 접근'),
+        'LEADER_TREND':(5,'주도 추세'),
+    }
+    negative_chart={'TREND_DAMAGE':(-28,'분봉 추세 훼손'),
+                    'BREAKOUT_FAIL':(-32,'돌파 실패')}
+
+    for r in valid_money:
+        score=0
+        reasons=[]
+        risks=[]
+        qr=r.get('query_rank');tr=r.get('trade_rank');burst=r.get('burst_multiple')
+        money_rank=money_order.get(r['code'])
+
+        if tr is not None:
+            if tr<=10: score+=15;reasons.append('거래대금 Top10')
+            elif tr<=20: score+=10;reasons.append('거래대금 Top20')
+            elif tr<=40: score+=5;reasons.append('거래대금 Top40')
+        if qr is not None:
+            if qr<=10: score+=12;reasons.append('조회 Top10')
+            elif qr<=20: score+=8;reasons.append('조회 Top20')
+            elif qr<=40: score+=4;reasons.append('조회 Top40')
+        if burst is not None:
+            if burst>=3: score+=25;reasons.append(f'거래속도 {burst:.1f}배')
+            elif burst>=2: score+=18;reasons.append(f'거래속도 {burst:.1f}배')
+            elif burst>=1.4: score+=10;reasons.append(f'거래속도 {burst:.1f}배')
+            if burst>=5: risks.append('거래속도 급증')
+        if money_rank:
+            if money_rank<=10: score+=10;reasons.append('최근 구간 대금 Top10')
+            elif money_rank<=20: score+=6;reasons.append('최근 구간 대금 Top20')
+
+        tm=theme_move.get(r.get('market_theme'))
+        move=tm.get('change_pp') if tm else None
+        if move is not None:
+            if move>=3: score+=12;reasons.append(f'테마 비중 +{move:.1f}%p')
+            elif move>=1: score+=7;reasons.append(f'테마 비중 +{move:.1f}%p')
+            elif move>0: score+=3
+            elif move<=-3: score-=8;risks.append(f'테마 비중 {move:.1f}%p')
+
+        chart=r.get('chart') or {}
+        state=chart.get('state')
+        if state in positive_chart:
+            pts,reason=positive_chart[state];score+=pts;reasons.append(reason)
+        elif state in negative_chart:
+            pts,reason=negative_chart[state];score+=pts;risks.append(reason)
+        else:
+            risks.append('차트 판독 대기')
+
+        if r.get('research') and not r.get('research_stale'):
+            score+=6;reasons.append('인용 포함 재료 보고서')
+            if r.get('event_type') and r.get('event_type')!='기타·미확인':
+                score+=4;reasons.append(r['event_type'])
+        else:
+            risks.append('재료 종합 미완료')
+
+        chg=r.get('change_pct')
+        if chg is not None:
+            if chg>=20: risks.append('당일 급등 20%+')
+            elif chg>=15: risks.append('당일 급등 15%+')
+            if chg<=-8: risks.append('당일 약세 -8% 이하')
+
+        score=max(0,min(100,round(score)))
+        if score<40: continue
+        label='관찰 우선' if score>=70 else ('조건 확인' if score>=55 else '추적')
+        style='추세·돌파' if state in ('BREAKOUT_HOLD','NEW_HIGH','M_BREAKOUT_TEST','PREV_HIGH_APPROACH') else (
+              '수렴·추세' if state in ('M_CONTRACTION','PULLBACK_INTACT','LEADER_TREND') else '수급·재료 확인')
+        eligible.append({
+            'code':r['code'],'name':r.get('name'),'attention_score':score,
+            'label':label,'style':style,'reasons':reasons[:6],'risk_flags':risks[:5],
+            'query_rank':qr,'trade_rank':tr,'interval_turnover_krw':r.get('interval_turnover_krw'),
+            'five_min_turnover_krw':r.get('five_min_turnover_krw'),'turnover_krw':r.get('turnover_krw'),
+            'burst_multiple':burst,'change_pct':chg,'market_theme':r.get('market_theme'),
+            'segment':r.get('segment'),'event_type':r.get('event_type'),
+            'chart_state':chart.get('state_ko') or chart.get('state'),
+            'minute_trend':chart.get('minute_trend'),
+            'theme_share_change_pp':move,'research_state':r.get('research_state'),
+            'observed_at':r.get('received_at')
+        })
+    eligible.sort(key=lambda x:(-x['attention_score'],-(x.get('interval_turnover_krw') or 0)))
+    return eligible[:limit]
+
+
 def report_sections(report):
     """Slice report sections without destroying citation offsets. No new AI calls."""
     if not isinstance(report,dict) or not report.get('citations'):return {}
