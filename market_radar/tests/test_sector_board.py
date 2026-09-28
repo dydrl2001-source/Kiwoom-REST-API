@@ -124,6 +124,21 @@ class SectorBoardTests(unittest.TestCase):
         cat={'material_strength':3,'best_identity_quality':'CONTEXT_VERIFIED','theme':'반도체/HBM'}
         self.assertEqual(api.choose_market_theme('테스트기업','전기전자',cat),'반도체/HBM')
 
+    def test_generic_dart_is_not_auto_max_strength(self):
+        cat={'dart':[{'report_nm':'전환사채(해외전환사채포함)발행후만기전사채취득'}],
+             'external_news':[],'items':[]}
+        out=api.enrich_catalyst(cat,'루닛','IT 서비스')
+        self.assertEqual(out['best_source'],'DART')
+        self.assertLess(out['material_strength'],3)
+        self.assertEqual(out['best_identity_quality'],'VERIFIED')
+
+    def test_contract_dart_can_be_direct_but_not_sector_causality(self):
+        cat={'dart':[{'report_nm':'단일판매ㆍ공급계약체결'}],
+             'external_news':[],'items':[]}
+        out=api.enrich_catalyst(cat,'테스트기업','화학')
+        self.assertGreaterEqual(out['material_strength'],3)
+        self.assertEqual(out['best_identity_quality'],'VERIFIED')
+
     def test_money_first_order_inside_sector(self):
         rows=[
           self.row('AAA','반도체',1,100,2,3.0),
