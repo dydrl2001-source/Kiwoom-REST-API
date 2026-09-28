@@ -13,7 +13,7 @@ RUN python -m pip check \
         evidence_identity.py news_feed.py paper_trade_engine.py paper_feedback_engine.py ai_brokerage_worker.py orderbook_collector.py shadow_execution_engine.py \
         ai_brokerage/models.py ai_brokerage/strategy_registry.py ai_brokerage/desks.py \
         ai_brokerage/decision_engine.py ai_brokerage/adapter.py ai_brokerage/analytics.py \
-        ai_brokerage/execution_model.py \
+        ai_brokerage/execution_model.py ai_brokerage/capacity.py \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_sector_board.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_mobile_ui.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_paper_trade.py' -v \
@@ -21,4 +21,5 @@ RUN python -m pip check \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_ai_brokerage.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_shadow_execution.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_orderbook_collector.py' -v \
+    && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_capacity.py' -v \
     && python -c "import radar_web_app; assert radar_web_app.app is not None; print('Radar API import check passed')"
