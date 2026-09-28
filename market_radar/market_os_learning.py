@@ -340,19 +340,25 @@ CREATE TABLE IF NOT EXISTS market_os_adoption_dossiers (
     content_hash            TEXT NOT NULL,
     decision_state          TEXT NOT NULL,
     decision_updated_at     TIMESTAMPTZ,
+    source_decision_event_id BIGINT,
     review_state            TEXT NOT NULL DEFAULT 'PENDING',
     generated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at             TIMESTAMPTZ,
     reviewed_by             TEXT,
     review_note             TEXT,
     dossier                 JSONB NOT NULL,
-    UNIQUE(shadow_rule_id,revision),
-    UNIQUE(shadow_rule_id,content_hash)
+    UNIQUE(shadow_rule_id,revision)
 );
+ALTER TABLE market_os_adoption_dossiers ADD COLUMN IF NOT EXISTS source_decision_event_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_rule
     ON market_os_adoption_dossiers(shadow_rule_id,revision DESC);
 CREATE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_review
     ON market_os_adoption_dossiers(review_state,generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_hash
+    ON market_os_adoption_dossiers(shadow_rule_id,content_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_accept_event
+    ON market_os_adoption_dossiers(shadow_rule_id,source_decision_event_id)
+    WHERE source_decision_event_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS market_os_adoption_dossier_events (
     event_id                BIGSERIAL PRIMARY KEY,
@@ -1389,6 +1395,7 @@ def refresh_adoption_dossiers():
 
         cur.execute("""SELECT d.shadow_rule_id,d.decision_state,d.review_eligible,
                               d.primary_cohort,d.reason_codes,d.evidence,d.updated_at AS decision_updated_at,
+                              de.event_id AS source_decision_event_id,de.event_time AS accept_event_time,
                               r.candidate_key,r.rule_version,r.segment_type,r.segment_value,
                               r.source_horizon,r.action,r.approved_at,
                               p.direction,p.review_action,p.quality,p.walk_forward_status,
@@ -1396,10 +1403,17 @@ def refresh_adoption_dossiers():
                               p.early_avg_return_pct,p.recent_avg_return_pct
                        FROM market_os_shadow_decisions d
                        JOIN market_os_shadow_rules r ON r.shadow_rule_id=d.shadow_rule_id
+                       JOIN LATERAL (
+                           SELECT event_id,event_time
+                           FROM market_os_shadow_decision_events e
+                           WHERE e.shadow_rule_id=d.shadow_rule_id
+                             AND e.to_state='ACCEPT_CANDIDATE'
+                           ORDER BY event_time DESC,event_id DESC LIMIT 1
+                       ) de ON TRUE
                        LEFT JOIN market_os_promotion_registry p ON p.candidate_key=r.candidate_key
                        WHERE d.decision_state='ACCEPT_CANDIDATE'
                          AND d.review_eligible=TRUE
-                       ORDER BY d.updated_at,d.shadow_rule_id""")
+                       ORDER BY de.event_time,d.shadow_rule_id""")
         accepted=cur.fetchall()
         accepted_ids={r["shadow_rule_id"] for r in accepted}
 
@@ -1480,8 +1494,8 @@ def refresh_adoption_dossiers():
             h=adoption_dossier_hash(dossier)
             cur.execute("""SELECT dossier_id,revision,review_state
                            FROM market_os_adoption_dossiers
-                           WHERE shadow_rule_id=%s AND content_hash=%s""",
-                        (row["shadow_rule_id"],h))
+                           WHERE shadow_rule_id=%s AND source_decision_event_id=%s""",
+                        (row["shadow_rule_id"],row["source_decision_event_id"]))
             if cur.fetchone():
                 continue
 
@@ -1505,10 +1519,11 @@ def refresh_adoption_dossiers():
             dossier_id=f"ad-{h[:20]}-r{revision:03d}"
             cur.execute("""INSERT INTO market_os_adoption_dossiers(
                     dossier_id,shadow_rule_id,revision,content_hash,decision_state,
-                    decision_updated_at,review_state,dossier)
-                VALUES(%s,%s,%s,%s,%s,%s,'PENDING',%s::jsonb)""",
+                    decision_updated_at,source_decision_event_id,review_state,dossier)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,'PENDING',%s::jsonb)""",
                 (dossier_id,row["shadow_rule_id"],revision,h,row["decision_state"],
-                 row["decision_updated_at"],json.dumps(dossier,ensure_ascii=False,default=str)))
+                 row["decision_updated_at"],row["source_decision_event_id"],
+                 json.dumps(dossier,ensure_ascii=False,default=str)))
             cur.execute("""INSERT INTO market_os_adoption_dossier_events(
                     dossier_id,event_type,from_review_state,to_review_state,note,evidence)
                 VALUES(%s,'GENERATED',NULL,'PENDING',
@@ -1516,6 +1531,7 @@ def refresh_adoption_dossiers():
                 (dossier_id,json.dumps({
                     "shadow_rule_id":row["shadow_rule_id"],
                     "revision":revision,"content_hash":h,
+                    "source_decision_event_id":row["source_decision_event_id"],
                 },ensure_ascii=False)))
             generated+=1
     return {"generated":generated,"staled":staled}
