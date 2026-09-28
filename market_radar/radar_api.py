@@ -1,4 +1,4 @@
-import os, json, re, secrets
+import os, json, re, secrets, threading, time as pytime
 from datetime import datetime, timedelta, timezone, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -22,6 +22,15 @@ except Exception:
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
 KIWOOM_INGEST_TOKEN = os.getenv("KIWOOM_INGEST_TOKEN", "")
+DASHBOARD_CACHE_SECONDS = max(5, min(60, int(os.getenv("DASHBOARD_CACHE_SECONDS", "20"))))
+_LEADER_CALENDAR_CACHE_SECONDS = max(60, min(3600, int(os.getenv("LEADER_CALENDAR_CACHE_SECONDS", "300"))))
+_DASH_CACHE_LOCK = threading.Lock()
+_DASH_CACHE = None
+_DASH_CACHE_AT = 0.0
+_LEADER_CAL_CACHE_LOCK = threading.Lock()
+_LEADER_CAL_CACHE = None
+_LEADER_CAL_CACHE_AT = 0.0
+_LEADER_CAL_CACHE_KEY = None
 app = FastAPI(title="Market Radar", version="0.6.1")
 
 THEME_KEYWORDS = {
@@ -372,6 +381,12 @@ def build_leader_calendar(cur, now):
     Each date uses the latest stored trade-value snapshot for that KST date, then
     groups stocks that were up at least 4%. Missing days stay blank; no history is invented.
     """
+    global _LEADER_CAL_CACHE,_LEADER_CAL_CACHE_AT,_LEADER_CAL_CACHE_KEY
+    cache_key=now.astimezone(KST).date().isoformat()
+    with _LEADER_CAL_CACHE_LOCK:
+        if (_LEADER_CAL_CACHE is not None and _LEADER_CAL_CACHE_KEY==cache_key
+                and pytime.monotonic()-_LEADER_CAL_CACHE_AT<_LEADER_CALENDAR_CACHE_SECONDS):
+            return _LEADER_CAL_CACHE
     monday=(now.astimezone(KST)-timedelta(days=now.astimezone(KST).weekday())).date()
     start=monday-timedelta(days=21)
     end=monday+timedelta(days=4)
@@ -419,12 +434,17 @@ def build_leader_calendar(cur, now):
             })
         d+=timedelta(days=1)
     observed=[x["date"] for x in cells if x["themes"]]
-    return {
+    payload={
         "start":start.isoformat(),"end":end.isoformat(),"cells":cells,
         "observed_days":len(observed),
         "coverage_start":min(observed) if observed else None,
         "note":"각 날짜의 마지막 저장 거래대금 스냅샷에서 +4% 이상 종목을 테마별 집계. 데이터가 없는 과거 날짜는 비워 둠"
     }
+    with _LEADER_CAL_CACHE_LOCK:
+        _LEADER_CAL_CACHE=payload
+        _LEADER_CAL_CACHE_AT=pytime.monotonic()
+        _LEADER_CAL_CACHE_KEY=cache_key
+    return payload
 
 
 def build_leader_desk(cur, trade_map, query_rows, now, sector_groups=None):
@@ -479,6 +499,40 @@ def build_leader_desk(cur, trade_map, query_rows, now, sector_groups=None):
         "calendar":build_leader_calendar(cur,now),
         "note":"거래대금 상위 100 표본 중 +4% 이상 종목을 현재 테마로 묶은 실시간 관찰. 전체 시장 전수·매수추천이 아님"
     }
+
+
+def build_home_candidates(cur, rows):
+    """Read the current local candidate tracker for a compact Home Top5."""
+    if not table_exists(cur,"radar_candidate_episodes"):
+        return []
+    rowmap={x.get("code"):x for x in rows}
+    try:
+        cur.execute("""SELECT stock_code,stock_name,entry_score,last_score,peak_score,primary_type,
+                              market_theme,event_type,chart_state,started_at,last_seen_at
+                       FROM radar_candidate_episodes
+                       WHERE status='ACTIVE' AND last_seen_at>now()-interval '10 minutes'
+                       ORDER BY last_score DESC,peak_score DESC,last_seen_at DESC
+                       LIMIT 12""")
+        out=[]
+        for code,name,entry,last,peak,ptype,theme,event,chart,started,last_seen in cur.fetchall():
+            r=rowmap.get(code) or {}
+            out.append({
+                "code":code,"name":name or r.get("name") or code,
+                "attention_score":last,"entry_score":entry,"peak_score":peak,
+                "primary_type":ptype,"market_theme":theme or r.get("market_theme"),
+                "event_type":event or (r.get("material_digest") or {}).get("material_type"),
+                "chart_state":chart or r.get("chart_state"),
+                "started_at":iso(started),"last_seen_at":iso(last_seen),
+                "change_rate":r.get("change_rate"),
+                "rank":r.get("rank"),"trade_rank":r.get("trade_rank"),
+                "trade_value_krw":r.get("trade_value_krw"),
+                "recent_turnover_krw":r.get("recent_turnover_krw"),
+                "rank_history":r.get("rank_history") or {},
+                "reversal_signal":r.get("reversal_signal"),
+            })
+        return out[:5]
+    except Exception:
+        return []
 
 
 def stock_flow_state(rank_no, rank_change, trade_rank, catalyst):
@@ -890,7 +944,12 @@ def feedback(payload: dict = Body(...), x_dashboard_token: Optional[str] = Heade
 
 @app.get("/api/dashboard")
 def dashboard(x_dashboard_token: Optional[str] = Header(None)):
+    global _DASH_CACHE,_DASH_CACHE_AT
     require_token(x_dashboard_token)
+    now_mono=pytime.monotonic()
+    with _DASH_CACHE_LOCK:
+        if _DASH_CACHE is not None and now_mono-_DASH_CACHE_AT<DASHBOARD_CACHE_SECONDS:
+            return _DASH_CACHE
     with get_db() as c:
         with c.cursor() as cur:
             # system
@@ -1193,6 +1252,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
             sector_groups = build_sector_groups(rows)
             leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc),sector_groups)
+            home_candidates=build_home_candidates(cur,rows)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1408,7 +1468,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "links":extract_links(m["text"] or "")
                 })
 
-    return {
+    payload={
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research, "deepresearch": deepresearch},
         "regime": regime,
@@ -1437,7 +1497,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         },
         "sectors": sectors,
         "telegram_recent": recent_telegram,
+        "home_candidates": home_candidates,
+        "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
+    with _DASH_CACHE_LOCK:
+        _DASH_CACHE=payload
+        _DASH_CACHE_AT=pytime.monotonic()
+    return payload
 
 DASHBOARD_HTML = r"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
