@@ -252,14 +252,17 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                 print('prospective outcomes 대기')
             for r in rows[:60]:
                 ca=r['control_avg_return_pct'];ha=r['challenger_avg_return_pct'];da=r['delta_avg_return_pct']
+                dp=r['delta_positive_rate_pp'];dm=r['delta_mae_pct']
+                ca_txt=f"{ca:+.3f}%" if ca is not None else '—'
+                ha_txt=f"{ha:+.3f}%" if ha is not None else '—'
+                da_txt=f"{da:+.3f}pp" if da is not None else '—'
+                dp_txt=f"{dp:+.1f}pp" if dp is not None else '—'
+                dm_txt=f"{dm:+.3f}pp" if dm is not None else '—'
                 print(f"{r['shadow_rule_id']} {r['horizon']} {r['cohort']} {r['evidence_state']} "
                       f"changes={r['membership_changes']} controlN={r['control_samples']} "
                       f"challengerN={r['challenger_samples']} "
-                      f"controlAvg={(f'{ca:+.3f}%' if ca is not None else '—')} "
-                      f"challengerAvg={(f'{ha:+.3f}%' if ha is not None else '—')} "
-                      f"dAvg={(f'{da:+.3f}pp' if da is not None else '—')} "
-                      f"dPos={(f'{r['delta_positive_rate_pp']:+.1f}pp' if r['delta_positive_rate_pp'] is not None else '—')} "
-                      f"dMAE={(f'{r['delta_mae_pct']:+.3f}pp' if r['delta_mae_pct'] is not None else '—')}")
+                      f"controlAvg={ca_txt} challengerAvg={ha_txt} "
+                      f"dAvg={da_txt} dPos={dp_txt} dMAE={dm_txt}")
 
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
