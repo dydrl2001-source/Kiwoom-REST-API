@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS market_os_assessment_snapshots (
     burst_multiple      DOUBLE PRECISION,
     theme_share_change_pp DOUBLE PRECISION,
     chart_state         TEXT,
+    micro_trade_value_15s_krw NUMERIC,
+    micro_buy_share_15s DOUBLE PRECISION,
+    micro_tick_count_15s INTEGER,
+    micro_gap_count_15s INTEGER,
+    micro_strength      DOUBLE PRECISION,
+    micro_buy_ratio     DOUBLE PRECISION,
     axis_reasons        JSONB NOT NULL DEFAULT '{}'::jsonb,
     risk_flags          JSONB NOT NULL DEFAULT '[]'::jsonb,
     evidence_ref        JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -61,6 +67,12 @@ CREATE INDEX IF NOT EXISTS idx_market_os_assessment_code_time
     ON market_os_assessment_snapshots(stock_code, snapshot_time DESC);
 CREATE INDEX IF NOT EXISTS idx_market_os_assessment_tier_time
     ON market_os_assessment_snapshots(watch_tier, snapshot_time DESC);
+ALTER TABLE market_os_assessment_snapshots ADD COLUMN IF NOT EXISTS micro_trade_value_15s_krw NUMERIC;
+ALTER TABLE market_os_assessment_snapshots ADD COLUMN IF NOT EXISTS micro_buy_share_15s DOUBLE PRECISION;
+ALTER TABLE market_os_assessment_snapshots ADD COLUMN IF NOT EXISTS micro_tick_count_15s INTEGER;
+ALTER TABLE market_os_assessment_snapshots ADD COLUMN IF NOT EXISTS micro_gap_count_15s INTEGER;
+ALTER TABLE market_os_assessment_snapshots ADD COLUMN IF NOT EXISTS micro_strength DOUBLE PRECISION;
+ALTER TABLE market_os_assessment_snapshots ADD COLUMN IF NOT EXISTS micro_buy_ratio DOUBLE PRECISION;
 
 CREATE TABLE IF NOT EXISTS market_os_assessment_outcomes (
     assessment_time     TIMESTAMPTZ NOT NULL,
@@ -150,6 +162,48 @@ def safe_num(v):
         return None
 
 
+def current_microstructure(codes,sample):
+    """Use only fully closed 5-second buckets at/before the assessment."""
+    codes=[x for x in codes if x]
+    if not codes:return {}
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_realtime_5s_bars"):
+            return {}
+        end=sample-timedelta(seconds=5)
+        start=end-timedelta(seconds=15)
+        cur.execute("""SELECT stock_code,
+                              SUM(trade_value_krw) AS tv,
+                              SUM(buy_volume) AS buy,
+                              SUM(sell_volume) AS sell,
+                              SUM(tick_count) AS ticks,
+                              SUM(gap_count) AS gaps
+                       FROM market_realtime_5s_bars
+                       WHERE stock_code=ANY(%s) AND bucket_time>=%s AND bucket_time<=%s
+                       GROUP BY stock_code""",(codes,start,end))
+        out={}
+        for r in cur.fetchall():
+            buy=safe_num(r["buy"]) or 0;sell=safe_num(r["sell"]) or 0;den=buy+sell
+            out[r["stock_code"]]={
+                "trade_value_15s_krw":safe_num(r["tv"]),
+                "buy_share_15s":buy/den if den else None,
+                "tick_count_15s":int(r["ticks"] or 0),
+                "gap_count_15s":int(r["gaps"] or 0),
+                "strength":None,"buy_ratio":None,
+            }
+        cur.execute("""SELECT DISTINCT ON(stock_code)
+                              stock_code,last_strength,last_buy_ratio,bucket_time
+                       FROM market_realtime_5s_bars
+                       WHERE stock_code=ANY(%s) AND bucket_time<=%s
+                       ORDER BY stock_code,bucket_time DESC""",(codes,end))
+        for r in cur.fetchall():
+            x=out.setdefault(r["stock_code"],{
+                "trade_value_15s_krw":None,"buy_share_15s":None,
+                "tick_count_15s":0,"gap_count_15s":0,"strength":None,"buy_ratio":None
+            })
+            x["strength"]=safe_num(r["last_strength"]);x["buy_ratio"]=safe_num(r["last_buy_ratio"])
+        return out
+
+
 def capture_assessments():
     payload=desk_payload(include_tracking=False)
     if not payload.get("recent_trade_count"):
@@ -161,6 +215,7 @@ def capture_assessments():
     if age < -60 or age > 180:
         return 0,None
     snap=sample.replace(microsecond=0)
+    micro=current_microstructure([x.get("code") for x in payload.get("market_os_watchlist",[])],sample)
     rows={r.get("code"):r for r in payload.get("rows",[])}
     regime=payload.get("market_regime") or {}
     items=[]
@@ -186,7 +241,14 @@ def capture_assessments():
             safe_num(x.get("change_pct")),x.get("query_rank"),x.get("trade_rank"),
             x.get("interval_turnover_krw"),x.get("five_min_turnover_krw"),
             safe_num(x.get("burst_multiple")),safe_num(x.get("theme_share_change_pp")),
-            x.get("chart_state"),json.dumps(x.get("axis_reasons") or {},ensure_ascii=False),
+            x.get("chart_state"),
+            (micro.get(code) or {}).get("trade_value_15s_krw"),
+            (micro.get(code) or {}).get("buy_share_15s"),
+            (micro.get(code) or {}).get("tick_count_15s"),
+            (micro.get(code) or {}).get("gap_count_15s"),
+            (micro.get(code) or {}).get("strength"),
+            (micro.get(code) or {}).get("buy_ratio"),
+            json.dumps(x.get("axis_reasons") or {},ensure_ascii=False),
             json.dumps(x.get("risk_flags") or [],ensure_ascii=False),
             json.dumps(evidence,ensure_ascii=False)
         ))
@@ -198,8 +260,9 @@ def capture_assessments():
           radar_score,theme_score,setup_score,catalyst_grade,trigger_state,market_stance,
           session_bucket,market_theme,event_type,current_price_krw,change_pct,query_rank,trade_rank,
           interval_turnover_krw,five_min_turnover_krw,burst_multiple,theme_share_change_pp,
-          chart_state,axis_reasons,risk_flags,evidence_ref)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb)
+          chart_state,micro_trade_value_15s_krw,micro_buy_share_15s,micro_tick_count_15s,
+          micro_gap_count_15s,micro_strength,micro_buy_ratio,axis_reasons,risk_flags,evidence_ref)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb)
           ON CONFLICT(snapshot_time,stock_code,rule_version) DO NOTHING""",items)
         return cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(items),snap
 
@@ -400,10 +463,29 @@ def _aggregate(values):
     }
 
 
+def _bucket_strength(v):
+    v=safe_num(v)
+    if v is None:return "UNKNOWN"
+    if v>=120:return "120+"
+    if v>=100:return "100-119"
+    if v>=80:return "80-99"
+    return "<80"
+
+
+def _bucket_buy_share(v):
+    v=safe_num(v)
+    if v is None:return "UNKNOWN"
+    if v>=.65:return "65%+"
+    if v>=.55:return "55-64%"
+    if v>=.45:return "45-54%"
+    return "<45%"
+
+
 def refresh_segments():
     with db() as c,c.cursor() as cur:
         cur.execute("""SELECT a.watch_tier,a.market_stance,a.trigger_state,a.session_bucket,
-                              a.catalyst_grade,a.setup_score,o.horizon,o.return_pct,o.mfe_pct,o.mae_pct
+                              a.catalyst_grade,a.setup_score,a.micro_strength,a.micro_buy_share_15s,
+                              o.horizon,o.return_pct,o.mfe_pct,o.mae_pct
                        FROM market_os_assessment_outcomes o
                        JOIN market_os_assessment_snapshots a
                          ON a.snapshot_time=o.assessment_time AND a.stock_code=o.stock_code
@@ -425,6 +507,8 @@ def refresh_segments():
                 "SESSION":session,
                 "CATALYST":r["catalyst_grade"] or "UNKNOWN",
                 "SETUP":_bucket_setup(r["setup_score"]),
+                "MICRO_STRENGTH":_bucket_strength(r["micro_strength"]),
+                "MICRO_BUY_SHARE":_bucket_buy_share(r["micro_buy_share_15s"]),
                 "STANCE_TRIGGER":stance+" | "+trigger,
                 "TIER_SESSION":tier+" | "+session,
             }
