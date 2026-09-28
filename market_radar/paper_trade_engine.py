@@ -325,10 +325,19 @@ def maybe_open(cur,now):
                      (ai or {}).get("snapshot_time"),(ai or {}).get("decision_version"),
                      (ai or {}).get("regime_label")))
         trade_id=cur.fetchone()["id"]
+        ai_event=None
+        if ai:
+            ai_event={
+                "snapshot_time":ai.get("snapshot_time").isoformat() if ai.get("snapshot_time") else None,
+                "state":ai.get("state"),"conviction":ai.get("conviction"),
+                "strategy_id":ai.get("strategy_id"),"strategy_name":ai.get("strategy_name"),
+                "strategy_family":ai.get("strategy_family"),"strategy_fit":ai.get("strategy_fit"),
+                "regime_label":ai.get("regime_label"),"decision_version":ai.get("decision_version")
+            }
         event(cur,trade_id,q["exchange_at"],"PAPER_ENTRY",q["price"],c["last_score"],
               " | ".join(reasons),
               {"candidate_version":c["candidate_version"],"chart_state":chart.get("state"),
-               "top_warning":warn,"ai_decision":ai})
+               "top_warning":warn,"ai_decision":ai_event})
         opened+=1
     return opened
 
