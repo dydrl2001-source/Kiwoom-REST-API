@@ -21,6 +21,9 @@ try:
     print('CATALYST_GROUPS:',len(d.get('catalyst_groups',[])))
     print('WATCH_CANDIDATES:',len(d.get('watch_candidates',[])))
     print('TOP_ATTENTION_SCORE:',(d.get('watch_candidates') or [{}])[0].get('attention_score'))
+    from collections import Counter
+    counts=Counter(x.get('primary_type') for x in d.get('watch_candidates',[]) if x.get('primary_type'))
+    print('WATCH_TYPE_COUNTS:',dict(counts))
     a=d.get('automation',{})
     print('AUTO_SELECTION:',a.get('automatic'))
     print('DAILY_LIMIT_UNCHANGED:',a.get('daily_limit'))
