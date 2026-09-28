@@ -42,6 +42,24 @@ def _current_session():
     return "AFTER"
 
 
+def _bucket_strength(v):
+    try:v=float(v)
+    except (TypeError,ValueError):return "UNKNOWN"
+    if v>=120:return "120+"
+    if v>=100:return "100-119"
+    if v>=80:return "80-99"
+    return "<80"
+
+
+def _bucket_buy_share(v):
+    try:v=float(v)
+    except (TypeError,ValueError):return "UNKNOWN"
+    if v>=.65:return "65%+"
+    if v>=.55:return "55-64%"
+    if v>=.45:return "45-54%"
+    return "<45%"
+
+
 def latest_microstructure(cur,codes):
     out={}
     if not codes:return out
@@ -97,7 +115,7 @@ def learning_payload():
         micro=latest_microstructure(cur,[x.get("code") for x in current.get("market_os_watchlist",[]) if x.get("code")])
         if not exists(cur,"market_os_learning_status"):
             for x in current.get("market_os_watchlist",[]):
-                x["microstructure"]=micro.get(x.get("code"))
+                x["microstructure"]=m
             current["learning"]=learning
             return current
         cur.execute("SELECT * FROM market_os_learning_status WHERE id=1")
@@ -163,6 +181,7 @@ def learning_payload():
     # their live tier. Matching uses only already-resolved outcomes.
     seg_index={(s["segment_type"],s["segment_value"],s["horizon"]):s for s in learning["segments"]}
     for x in current.get("market_os_watchlist",[]):
+        m=micro.get(x.get("code"))
         keys=[
             ("STANCE_TRIGGER",(x.get("market_stance") or "UNKNOWN")+" | "+(x.get("trigger_state") or "UNKNOWN")),
             ("TIER_SESSION",(x.get("watch_tier") or "UNKNOWN")+" | "+_current_session()),
@@ -170,6 +189,11 @@ def learning_payload():
             ("STANCE",x.get("market_stance") or "UNKNOWN"),
             ("TIER",x.get("watch_tier") or "UNKNOWN"),
         ]
+        if m:
+            keys.extend([
+                ("MICRO_STRENGTH",_bucket_strength(m.get("strength"))),
+                ("MICRO_BUY_SHARE",_bucket_buy_share(m.get("buy_share_15s"))),
+            ])
         evidence=[]
         for horizon in ("30m","close","5m"):
             for kind,value in keys:
