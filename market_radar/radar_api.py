@@ -536,6 +536,78 @@ def build_leader_desk(cur, trade_map, query_rows, now, sector_groups=None):
     }
 
 
+def build_paper_lab(cur):
+    """Read-only Home summary of the local paper experiment."""
+    empty={
+        "status":"NOT_INITIALIZED","rule_version":"paper-v1-observation",
+        "open":[],"recent_closed":[],"summary":{"closed":0,"positive_pct":None,"median_return_pct":None,
+        "avg_return_pct":None,"median_mfe_pct":None,"median_mae_pct":None},
+        "note":"1단위 가상 관찰 · 실계좌 주문/수수료/슬리피지 없음"
+    }
+    if not table_exists(cur,"radar_paper_trades"):
+        return empty
+    status={"status":"READY","open_count":0,"closed_today":0,"note":empty["note"]}
+    if table_exists(cur,"radar_paper_status"):
+        cur.execute("SELECT status,updated_at,open_count,closed_today,note FROM radar_paper_status WHERE id=1")
+        r=cur.fetchone()
+        if r:
+            status={"status":r[0],"updated_at":iso(r[1]),"open_count":r[2],
+                    "closed_today":r[3],"note":r[4] or empty["note"]}
+    cur.execute("""SELECT id,stock_code,stock_name,rule_version,opened_at,entry_price_krw,
+                          last_mark_at,last_mark_price_krw,return_pct,mfe_pct,mae_pct,
+                          entry_score,primary_type,market_theme,event_type,chart_state_entry,entry_reason
+                   FROM radar_paper_trades
+                   WHERE status='OPEN' ORDER BY opened_at""")
+    open_rows=[]
+    for r in cur.fetchall():
+        open_rows.append({
+            "id":r[0],"code":r[1],"name":r[2],"rule_version":r[3],"opened_at":iso(r[4]),
+            "entry_price_krw":float(r[5]) if r[5] is not None else None,
+            "mark_at":iso(r[6]),"mark_price_krw":float(r[7]) if r[7] is not None else None,
+            "return_pct":r[8],"mfe_pct":r[9],"mae_pct":r[10],"entry_score":r[11],
+            "primary_type":r[12],"market_theme":r[13],"event_type":r[14],
+            "chart_state":r[15],"entry_reason":r[16] or []
+        })
+    cur.execute("""SELECT id,stock_code,stock_name,rule_version,opened_at,closed_at,
+                          entry_price_krw,exit_price_krw,return_pct,mfe_pct,mae_pct,
+                          entry_score,exit_score,primary_type,market_theme,event_type,
+                          exit_reason,exit_price_basis
+                   FROM radar_paper_trades
+                   WHERE status IN('CLOSED','CLOSED_NO_PRICE')
+                   ORDER BY closed_at DESC NULLS LAST LIMIT 12""")
+    closed=[]
+    for r in cur.fetchall():
+        closed.append({
+            "id":r[0],"code":r[1],"name":r[2],"rule_version":r[3],"opened_at":iso(r[4]),"closed_at":iso(r[5]),
+            "entry_price_krw":float(r[6]) if r[6] is not None else None,
+            "exit_price_krw":float(r[7]) if r[7] is not None else None,
+            "return_pct":r[8],"mfe_pct":r[9],"mae_pct":r[10],
+            "entry_score":r[11],"exit_score":r[12],"primary_type":r[13],
+            "market_theme":r[14],"event_type":r[15],"exit_reason":r[16],"exit_price_basis":r[17]
+        })
+    cur.execute("""SELECT COUNT(*),
+                          AVG(return_pct),
+                          percentile_cont(0.5) WITHIN GROUP(ORDER BY return_pct),
+                          AVG(CASE WHEN return_pct>0 THEN 1.0 ELSE 0.0 END),
+                          percentile_cont(0.5) WITHIN GROUP(ORDER BY mfe_pct),
+                          percentile_cont(0.5) WITHIN GROUP(ORDER BY mae_pct)
+                   FROM radar_paper_trades
+                   WHERE status='CLOSED' AND return_pct IS NOT NULL
+                     AND closed_at>now()-interval '30 days'""")
+    r=cur.fetchone()
+    summary={
+        "closed":int(r[0] or 0),"avg_return_pct":float(r[1]) if r[1] is not None else None,
+        "median_return_pct":float(r[2]) if r[2] is not None else None,
+        "positive_pct":float(r[3])*100 if r[3] is not None else None,
+        "median_mfe_pct":float(r[4]) if r[4] is not None else None,
+        "median_mae_pct":float(r[5]) if r[5] is not None else None,
+        "small_sample":int(r[0] or 0)<20
+    }
+    return {**status,"rule_version":"paper-v1-observation","open":open_rows,
+            "recent_closed":closed,"summary":summary,
+            "note":"자동 가상진입/청산 실험. 실제 주문·포지션 크기·수수료·슬리피지를 포함하지 않음"}
+
+
 def build_home_candidates(cur, rows):
     """Read the current local candidate tracker for a compact Home Top5."""
     if not table_exists(cur,"radar_candidate_episodes"):
@@ -1322,6 +1394,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             sector_groups = build_sector_groups(rows)
             leader_desk=build_leader_desk(cur,trade_map,rows,datetime.now(timezone.utc),sector_groups)
             home_candidates=build_home_candidates(cur,rows)
+            paper_lab=build_paper_lab(cur)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1567,6 +1640,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "sectors": sectors,
         "telegram_recent": recent_telegram,
         "home_candidates": home_candidates,
+        "paper_lab": paper_lab,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
     with _DASH_CACHE_LOCK:
