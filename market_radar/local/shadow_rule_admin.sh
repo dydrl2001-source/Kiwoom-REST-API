@@ -91,6 +91,9 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
             raise SystemExit("Candidate has no PROMOTE/SUPPRESS review_action.")
 
         shadow_rule_id="sr-"+r["candidate_key"]
+        cur.execute("SELECT 1 FROM market_os_shadow_rules WHERE candidate_key=%s",(r["candidate_key"],))
+        if cur.fetchone():
+            raise SystemExit("A Shadow Rule already exists for this candidate. Re-approval is blocked to preserve the original prospective boundary.")
         spec={
             "engine":"tier-shift-v1",
             "prospective_only":True,
@@ -110,10 +113,7 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
         cur.execute("""INSERT INTO market_os_shadow_rules(
                 shadow_rule_id,candidate_key,rule_version,segment_type,segment_value,
                 source_horizon,action,enabled,approved_at,approved_by,spec)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,TRUE,now(),'MANUAL_SCRIPT',%s::jsonb)
-            ON CONFLICT(candidate_key) DO UPDATE SET
-                enabled=TRUE,disabled_at=NULL,action=excluded.action,
-                approved_at=now(),approved_by='MANUAL_SCRIPT',spec=excluded.spec""",
+            VALUES(%s,%s,%s,%s,%s,%s,%s,TRUE,now(),'MANUAL_SCRIPT',%s::jsonb)""",
             (shadow_rule_id,r["candidate_key"],r["rule_version"],r["segment_type"],
              r["segment_value"],r["horizon"],action,json.dumps(spec,ensure_ascii=False)))
         cur.execute("""UPDATE market_os_promotion_registry
