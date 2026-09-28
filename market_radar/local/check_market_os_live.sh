@@ -29,6 +29,8 @@ print('REALTIME_LAST_MESSAGE:',rt.get('last_message_at'))
 print('REALTIME_SUBSCRIBED:',rt.get('subscribed_count'))
 print('REALTIME_TICKS:',rt.get('tick_count'))
 print('REALTIME_GAPS:',rt.get('gap_count'))
+print('REALTIME_RECENT_GAPS_5M:',rt.get('recent_gap_count_5m'))
+print('REALTIME_RECENT_GAP_STOCKS_5M:',rt.get('recent_gap_stocks_5m'))
 print('COVERAGE:',d.get('coverage'))
 for x in d.get('tables') or []:
     print('TABLE',x.get('key'),'LEVEL='+str(x.get('level')),'LATEST='+str(x.get('latest')),'TODAY='+str(x.get('today_rows')))
