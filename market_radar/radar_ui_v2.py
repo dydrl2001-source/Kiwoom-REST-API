@@ -42,6 +42,8 @@ button{font:inherit}a{color:#4267ba;text-decoration:none}.app{max-width:1500px;m
 .sector-chip.sc0 i{background:#5d6fd7}.sector-chip.sc1 i{background:#1d9b83}.sector-chip.sc2 i{background:#dd8b35}.sector-chip.sc3 i{background:#b85d8f}.sector-chip.sc4 i{background:#3f8fc0}.sector-chip.sc5 i{background:#8a62c8}.sector-chip.sc6 i{background:#6b8e45}.sector-chip.sc7 i{background:#c25a52}
 .sector-pulse{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-bottom:9px}.sector-pulse-card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 10px;position:relative;overflow:hidden}.sector-pulse-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#7b8799}.sector-pulse-card.sc0:before{background:#5d6fd7}.sector-pulse-card.sc1:before{background:#1d9b83}.sector-pulse-card.sc2:before{background:#dd8b35}.sector-pulse-card.sc3:before{background:#b85d8f}.sector-pulse-card.sc4:before{background:#3f8fc0}.sector-pulse-card.sc5:before{background:#8a62c8}.sector-pulse-card.sc6:before{background:#6b8e45}.sector-pulse-card.sc7:before{background:#c25a52}.sector-pulse-card .sp-name{font-weight:850;font-size:12px}.sector-pulse-card .sp-count{font-size:19px;font-weight:900;margin-top:2px}.sector-pulse-card .sp-money{font-size:10px;color:var(--muted);margin-top:2px}.sector-pulse-card .sp-reason{font-size:9px;color:#52627a;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .theme-strength{margin-top:6px}.theme-strength-top{display:flex;justify-content:space-between;align-items:center;font-size:10px}.theme-strength-top b{font-size:12px}.theme-strength-bar{height:6px;background:#edf1f7;border-radius:99px;overflow:hidden;margin-top:4px}.theme-strength-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#7b8ce0,#19a287)}.theme-components{font-size:9px;color:#718098;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.signal-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:999px;font-size:9px;font-weight:850;margin-top:3px}.signal-top{background:#ffeded;color:#a73f46}.signal-bottom{background:#e8f1ff;color:#315fa7}.signal-badge small{font-size:8px;font-weight:700;opacity:.8}
+
 
 .surge-row td:first-child{position:relative;padding-left:13px}.surge-row.sc0 td:first-child:before,.surge-row.sc1 td:first-child:before,.surge-row.sc2 td:first-child:before,.surge-row.sc3 td:first-child:before,.surge-row.sc4 td:first-child:before,.surge-row.sc5 td:first-child:before,.surge-row.sc6 td:first-child:before,.surge-row.sc7 td:first-child:before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:4px;border-radius:4px}.surge-row.sc0 td:first-child:before{background:#5d6fd7}.surge-row.sc1 td:first-child:before{background:#1d9b83}.surge-row.sc2 td:first-child:before{background:#dd8b35}.surge-row.sc3 td:first-child:before{background:#b85d8f}.surge-row.sc4 td:first-child:before{background:#3f8fc0}.surge-row.sc5 td:first-child:before{background:#8a62c8}.surge-row.sc6 td:first-child:before{background:#6b8e45}.surge-row.sc7 td:first-child:before{background:#c25a52}
 
@@ -98,7 +100,7 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div class="sector-grid" id="homeSectors"></div>
  <div class="section-title"><h2>급부상 종목</h2><span>현재 상위 12종목 · 섹터별 개수와 같은 색상 표시</span></div>
  <div id="homeSectorMix" class="surge-sector-bar"></div>
- <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th>조회</th><th class="left">종목</th><th>등락</th><th>대금순위</th><th>거래대금</th><th class="left">섹터</th><th class="left">흐름</th><th class="left">재료 요약</th><th class="left">미모사</th></tr></thead><tbody id="homeStocks"></tbody></table></div></div>
+ <div class="panel"><div class="tblwrap"><table class="tbl"><thead><tr><th>조회</th><th class="left">종목</th><th>등락</th><th>대금순위</th><th>거래대금</th><th class="left">섹터</th><th class="left">흐름</th><th class="left">재료 요약</th><th class="left">차트·고점/바닥</th></tr></thead><tbody id="homeStocks"></tbody></table></div></div>
 </section>
 
 <section class="view" id="view-index">
@@ -193,6 +195,12 @@ function recentMoney(x){
  const sec=x.recent_turnover_seconds==null?"최근":Math.round(Number(x.recent_turnover_seconds))+"초";
  return sec+" +"+money(x.recent_turnover_krw);
 }
+function signalBadge(x){
+ const s=x?.reversal_signal;if(!s)return "";
+ const cls=s.kind==="TOP_WARNING"?"signal-top":"signal-bottom";
+ const icon=s.kind==="TOP_WARNING"?"▼":"▲";
+ return '<span class="signal-badge '+cls+'" title="'+esc((s.reasons||[]).join(" · "))+'">'+icon+' '+esc(s.label||"관찰")+' '+esc(s.score??"-")+'</span>';
+}
 function renderSectorMix(rows){
  const top=(rows||[]).slice(0,12),groups={};
  top.forEach(x=>{const n=sectorName(x),g=groups[n]||(groups[n]={name:n,count:0,money:0,recent:0});g.count++;g.money+=Number(x.trade_value_krw||0);g.recent+=Number(x.recent_turnover_krw||0)});
@@ -277,7 +285,7 @@ function stockRow(x,mode){
  '<td class="left">'+sectorChip(sectorName(x))+'</td>'+
  '<td class="left"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td>'+
  '<td class="wrap"><b>'+esc(d.summary||"재료 미확인")+'</b><div class="sub">'+esc(d.assessment||"")+'</div></td>'+
- '<td class="left"><b>'+esc(c.state_ko||x.chart_state||"대기")+'</b><div class="sub">'+esc(c.minute_trend||"")+'</div></td></tr>';
+ '<td class="left"><b>'+esc(c.state_ko||x.chart_state||"대기")+'</b><div class="sub">'+esc(c.minute_trend||"")+'</div>'+signalBadge(x)+'</td></tr>';
 }
 function renderHomeStocks(rows){
  return (rows||[]).slice(0,12).map(x=>{
@@ -287,7 +295,7 @@ function renderHomeStocks(rows){
    '<td><b>'+esc(money(x.trade_value_krw))+'</b>'+(recent?'<div class="sub">'+esc(recent)+'</div>':'')+'</td>'+
    '<td class="left">'+sectorChip(sector)+'</td><td class="left"><span class="pill">'+esc(x.flow_state||"관찰")+'</span></td>'+
    '<td class="wrap">'+esc(d.summary||"직접 재료 미확인")+'<div class="sub">'+esc(d.assessment||"")+'</div></td>'+
-   '<td class="left">'+esc(m.state_ko||x.chart_state||"대기")+'</td></tr>';
+   '<td class="left">'+esc(m.state_ko||x.chart_state||"대기")+signalBadge(x)+'</td></tr>';
  }).join("")||'<tr><td colspan="9" class="muted">장중 실시간 데이터 대기 중</td></tr>';
 }
 function evidence(c){
@@ -413,6 +421,10 @@ function render(d){
  if(noMat)sig.push("돈선행 "+noMat+"종목");
  if((d.material_stats?.direct||0)>0)sig.push("직접재료 "+d.material_stats.direct+"종목");
  if((d.material_stats?.spreading||0)>0)sig.push("확산 "+d.material_stats.spreading+"종목");
+ const topWarn=(d.query_ranking||[]).slice(0,12).filter(x=>x.reversal_signal?.kind==="TOP_WARNING").length;
+ const bottomWatch=(d.query_ranking||[]).slice(0,12).filter(x=>x.reversal_signal?.kind==="BOTTOM_WATCH").length;
+ if(topWarn)sig.push("고점경계 "+topWarn+"종목");
+ if(bottomWatch)sig.push("바닥감시 "+bottomWatch+"종목");
  if(d.regime_metrics?.rank_turnover_5m!=null)sig.push("교체율 "+pct(d.regime_metrics.rank_turnover_5m));
  document.getElementById("quickSignals").innerHTML=sig.map(x=>'<span class="pill">'+esc(x)+'</span>').join("");
  const homeThemes=[...(d.sector_rankings||[])].sort((a,b)=>(Number(b.theme_strength||0)-Number(a.theme_strength||0))||(Number(b.recent_turnover_krw||0)-Number(a.recent_turnover_krw||0)));
