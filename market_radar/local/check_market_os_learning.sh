@@ -85,7 +85,18 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
             s["avg_mae_pct"]=float(r["avg_mae"]) if r["avg_mae"] is not None else None
             s["quality"]=_quality(s["samples"],s["distinct_stocks"],s["distinct_days"],_segment_depth(s["segment_type"]))
             segments.append(s)
-        interactions=_enrich_edges(segments)
+        edge_rows=[]
+        if exists('market_os_interaction_edges'):
+            cur.execute("""SELECT segment_type,segment_value,horizon,parent_type,parent_value,sample_basis,
+                                  child_samples,child_stocks,child_days,
+                                  comparator_samples,comparator_stocks,comparator_days,
+                                  child_avg_return_pct,comparator_avg_return_pct,delta_avg_return_pct,
+                                  child_positive_rate,comparator_positive_rate,delta_positive_rate_pp,
+                                  child_avg_mfe_pct,comparator_avg_mfe_pct,delta_mfe_pct,
+                                  child_avg_mae_pct,comparator_avg_mae_pct,delta_mae_pct
+                           FROM market_os_interaction_edges""")
+            edge_rows=[dict(x) for x in cur.fetchall()]
+        interactions=_enrich_edges(segments,edge_rows)
         print('\n[SEGMENTS N>=5]')
         if not rows:
             print('표본 5개 이상 구간 없음')
@@ -109,7 +120,8 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                   f"dAvg={(f'{edge:+.3f}pp' if edge is not None else '—')} "
                   f"dPos={(f'{pos:+.1f}pp' if pos is not None else '—')} "
                   f"dMAE={(f'{mae:+.3f}pp' if mae is not None else '—')} | "
-                  f"parent={b.get('segment_type','—')}:{b.get('segment_value','—')}")
+                  f"compare={b.get('comparison','—')} parent={b.get('segment_type','—')}:{b.get('segment_value','—')} "
+                  f"compN={b.get('samples','—')}")
             shown+=1
             if shown>=40:break
         if not shown:
