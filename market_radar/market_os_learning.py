@@ -36,6 +36,7 @@ from market_os_shadow import (
     experiment_slices as shadow_experiment_slices,
     shadow_decision,
 )
+from market_os_dossier import build_dossier as build_adoption_dossier, dossier_hash as adoption_dossier_hash
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
@@ -331,6 +332,40 @@ CREATE TABLE IF NOT EXISTS market_os_shadow_decision_events (
 );
 CREATE INDEX IF NOT EXISTS idx_market_os_shadow_decision_events
     ON market_os_shadow_decision_events(shadow_rule_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_adoption_dossiers (
+    dossier_id              TEXT PRIMARY KEY,
+    shadow_rule_id          TEXT NOT NULL,
+    revision                INTEGER NOT NULL,
+    content_hash            TEXT NOT NULL,
+    decision_state          TEXT NOT NULL,
+    decision_updated_at     TIMESTAMPTZ,
+    review_state            TEXT NOT NULL DEFAULT 'PENDING',
+    generated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at             TIMESTAMPTZ,
+    reviewed_by             TEXT,
+    review_note             TEXT,
+    dossier                 JSONB NOT NULL,
+    UNIQUE(shadow_rule_id,revision),
+    UNIQUE(shadow_rule_id,content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_rule
+    ON market_os_adoption_dossiers(shadow_rule_id,revision DESC);
+CREATE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_review
+    ON market_os_adoption_dossiers(review_state,generated_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_adoption_dossier_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    dossier_id              TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type              TEXT NOT NULL,
+    from_review_state       TEXT,
+    to_review_state         TEXT NOT NULL,
+    note                    TEXT,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_adoption_dossier_events
+    ON market_os_adoption_dossier_events(dossier_id,event_time DESC);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -1339,6 +1374,153 @@ def refresh_shadow_summaries():
     return written
 
 
+def refresh_adoption_dossiers():
+    """Freeze immutable review revisions for currently accepted shadow candidates."""
+    if not SHADOW_LAB_ENABLED:
+        return {"generated":0,"staled":0}
+    generated=0;staled=0
+    with db() as c,c.cursor() as cur:
+        required=(
+            "market_os_shadow_decisions","market_os_shadow_rules",
+            "market_os_promotion_registry","market_os_adoption_dossiers"
+        )
+        if any(not table_exists(cur,x) for x in required):
+            return {"generated":0,"staled":0}
+
+        cur.execute("""SELECT d.shadow_rule_id,d.decision_state,d.review_eligible,
+                              d.primary_cohort,d.reason_codes,d.evidence,d.updated_at AS decision_updated_at,
+                              r.candidate_key,r.rule_version,r.segment_type,r.segment_value,
+                              r.source_horizon,r.action,r.approved_at,
+                              p.direction,p.review_action,p.quality,p.walk_forward_status,
+                              p.samples,p.distinct_stocks,p.distinct_days,p.avg_return_pct,
+                              p.early_avg_return_pct,p.recent_avg_return_pct
+                       FROM market_os_shadow_decisions d
+                       JOIN market_os_shadow_rules r ON r.shadow_rule_id=d.shadow_rule_id
+                       LEFT JOIN market_os_promotion_registry p ON p.candidate_key=r.candidate_key
+                       WHERE d.decision_state='ACCEPT_CANDIDATE'
+                         AND d.review_eligible=TRUE
+                       ORDER BY d.updated_at,d.shadow_rule_id""")
+        accepted=cur.fetchall()
+        accepted_ids={r["shadow_rule_id"] for r in accepted}
+
+        # A pending dossier cannot remain actionable after the decision falls
+        # below ACCEPT_CANDIDATE. Historical approved/rejected reviews stay intact.
+        cur.execute("""SELECT dossier_id,shadow_rule_id,review_state
+                       FROM market_os_adoption_dossiers
+                       WHERE review_state='PENDING'""")
+        for d in cur.fetchall():
+            if d["shadow_rule_id"] in accepted_ids:
+                continue
+            cur.execute("""UPDATE market_os_adoption_dossiers
+                           SET review_state='STALE_DECISION'
+                           WHERE dossier_id=%s AND review_state='PENDING'""",(d["dossier_id"],))
+            if cur.rowcount:
+                cur.execute("""INSERT INTO market_os_adoption_dossier_events(
+                        dossier_id,event_type,from_review_state,to_review_state,note,evidence)
+                    VALUES(%s,'DECISION_STALE','PENDING','STALE_DECISION',
+                           'Shadow Decision no longer ACCEPT_CANDIDATE','{}'::jsonb)""",
+                    (d["dossier_id"],))
+                staled+=1
+
+        for row in accepted:
+            rule=dict(row)
+            decision={
+                "decision_state":row["decision_state"],
+                "review_eligible":row["review_eligible"],
+                "primary_cohort":row["primary_cohort"],
+                "reason_codes":row["reason_codes"] or [],
+                "evidence":row["evidence"] or {},
+            }
+            promotion={
+                "direction":row["direction"],"review_action":row["review_action"],
+                "quality":row["quality"],"walk_forward_status":row["walk_forward_status"],
+                "samples":row["samples"],"distinct_stocks":row["distinct_stocks"],
+                "distinct_days":row["distinct_days"],"avg_return_pct":row["avg_return_pct"],
+                "early_avg_return_pct":row["early_avg_return_pct"],
+                "recent_avg_return_pct":row["recent_avg_return_pct"],
+            }
+
+            cur.execute("""SELECT horizon,cohort,evidence_state,membership_changes,
+                                  control_samples,challenger_samples,
+                                  control_avg_return_pct,challenger_avg_return_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_shadow_experiment_summary
+                           WHERE shadow_rule_id=%s
+                           ORDER BY CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                    WHEN 'D+1' THEN 3 ELSE 4 END,cohort""",
+                        (row["shadow_rule_id"],))
+            summaries=[dict(x) for x in cur.fetchall()]
+
+            cur.execute("""SELECT o.assessment_time,o.stock_code,a.stock_name,a.market_stance,
+                                  o.control_tier,o.challenger_tier,
+                                  MAX(y.return_pct) FILTER(WHERE y.horizon='30m') AS return_30m_pct,
+                                  MAX(y.return_pct) FILTER(WHERE y.horizon='close') AS return_close_pct,
+                                  MAX(y.return_pct) FILTER(WHERE y.horizon='D+1') AS return_d1_pct
+                           FROM market_os_shadow_observations o
+                           JOIN market_os_assessment_snapshots a
+                             ON a.snapshot_time=o.assessment_time
+                            AND a.stock_code=o.stock_code
+                            AND a.rule_version=o.rule_version
+                           LEFT JOIN market_os_assessment_outcomes y
+                             ON y.assessment_time=o.assessment_time
+                            AND y.stock_code=o.stock_code
+                            AND y.rule_version=o.rule_version
+                           WHERE o.shadow_rule_id=%s AND o.changed=TRUE
+                           GROUP BY o.assessment_time,o.stock_code,a.stock_name,a.market_stance,
+                                    o.control_tier,o.challenger_tier
+                           ORDER BY o.assessment_time DESC
+                           LIMIT 500""",(row["shadow_rule_id"],))
+            cases=[]
+            for x in cur.fetchall():
+                v=dict(x)
+                v["assessment_time"]=x["assessment_time"].isoformat() if x["assessment_time"] else None
+                cases.append(v)
+
+            dossier=build_adoption_dossier(rule,decision,promotion,summaries,cases)
+            h=adoption_dossier_hash(dossier)
+            cur.execute("""SELECT dossier_id,revision,review_state
+                           FROM market_os_adoption_dossiers
+                           WHERE shadow_rule_id=%s AND content_hash=%s""",
+                        (row["shadow_rule_id"],h))
+            if cur.fetchone():
+                continue
+
+            cur.execute("""SELECT dossier_id,revision,review_state
+                           FROM market_os_adoption_dossiers
+                           WHERE shadow_rule_id=%s
+                           ORDER BY revision DESC LIMIT 1""",(row["shadow_rule_id"],))
+            prev=cur.fetchone()
+            revision=(int(prev["revision"])+1) if prev else 1
+            if prev and prev["review_state"]=="PENDING":
+                cur.execute("""UPDATE market_os_adoption_dossiers
+                               SET review_state='SUPERSEDED'
+                               WHERE dossier_id=%s AND review_state='PENDING'""",(prev["dossier_id"],))
+                if cur.rowcount:
+                    cur.execute("""INSERT INTO market_os_adoption_dossier_events(
+                            dossier_id,event_type,from_review_state,to_review_state,note,evidence)
+                        VALUES(%s,'SUPERSEDED_BY_NEW_EVIDENCE','PENDING','SUPERSEDED',
+                               'A newer evidence revision was generated',%s::jsonb)""",
+                        (prev["dossier_id"],json.dumps({"next_revision":revision},ensure_ascii=False)))
+
+            dossier_id=f"ad-{h[:20]}-r{revision:03d}"
+            cur.execute("""INSERT INTO market_os_adoption_dossiers(
+                    dossier_id,shadow_rule_id,revision,content_hash,decision_state,
+                    decision_updated_at,review_state,dossier)
+                VALUES(%s,%s,%s,%s,%s,%s,'PENDING',%s::jsonb)""",
+                (dossier_id,row["shadow_rule_id"],revision,h,row["decision_state"],
+                 row["decision_updated_at"],json.dumps(dossier,ensure_ascii=False,default=str)))
+            cur.execute("""INSERT INTO market_os_adoption_dossier_events(
+                    dossier_id,event_type,from_review_state,to_review_state,note,evidence)
+                VALUES(%s,'GENERATED',NULL,'PENDING',
+                       'Immutable adoption review revision generated',%s::jsonb)""",
+                (dossier_id,json.dumps({
+                    "shadow_rule_id":row["shadow_rule_id"],
+                    "revision":revision,"content_hash":h,
+                },ensure_ascii=False)))
+            generated+=1
+    return {"generated":generated,"staled":staled}
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(RULE_VERSION,))
@@ -1362,14 +1544,16 @@ def cycle():
     segments=refresh_segments()
     registry=refresh_promotion_registry()
     shadow_summaries=refresh_shadow_summaries()
+    dossiers=refresh_adoption_dossiers()
     update_status(
         "OK",
         f"captured={captured} shadow_obs={shadow_obs} outcomes={outcomes} segments={segments} "
         f"registry_active={registry['active']} promotion_candidates={registry['promotion_candidates']} "
-        f"registry_transitions={registry['transitions']} shadow_summaries={shadow_summaries}",
+        f"registry_transitions={registry['transitions']} shadow_summaries={shadow_summaries} "
+        f"dossiers_generated={dossiers['generated']} dossiers_staled={dossiers['staled']}",
         last_snapshot=snap,last_outcome=bool(outcomes)
     )
-    return captured,outcomes,segments,registry,shadow_obs,shadow_summaries
+    return captured,outcomes,segments,registry,shadow_obs,shadow_summaries,dossiers
 
 
 if __name__=="__main__":
@@ -1377,12 +1561,13 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s,r,so,ss=cycle()
-            if a or o or so or r.get("transitions"):
+            a,o,s,r,so,ss,ad=cycle()
+            if a or o or so or r.get("transitions") or ad.get("generated") or ad.get("staled"):
                 print(
                     f"learning cycle assessments={a} shadow_obs={so} outcomes={o} segments={s} "
                     f"registry={r['active']} candidates={r['promotion_candidates']} "
-                    f"transitions={r['transitions']} shadow_summaries={ss}",
+                    f"transitions={r['transitions']} shadow_summaries={ss} "
+                    f"dossiers={ad['generated']} stale={ad['staled']}",
                     flush=True
                 )
         except Exception as exc:
