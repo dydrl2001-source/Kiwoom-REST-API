@@ -140,6 +140,13 @@ def table_exists(cur, name: str) -> bool:
     cur.execute("SELECT to_regclass(%s)", (f"public.{name}",))
     return cur.fetchone()[0] is not None
 
+def column_exists(cur, table: str, column: str) -> bool:
+    cur.execute("""SELECT EXISTS(
+                   SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='public' AND table_name=%s AND column_name=%s)""",
+                (table,column))
+    return bool(cur.fetchone()[0])
+
 def iso(v):
     return v.isoformat() if v else None
 
@@ -692,11 +699,7 @@ def build_ai_strategy_performance(cur):
     if not ai_summarize_strategy_rows or not table_exists(cur,"radar_paper_trades"):
         return empty
     try:
-        cur.execute("""SELECT EXISTS(
-                       SELECT 1 FROM information_schema.columns
-                       WHERE table_schema='public' AND table_name='radar_paper_trades'
-                         AND column_name='strategy_id')""")
-        if not cur.fetchone()[0]:return empty
+        if not column_exists(cur,"radar_paper_trades","strategy_id"):return empty
         cur.execute("""SELECT status,return_pct,mfe_pct,mae_pct,opened_at,closed_at,
                               strategy_id,strategy_name,strategy_family,strategy_lifecycle,
                               strategy_fit,ai_conviction,regime_label
@@ -721,7 +724,7 @@ def build_ai_strategy_performance(cur):
             "note":"전략 ID가 실제 Paper Trade에 귀속된 이후의 전향적 표본만 전략 성과에 사용"
         }
     except Exception as e:
-        return {"**error**":str(type(e).__name__),"status":"ERROR","rows":[],"unassigned":0,
+        return {"error":str(type(e).__name__),"status":"ERROR","rows":[],"unassigned":0,
                 "note":"전략 성과 집계 실패"}
 
 
@@ -747,7 +750,7 @@ def build_ai_daily_review(cur, paper_feedback):
                 "strategy_family":r[7],"packet":r[8] or {}
             } for r in cur.fetchall()]
         trades=[]
-        if table_exists(cur,"radar_paper_trades"):
+        if table_exists(cur,"radar_paper_trades") and column_exists(cur,"radar_paper_trades","strategy_id"):
             cur.execute("""SELECT status,return_pct,mfe_pct,mae_pct,opened_at,closed_at,
                                   strategy_id,primary_type,exit_reason
                            FROM radar_paper_trades
