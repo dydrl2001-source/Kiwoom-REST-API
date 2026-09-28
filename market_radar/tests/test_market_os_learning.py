@@ -6,6 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 import market_os_learning as learn
+import market_os_store as store
 
 
 class LearningPureTests(unittest.TestCase):
@@ -56,6 +57,52 @@ class LearningPureTests(unittest.TestCase):
              'return_pct':0.3,'mfe_pct':0.4,'mae_pct':-0.1},
         ]
         self.assertEqual(len(learn._episode_anchors(rows)),2)
+
+    def test_micro_state_is_explicit_and_conservative(self):
+        self.assertEqual(learn._micro_state(130,.70),'STRONG_CONFIRM')
+        self.assertEqual(learn._micro_state(70,.40),'WEAK_CONFIRM')
+        self.assertEqual(learn._micro_state(110,.60),'POSITIVE')
+        self.assertEqual(learn._micro_state(90,.40),'NEGATIVE')
+        self.assertEqual(learn._micro_state(105,.48),'MIXED')
+        self.assertEqual(learn._micro_state(None,.70),'NO_DATA')
+
+    def test_pre_registered_four_way_interaction_requires_clean_micro(self):
+        row={
+            'watch_tier':'PREP','market_stance':'DEFENSIVE','trigger_state':'BREAKOUT_TEST',
+            'session_bucket':'MIDDAY','catalyst_grade':'C','setup_score':85,
+            'micro_strength':130,'micro_buy_share_15s':.70,
+            'micro_tick_count_15s':20,'micro_gap_count_15s':0
+        }
+        d=learn._learning_dims(row)
+        self.assertEqual(d['STANCE_SETUP_TRIGGER_MICRO'],
+                         'DEFENSIVE | 80-100 | BREAKOUT_TEST | STRONG_CONFIRM')
+        row['micro_gap_count_15s']=1
+        d=learn._learning_dims(row)
+        self.assertNotIn('STANCE_SETUP_TRIGGER_MICRO',d)
+        self.assertNotIn('MICRO_STATE',d)
+
+    def test_interaction_quality_gate_is_stricter_by_depth(self):
+        self.assertEqual(store._quality(25,5,2,1),'초기')
+        self.assertEqual(store._quality(25,5,2,3),'탐색')
+        self.assertEqual(store._quality(70,10,4,4),'초기')
+
+    def test_interaction_edge_compares_to_registered_parent(self):
+        segs=[
+            {'segment_type':'STANCE_TRIGGER','segment_value':'DEFENSIVE | BREAKOUT_TEST',
+             'horizon':'30m','samples':100,'distinct_stocks':12,'distinct_days':6,'sample_basis':'NON_OVERLAP_30M',
+             'quality':'형성','avg_return_pct':-.40,'median_return_pct':-.30,'positive_rate':.40,
+             'avg_mfe_pct':.50,'avg_mae_pct':-1.00},
+            {'segment_type':'STANCE_SETUP_TRIGGER','segment_value':'DEFENSIVE | 80-100 | BREAKOUT_TEST',
+             'horizon':'30m','samples':120,'distinct_stocks':13,'distinct_days':6,'sample_basis':'NON_OVERLAP_30M',
+             'quality':'형성','avg_return_pct':-.10,'median_return_pct':-.05,'positive_rate':.48,
+             'avg_mfe_pct':.70,'avg_mae_pct':-.70},
+        ]
+        inter=store._enrich_edges(segs)
+        child=next(x for x in inter if x['segment_type']=='STANCE_SETUP_TRIGGER')
+        self.assertAlmostEqual(child['edge_avg_return_pct'],.30)
+        self.assertAlmostEqual(child['edge_positive_rate_pp'],8.0)
+        self.assertAlmostEqual(child['edge_mae_pct'],.30)
+        self.assertTrue(child['edge_ready'])
 
     def test_nonfinite_values_are_rejected(self):
         self.assertIsNone(learn.safe_num('NaN'))
