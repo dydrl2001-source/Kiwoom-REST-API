@@ -128,19 +128,41 @@ def _parent_key(kind,value):
     return None
 
 
-def _enrich_edges(segments):
+def _enrich_edges(segments,edge_rows=None):
     idx={(s["segment_type"],s["segment_value"],s["horizon"]):s for s in segments}
+    edge_index={(e["segment_type"],e["segment_value"],e["horizon"]):e for e in (edge_rows or [])}
     interactions=[]
     for s in segments:
         depth=_segment_depth(s["segment_type"])
         s["interaction_depth"]=depth
         parent_key=_parent_key(s["segment_type"],s["segment_value"])
-        if parent_key:
+        e=edge_index.get((s["segment_type"],s["segment_value"],s["horizon"]))
+        if e:
+            comparator_quality=_quality(e["comparator_samples"],e["comparator_stocks"],e["comparator_days"],
+                                        max(1,depth-1))
+            s["baseline"]={
+                "comparison":"PARENT_COMPLEMENT",
+                "segment_type":e["parent_type"],"segment_value":e["parent_value"],
+                "samples":e["comparator_samples"],"distinct_stocks":e["comparator_stocks"],
+                "distinct_days":e["comparator_days"],"quality":comparator_quality,
+                "avg_return_pct":e["comparator_avg_return_pct"],
+                "positive_rate":e["comparator_positive_rate"],
+                "avg_mfe_pct":e["comparator_avg_mfe_pct"],"avg_mae_pct":e["comparator_avg_mae_pct"],
+            }
+            s["edge_avg_return_pct"]=e["delta_avg_return_pct"]
+            s["edge_positive_rate_pp"]=e["delta_positive_rate_pp"]
+            s["edge_mfe_pct"]=e["delta_mfe_pct"]
+            s["edge_mae_pct"]=e["delta_mae_pct"]
+            s["edge_ready"]=bool(_quality_rank(s["quality"])>=2 and _quality_rank(comparator_quality)>=2)
+        elif parent_key:
+            # Compatibility fallback for databases created before the edge table.
             parent=idx.get((parent_key[0],parent_key[1],s["horizon"]))
             if parent:
                 s["baseline"]={
+                    "comparison":"PARENT_AGGREGATE_FALLBACK",
                     "segment_type":parent["segment_type"],"segment_value":parent["segment_value"],
-                    "samples":parent["samples"],"quality":parent["quality"],
+                    "samples":parent["samples"],"distinct_stocks":parent["distinct_stocks"],
+                    "distinct_days":parent["distinct_days"],"quality":parent["quality"],
                     "avg_return_pct":parent["avg_return_pct"],"positive_rate":parent["positive_rate"],
                     "avg_mfe_pct":parent["avg_mfe_pct"],"avg_mae_pct":parent["avg_mae_pct"],
                 }
@@ -152,15 +174,16 @@ def _enrich_edges(segments):
                     if s["avg_mfe_pct"] is not None and parent["avg_mfe_pct"] is not None else None)
                 s["edge_mae_pct"]=(s["avg_mae_pct"]-parent["avg_mae_pct"]
                     if s["avg_mae_pct"] is not None and parent["avg_mae_pct"] is not None else None)
-                # Complex edges require at least forming evidence on both child and parent.
-                s["edge_ready"]=bool(_quality_rank(s["quality"])>=2 and _quality_rank(parent["quality"])>=2)
+                s["edge_ready"]=False
         if depth>=2:
             interactions.append(s)
     interactions.sort(key=lambda s:(
-        -_quality_rank(s["quality"]),-s["interaction_depth"],-s["samples"],
+        -_quality_rank(s["quality"]),-int(bool(s.get("edge_ready"))),-s["interaction_depth"],-s["samples"],
         {"30m":0,"close":1,"D+1":2,"5m":3}.get(s["horizon"],9)
     ))
     return interactions
+
+
 
 
 def latest_microstructure(cur,codes):
@@ -212,8 +235,9 @@ def learning_payload():
         "rule_version":RULE_VERSION,
         "mode":"SHADOW_LEARNING",
         "notice":"성과를 자동 측정하고 조건별 차이를 학습하지만, 충분한 표본 전에는 규칙 임계값을 자동 변경하지 않습니다.",
-        "status":None,"segments":[],"notes":[],"daily_assessments":[],
+        "status":None,"segments":[],"interactions":[],"notes":[],"daily_assessments":[],
     }
+    edge_rows=[]
     with db() as c,c.cursor() as cur:
         micro=latest_microstructure(cur,[x.get("code") for x in current.get("market_os_watchlist",[]) if x.get("code")])
         if not exists(cur,"market_os_learning_status"):
@@ -253,6 +277,16 @@ def learning_payload():
                     "avg_mae_pct":r["avg_mae_pct"],
                     "updated_at":r["updated_at"].isoformat() if r["updated_at"] else None
                 })
+        if exists(cur,"market_os_interaction_edges"):
+            cur.execute("""SELECT segment_type,segment_value,horizon,parent_type,parent_value,sample_basis,
+                                  child_samples,child_stocks,child_days,
+                                  comparator_samples,comparator_stocks,comparator_days,
+                                  child_avg_return_pct,comparator_avg_return_pct,delta_avg_return_pct,
+                                  child_positive_rate,comparator_positive_rate,delta_positive_rate_pp,
+                                  child_avg_mfe_pct,comparator_avg_mfe_pct,delta_mfe_pct,
+                                  child_avg_mae_pct,comparator_avg_mae_pct,delta_mae_pct
+                           FROM market_os_interaction_edges""")
+            edge_rows=[dict(r) for r in cur.fetchall()]
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
@@ -265,7 +299,7 @@ def learning_payload():
                 for r in cur.fetchall()
             ]
 
-    learning["interactions"]=_enrich_edges(learning["segments"])
+    learning["interactions"]=_enrich_edges(learning["segments"],edge_rows)
 
     # Conservative, deterministic feedback. This is evidence for review, not an
     # automatic rewrite of thresholds.
