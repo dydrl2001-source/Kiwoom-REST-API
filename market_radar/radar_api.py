@@ -28,13 +28,19 @@ except Exception:
 try:
     from ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
     from ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
+    from ai_brokerage.analytics import summarize_strategy_rows as ai_summarize_strategy_rows
+    from ai_brokerage.analytics import build_daily_review as ai_build_daily_review
 except Exception:
     try:
         from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
         from market_radar.ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
+        from market_radar.ai_brokerage.analytics import summarize_strategy_rows as ai_summarize_strategy_rows
+        from market_radar.ai_brokerage.analytics import build_daily_review as ai_build_daily_review
     except Exception:
         AIBrokerageDecisionEngine = None
         ai_context_from_dashboard_row = None
+        ai_summarize_strategy_rows = None
+        ai_build_daily_review = None
 
 AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
@@ -644,6 +650,122 @@ def build_paper_feedback(cur):
                 "note":r[5] or ""}
     except Exception:
         return empty
+
+
+def build_ai_morning_brief(regime, sector_groups, ai_brokerage, paper_lab):
+    label=(regime or {}).get("stable_label") or (regime or {}).get("candidate_label") or (regime or {}).get("status") or "장세 대기"
+    sectors=[]
+    for g in (sector_groups or [])[:3]:
+        sectors.append({
+            "name":g.get("name"),"strength":g.get("theme_strength"),
+            "change_rate":g.get("avg_change_rate"),"recent_turnover_krw":g.get("recent_turnover_krw")
+        })
+    candidates=(ai_brokerage or {}).get("candidates") or []
+    paper_entries=[x for x in candidates if x.get("state")=="PAPER_ENTRY"]
+    ready=[x for x in candidates if x.get("state")=="READY"]
+    blocked=[x for x in candidates if x.get("state")=="BLOCKED"]
+    strategies=[]
+    seen=set()
+    for x in paper_entries+ready:
+        st=x.get("selected_strategy") or {}
+        sid=st.get("strategy_id")
+        if sid and sid not in seen:
+            seen.add(sid)
+            strategies.append({"strategy_id":sid,"name":st.get("name"),"family":st.get("family"),"fit":st.get("fit_score")})
+    return {
+        "as_of":datetime.now(KST).isoformat(),
+        "regime":label,
+        "top_sectors":sectors,
+        "paper_entry_count":len(paper_entries),
+        "ready_count":len(ready),
+        "blocked_count":len(blocked),
+        "active_strategy_candidates":strategies[:5],
+        "paper_open_count":len((paper_lab or {}).get("open") or []),
+        "headline":f"{label} · PAPER {len(paper_entries)} · READY {len(ready)} · BLOCKED {len(blocked)}",
+        "note":"07:30형 운영 브리프 구조. 현재 저장·수집된 데이터만 사용하며 수익예측이 아님"
+    }
+
+
+def build_ai_strategy_performance(cur):
+    empty={"status":"WAITING","rows":[],"unassigned":0,
+           "note":"AI 전략이 귀속된 Paper Trade 표본을 기다리는 중"}
+    if not ai_summarize_strategy_rows or not table_exists(cur,"radar_paper_trades"):
+        return empty
+    try:
+        cur.execute("""SELECT EXISTS(
+                       SELECT 1 FROM information_schema.columns
+                       WHERE table_schema='public' AND table_name='radar_paper_trades'
+                         AND column_name='strategy_id')""")
+        if not cur.fetchone()[0]:return empty
+        cur.execute("""SELECT status,return_pct,mfe_pct,mae_pct,opened_at,closed_at,
+                              strategy_id,strategy_name,strategy_family,strategy_lifecycle,
+                              strategy_fit,ai_conviction,regime_label
+                       FROM radar_paper_trades
+                       WHERE opened_at>now()-interval '90 days'
+                       ORDER BY opened_at""")
+        rows=[{
+            "status":r[0],"return_pct":r[1],"mfe_pct":r[2],"mae_pct":r[3],
+            "opened_at":iso(r[4]),"closed_at":iso(r[5]),"strategy_id":r[6],
+            "strategy_name":r[7],"strategy_family":r[8],"strategy_lifecycle":r[9],
+            "strategy_fit":r[10],"ai_conviction":r[11],"regime_label":r[12]
+        } for r in cur.fetchall()]
+        registry={}
+        if AI_BROKERAGE_ENGINE:
+            registry={x.strategy_id:x.to_dict() for x in AI_BROKERAGE_ENGINE.registry.all()}
+        out=ai_summarize_strategy_rows(rows,registry)
+        return {
+            "status":"OK" if out else "WAITING",
+            "rows":out,
+            "unassigned":sum(1 for x in rows if not x.get("strategy_id")),
+            "window_days":90,
+            "note":"전략 ID가 실제 Paper Trade에 귀속된 이후의 전향적 표본만 전략 성과에 사용"
+        }
+    except Exception as e:
+        return {"**error**":str(type(e).__name__),"status":"ERROR","rows":[],"unassigned":0,
+                "note":"전략 성과 집계 실패"}
+
+
+def build_ai_daily_review(cur, paper_feedback):
+    empty={"status":"WAITING","decisions":{"decisions":0,"states":{},"top_strategies":[],"top_blockers":[]},
+           "paper":{"opened":0,"closed":0},"feedback_state":None,
+           "note":"오늘의 AI Brokerage 의사결정 이력을 기다리는 중"}
+    if not ai_build_daily_review:
+        return empty
+    try:
+        decisions=[]
+        if table_exists(cur,"ai_brokerage_decisions"):
+            cur.execute("""SELECT DISTINCT ON(stock_code,state,COALESCE(strategy_id,''))
+                                  snapshot_time,stock_code,stock_name,state,conviction,strategy_id,
+                                  strategy_name,strategy_family,packet
+                           FROM ai_brokerage_decisions
+                           WHERE (snapshot_time AT TIME ZONE 'Asia/Seoul')::date
+                                 =(now() AT TIME ZONE 'Asia/Seoul')::date
+                           ORDER BY stock_code,state,COALESCE(strategy_id,''),snapshot_time DESC""")
+            decisions=[{
+                "snapshot_time":iso(r[0]),"stock_code":r[1],"stock_name":r[2],"state":r[3],
+                "conviction":r[4],"strategy_id":r[5],"strategy_name":r[6],
+                "strategy_family":r[7],"packet":r[8] or {}
+            } for r in cur.fetchall()]
+        trades=[]
+        if table_exists(cur,"radar_paper_trades"):
+            cur.execute("""SELECT status,return_pct,mfe_pct,mae_pct,opened_at,closed_at,
+                                  strategy_id,primary_type,exit_reason
+                           FROM radar_paper_trades
+                           WHERE (opened_at AT TIME ZONE 'Asia/Seoul')::date
+                                 =(now() AT TIME ZONE 'Asia/Seoul')::date
+                           ORDER BY opened_at""")
+            trades=[{
+                "status":r[0],"return_pct":r[1],"mfe_pct":r[2],"mae_pct":r[3],
+                "opened_at":iso(r[4]),"closed_at":iso(r[5]),"strategy_id":r[6],
+                "primary_type":r[7],"exit_reason":r[8]
+            } for r in cur.fetchall()]
+        out=ai_build_daily_review(decisions,trades,paper_feedback)
+        out["status"]="OK" if decisions or trades else "WAITING"
+        out["as_of"]=datetime.now(KST).isoformat()
+        out["note"]="19:00형 복기 구조. 반복 스냅샷은 종목·상태·전략 단위로 축약"
+        return out
+    except Exception as e:
+        return {**empty,"status":"ERROR","note":f"Daily Review 집계 실패: {type(e).__name__}"}
 
 
 def build_home_candidates(cur, rows):
@@ -1487,6 +1609,9 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                         "note":f"AI Brokerage 평가 실패: {type(e).__name__}: {e}"
                     }
 
+            ai_morning_brief=build_ai_morning_brief(regime,sector_groups,ai_brokerage,paper_lab)
+            ai_strategy_performance=build_ai_strategy_performance(cur)
+            ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1735,6 +1860,9 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "paper_lab": paper_lab,
         "paper_feedback": paper_feedback,
         "ai_brokerage": ai_brokerage,
+        "ai_morning_brief": ai_morning_brief,
+        "ai_strategy_performance": ai_strategy_performance,
+        "ai_daily_review": ai_daily_review,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
     with _DASH_CACHE_LOCK:
