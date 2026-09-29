@@ -1647,12 +1647,12 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 r = cur.fetchone()
                 telegram = {"latest": iso(r[0]), "count_24h": int(r[1] or 0)}
 
-            kiwoom = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
+            kiwoom = {"status": "NOT_CONFIGURED", "mode": None, "last_success": None, "note": None}
             if table_exists(cur, "kiwoom_feed_status"):
-                cur.execute("SELECT status,last_success_at,note FROM kiwoom_feed_status WHERE id=1")
+                cur.execute("SELECT status,mode,last_success_at,note FROM kiwoom_feed_status WHERE id=1")
                 r = cur.fetchone()
                 if r:
-                    kiwoom = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
+                    kiwoom = {"status": r[0], "mode": r[1], "last_success": iso(r[2]), "note": r[3]}
 
             orderbook = {"status":"NOT_CONFIGURED","updated_at":None,"mode":None,
                          "target_count":0,"saved_count":0,"note":None}
