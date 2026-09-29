@@ -44,11 +44,19 @@ from market_os_ruleset import (
     impact_concentration as ruleset_impact_concentration,
     succession_decision as ruleset_succession_decision,
 )
+from market_os_release import (
+    is_canary_selected,
+    canary_bucket,
+    canary_summaries,
+    canary_slices,
+    canary_decision,
+)
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
 SHADOW_LAB_ENABLED=os.getenv("MARKET_OS_SHADOW_LAB_ENABLED","1").strip().lower() in {"1","true","yes","on"}
 RULESET_DRY_RUN_ENABLED=os.getenv("MARKET_OS_RULESET_DRY_RUN_ENABLED","1").strip().lower() in {"1","true","yes","on"}
+CANARY_ENABLED=os.getenv("MARKET_OS_CANARY_ENABLED","1").strip().lower() in {"1","true","yes","on"}
 KST=ZoneInfo("Asia/Seoul")
 
 SCHEMA=r"""
@@ -483,6 +491,115 @@ CREATE TABLE IF NOT EXISTS market_os_ruleset_events (
 );
 CREATE INDEX IF NOT EXISTS idx_market_os_ruleset_events
     ON market_os_ruleset_events(ruleset_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_release_candidates (
+    release_candidate_id    TEXT PRIMARY KEY,
+    release_version_label   TEXT NOT NULL UNIQUE,
+    source_ruleset_id       TEXT NOT NULL,
+    source_succession_event_id BIGINT NOT NULL,
+    package_hash            TEXT NOT NULL,
+    package                 JSONB NOT NULL,
+    status                  TEXT NOT NULL CHECK(status IN (
+                                'RELEASE_CANDIDATE','CANARY_ACTIVE','CANARY_STOPPED',
+                                'CANARY_SOURCE_STALE','CANARY_ROLLBACK_REQUIRED')),
+    canary_allocation_pct   INTEGER NOT NULL CHECK(canary_allocation_pct BETWEEN 1 AND 25),
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    canary_started_at       TIMESTAMPTZ,
+    stopped_at              TIMESTAMPTZ,
+    stale_at                TIMESTAMPTZ,
+    rollback_at             TIMESTAMPTZ,
+    last_evaluated_at       TIMESTAMPTZ,
+    note                    TEXT,
+    UNIQUE(source_ruleset_id,source_succession_event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_release_status
+    ON market_os_release_candidates(status,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_release_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    release_candidate_id    TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type              TEXT NOT NULL,
+    from_status             TEXT,
+    to_status               TEXT NOT NULL,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_release_events
+    ON market_os_release_events(release_candidate_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_canary_observations (
+    assessment_time         TIMESTAMPTZ NOT NULL,
+    stock_code              TEXT NOT NULL,
+    control_rule_version    TEXT NOT NULL,
+    release_candidate_id    TEXT NOT NULL,
+    trade_day               DATE NOT NULL,
+    assignment_bucket       INTEGER NOT NULL,
+    allocation_pct          INTEGER NOT NULL,
+    control_tier            TEXT NOT NULL,
+    candidate_tier          TEXT NOT NULL,
+    changed                 BOOLEAN NOT NULL,
+    matched_overlays        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    observed_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(assessment_time,stock_code,control_rule_version,release_candidate_id)
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_canary_obs
+    ON market_os_canary_observations(release_candidate_id,assessment_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_canary_summary (
+    release_candidate_id        TEXT NOT NULL,
+    horizon                     TEXT NOT NULL,
+    cohort                      TEXT NOT NULL,
+    evidence_state              TEXT NOT NULL,
+    membership_changes          INTEGER NOT NULL DEFAULT 0,
+    control_samples             INTEGER NOT NULL DEFAULT 0,
+    control_stocks              INTEGER NOT NULL DEFAULT 0,
+    control_days                INTEGER NOT NULL DEFAULT 0,
+    control_avg_return_pct      DOUBLE PRECISION,
+    control_median_return_pct   DOUBLE PRECISION,
+    control_positive_rate       DOUBLE PRECISION,
+    control_avg_mfe_pct         DOUBLE PRECISION,
+    control_avg_mae_pct         DOUBLE PRECISION,
+    candidate_samples           INTEGER NOT NULL DEFAULT 0,
+    candidate_stocks            INTEGER NOT NULL DEFAULT 0,
+    candidate_days              INTEGER NOT NULL DEFAULT 0,
+    candidate_avg_return_pct    DOUBLE PRECISION,
+    candidate_median_return_pct DOUBLE PRECISION,
+    candidate_positive_rate     DOUBLE PRECISION,
+    candidate_avg_mfe_pct       DOUBLE PRECISION,
+    candidate_avg_mae_pct       DOUBLE PRECISION,
+    delta_avg_return_pct        DOUBLE PRECISION,
+    delta_positive_rate_pp      DOUBLE PRECISION,
+    delta_mae_pct               DOUBLE PRECISION,
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(release_candidate_id,horizon,cohort)
+);
+
+CREATE TABLE IF NOT EXISTS market_os_canary_decisions (
+    release_candidate_id    TEXT PRIMARY KEY,
+    decision_state          TEXT NOT NULL,
+    review_eligible         BOOLEAN NOT NULL DEFAULT FALSE,
+    primary_cohort          TEXT,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    manual_review_state     TEXT NOT NULL DEFAULT 'PENDING',
+    state_since             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_canary_decision
+    ON market_os_canary_decisions(decision_state,review_eligible,updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_canary_decision_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    release_candidate_id    TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    from_state              TEXT,
+    to_state                TEXT NOT NULL,
+    review_eligible         BOOLEAN NOT NULL DEFAULT FALSE,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_canary_decision_events
+    ON market_os_canary_decision_events(release_candidate_id,event_time DESC);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -1846,6 +1963,206 @@ def refresh_ruleset_dry_run_summaries():
     return written
 
 
+def capture_canary_observations(limit_per_release=800):
+    """Evaluate deterministic stock-day canary samples without replacing CONTROL."""
+    if not CANARY_ENABLED:
+        return {"inserted":0,"staled":0}
+    inserted=0;staled=0
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_release_candidates"):
+            return {"inserted":0,"staled":0}
+        cur.execute("""SELECT rc.release_candidate_id,rc.source_ruleset_id,rc.status,
+                              rc.canary_allocation_pct,rc.canary_started_at,
+                              vr.base_rule_version,vr.status AS ruleset_status,vr.spec,
+                              sd.decision_state AS succession_state,
+                              sd.review_eligible AS succession_eligible
+                       FROM market_os_release_candidates rc
+                       JOIN market_os_versioned_rulesets vr
+                         ON vr.ruleset_id=rc.source_ruleset_id
+                       LEFT JOIN market_os_ruleset_succession_decisions sd
+                         ON sd.ruleset_id=rc.source_ruleset_id
+                       WHERE rc.status='CANARY_ACTIVE'
+                       ORDER BY rc.canary_started_at""")
+        for rc in cur.fetchall():
+            source_ok=bool(
+                rc["ruleset_status"]=="DRY_RUN_ACTIVE"
+                and rc["succession_state"]=="SUCCESSION_CANDIDATE"
+                and rc["succession_eligible"]
+            )
+            if not source_ok:
+                cur.execute("""UPDATE market_os_release_candidates
+                               SET status='CANARY_SOURCE_STALE',stale_at=now(),
+                                   note='Source ruleset/succession no longer release-eligible'
+                               WHERE release_candidate_id=%s AND status='CANARY_ACTIVE'""",
+                            (rc["release_candidate_id"],))
+                if cur.rowcount:
+                    cur.execute("""INSERT INTO market_os_release_events(
+                            release_candidate_id,event_type,from_status,to_status,evidence)
+                        VALUES(%s,'SOURCE_STALE','CANARY_ACTIVE','CANARY_SOURCE_STALE',%s::jsonb)""",
+                        (rc["release_candidate_id"],json.dumps({
+                            "ruleset_status":rc["ruleset_status"],
+                            "succession_state":rc["succession_state"],
+                            "succession_eligible":bool(rc["succession_eligible"]),
+                        },ensure_ascii=False)))
+                    staled+=1
+                continue
+
+            cur.execute("""SELECT a.*
+                           FROM market_os_assessment_snapshots a
+                           WHERE a.rule_version=%s
+                             AND a.snapshot_time>=%s
+                             AND NOT EXISTS(
+                                 SELECT 1 FROM market_os_canary_observations o
+                                 WHERE o.assessment_time=a.snapshot_time
+                                   AND o.stock_code=a.stock_code
+                                   AND o.control_rule_version=a.rule_version
+                                   AND o.release_candidate_id=%s
+                             )
+                           ORDER BY a.snapshot_time,a.stock_code
+                           LIMIT %s""",
+                        (rc["base_rule_version"],rc["canary_started_at"],
+                         rc["release_candidate_id"],limit_per_release))
+            rows=[]
+            for a in cur.fetchall():
+                day=a["snapshot_time"].astimezone(KST).date().isoformat()
+                if not is_canary_selected(
+                    rc["release_candidate_id"],a["stock_code"],day,rc["canary_allocation_pct"]
+                ):
+                    continue
+                result=ruleset_evaluate(dict(a),rc["spec"] or {})
+                rows.append((
+                    a["snapshot_time"],a["stock_code"],a["rule_version"],
+                    rc["release_candidate_id"],day,
+                    canary_bucket(rc["release_candidate_id"],a["stock_code"],day),
+                    rc["canary_allocation_pct"],result["control_tier"],
+                    result["candidate_tier"],result["changed"],
+                    json.dumps(result["matched_overlays"],ensure_ascii=False)
+                ))
+            if rows:
+                cur.executemany("""INSERT INTO market_os_canary_observations(
+                        assessment_time,stock_code,control_rule_version,release_candidate_id,
+                        trade_day,assignment_bucket,allocation_pct,control_tier,candidate_tier,
+                        changed,matched_overlays)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                    ON CONFLICT DO NOTHING""",rows)
+                inserted+=cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(rows)
+                cur.execute("""UPDATE market_os_release_candidates
+                               SET last_evaluated_at=now()
+                               WHERE release_candidate_id=%s""",(rc["release_candidate_id"],))
+    return {"inserted":inserted,"staled":staled}
+
+
+def refresh_canary_summaries():
+    """Summarize canary-only CONTROL vs candidate and enforce rollback stop."""
+    if not CANARY_ENABLED:
+        return {"written":0,"rollbacks":0}
+    written=0;rollbacks=0
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_release_candidates"):
+            return {"written":0,"rollbacks":0}
+        cur.execute("""SELECT release_candidate_id,status
+                       FROM market_os_release_candidates
+                       ORDER BY created_at""")
+        for rc in cur.fetchall():
+            cur.execute("""SELECT o.assessment_time,o.stock_code,o.trade_day,
+                                  o.control_tier,o.candidate_tier,a.market_stance,
+                                  y.horizon,y.return_pct,y.mfe_pct,y.mae_pct
+                           FROM market_os_canary_observations o
+                           JOIN market_os_assessment_outcomes y
+                             ON y.assessment_time=o.assessment_time
+                            AND y.stock_code=o.stock_code
+                            AND y.rule_version=o.control_rule_version
+                           JOIN market_os_assessment_snapshots a
+                             ON a.snapshot_time=o.assessment_time
+                            AND a.stock_code=o.stock_code
+                            AND a.rule_version=o.control_rule_version
+                           WHERE o.release_candidate_id=%s
+                             AND y.horizon IN ('5m','30m','close','D+1')
+                           ORDER BY y.horizon,o.stock_code,o.assessment_time""",
+                        (rc["release_candidate_id"],))
+            raw=[]
+            for r in cur.fetchall():
+                x=dict(r)
+                x["snapshot_time"]=r["assessment_time"]
+                if not x.get("trade_day"):
+                    x["trade_day"]=r["assessment_time"].astimezone(KST).date().isoformat()
+                else:
+                    x["trade_day"]=str(x["trade_day"])
+                raw.append(x)
+            anchors=_episode_anchors(raw)
+            summaries=canary_summaries(anchors)
+            slices=canary_slices(anchors)
+            decision=canary_decision(summaries,slices)
+
+            cur.execute("""DELETE FROM market_os_canary_summary
+                           WHERE release_candidate_id=%s""",(rc["release_candidate_id"],))
+            for s in summaries:
+                control=s["control"];candidate=s["challenger"]
+                state=_shadow_evidence_state(s)
+                cur.execute("""INSERT INTO market_os_canary_summary(
+                        release_candidate_id,horizon,cohort,evidence_state,membership_changes,
+                        control_samples,control_stocks,control_days,control_avg_return_pct,
+                        control_median_return_pct,control_positive_rate,control_avg_mfe_pct,control_avg_mae_pct,
+                        candidate_samples,candidate_stocks,candidate_days,candidate_avg_return_pct,
+                        candidate_median_return_pct,candidate_positive_rate,candidate_avg_mfe_pct,
+                        candidate_avg_mae_pct,delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct,updated_at)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                           %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
+                    (rc["release_candidate_id"],s["horizon"],s["cohort"],state,s["membership_changes"],
+                     control["samples"],control["distinct_stocks"],control["distinct_days"],
+                     control["avg_return_pct"],control["median_return_pct"],control["positive_rate"],
+                     control["avg_mfe_pct"],control["avg_mae_pct"],
+                     candidate["samples"],candidate["distinct_stocks"],candidate["distinct_days"],
+                     candidate["avg_return_pct"],candidate["median_return_pct"],candidate["positive_rate"],
+                     candidate["avg_mfe_pct"],candidate["avg_mae_pct"],
+                     s["delta_avg_return_pct"],s["delta_positive_rate_pp"],s["delta_mae_pct"]))
+                written+=1
+
+            cur.execute("""SELECT decision_state FROM market_os_canary_decisions
+                           WHERE release_candidate_id=%s""",(rc["release_candidate_id"],))
+            old=cur.fetchone();old_state=old["decision_state"] if old else None
+            reasons_json=json.dumps(decision.get("reason_codes") or [],ensure_ascii=False)
+            evidence_json=json.dumps(decision.get("evidence") or {},ensure_ascii=False,default=str)
+            primary=(decision.get("evidence") or {}).get("primary_cohort")
+            cur.execute("""INSERT INTO market_os_canary_decisions(
+                    release_candidate_id,decision_state,review_eligible,primary_cohort,
+                    reason_codes,evidence,manual_review_state,state_since,updated_at)
+                VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb,'PENDING',now(),now())
+                ON CONFLICT(release_candidate_id) DO UPDATE SET
+                    decision_state=excluded.decision_state,
+                    review_eligible=excluded.review_eligible,
+                    primary_cohort=excluded.primary_cohort,
+                    reason_codes=excluded.reason_codes,evidence=excluded.evidence,
+                    state_since=CASE
+                        WHEN market_os_canary_decisions.decision_state=excluded.decision_state
+                        THEN market_os_canary_decisions.state_since ELSE now() END,
+                    updated_at=now()""",
+                (rc["release_candidate_id"],decision["state"],
+                 bool(decision.get("review_eligible")),primary,reasons_json,evidence_json))
+            if old_state!=decision["state"]:
+                cur.execute("""INSERT INTO market_os_canary_decision_events(
+                        release_candidate_id,from_state,to_state,review_eligible,
+                        reason_codes,evidence)
+                    VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb)""",
+                    (rc["release_candidate_id"],old_state,decision["state"],
+                     bool(decision.get("review_eligible")),reasons_json,evidence_json))
+
+            if decision["state"]=="CANARY_ROLLBACK_REQUIRED" and rc["status"]=="CANARY_ACTIVE":
+                cur.execute("""UPDATE market_os_release_candidates
+                               SET status='CANARY_ROLLBACK_REQUIRED',rollback_at=now(),
+                                   note='Canary safety gate detected comparable harm'
+                               WHERE release_candidate_id=%s AND status='CANARY_ACTIVE'""",
+                            (rc["release_candidate_id"],))
+                if cur.rowcount:
+                    cur.execute("""INSERT INTO market_os_release_events(
+                            release_candidate_id,event_type,from_status,to_status,evidence)
+                        VALUES(%s,'AUTO_CANARY_ROLLBACK','CANARY_ACTIVE',
+                               'CANARY_ROLLBACK_REQUIRED',%s::jsonb)""",
+                        (rc["release_candidate_id"],evidence_json))
+                    rollbacks+=1
+    return {"written":written,"rollbacks":rollbacks}
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(RULE_VERSION,))
@@ -1872,6 +2189,8 @@ def cycle():
     dossiers=refresh_adoption_dossiers()
     ruleset_obs=capture_ruleset_dry_run_observations()
     ruleset_summaries=refresh_ruleset_dry_run_summaries()
+    canary_obs=capture_canary_observations()
+    canary_stats=refresh_canary_summaries()
     update_status(
         "OK",
         f"captured={captured} shadow_obs={shadow_obs} outcomes={outcomes} segments={segments} "
@@ -1879,11 +2198,12 @@ def cycle():
         f"registry_transitions={registry['transitions']} shadow_summaries={shadow_summaries} "
         f"dossiers_generated={dossiers['generated']} dossiers_staled={dossiers['staled']} "
         f"ruleset_obs={ruleset_obs['inserted']} ruleset_stale={ruleset_obs['staled']} "
-        f"ruleset_summaries={ruleset_summaries}",
+        f"ruleset_summaries={ruleset_summaries} canary_obs={canary_obs['inserted']} "
+        f"canary_stale={canary_obs['staled']} canary_rollbacks={canary_stats['rollbacks']}",
         last_snapshot=snap,last_outcome=bool(outcomes)
     )
     return (captured,outcomes,segments,registry,shadow_obs,shadow_summaries,dossiers,
-            ruleset_obs,ruleset_summaries)
+            ruleset_obs,ruleset_summaries,canary_obs,canary_stats)
 
 
 if __name__=="__main__":
@@ -1891,15 +2211,18 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s,r,so,ss,ad,ro,rs=cycle()
+            a,o,s,r,so,ss,ad,ro,rs,co,cs=cycle()
             if (a or o or so or r.get("transitions") or ad.get("generated")
-                    or ad.get("staled") or ro.get("inserted") or ro.get("staled")):
+                    or ad.get("staled") or ro.get("inserted") or ro.get("staled")
+                    or co.get("inserted") or co.get("staled") or cs.get("rollbacks")):
                 print(
                     f"learning cycle assessments={a} shadow_obs={so} outcomes={o} segments={s} "
                     f"registry={r['active']} candidates={r['promotion_candidates']} "
                     f"transitions={r['transitions']} shadow_summaries={ss} "
                     f"dossiers={ad['generated']} dossier_stale={ad['staled']} "
-                    f"ruleset_obs={ro['inserted']} ruleset_stale={ro['staled']} summaries={rs}",
+                    f"ruleset_obs={ro['inserted']} ruleset_stale={ro['staled']} summaries={rs} "
+                    f"canary_obs={co['inserted']} canary_stale={co['staled']} "
+                    f"canary_rollbacks={cs['rollbacks']}",
                     flush=True
                 )
         except Exception as exc:
