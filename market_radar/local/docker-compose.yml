@@ -114,6 +114,27 @@ services:
       ai-brokerage-worker:
         condition: service_started
 
+  risk-control-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/risk_control_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-brokerage-worker:
+        condition: service_started
+      orderbook-collector:
+        condition: service_started
+      chart-feed:
+        condition: service_started
+      market-regime:
+        condition: service_started
+
   shadow-execution-engine:
     build:
       context: ../..
@@ -133,6 +154,8 @@ services:
       chart-feed:
         condition: service_started
       orderbook-collector:
+        condition: service_started
+      risk-control-worker:
         condition: service_started
 
   capital-allocation-worker:
