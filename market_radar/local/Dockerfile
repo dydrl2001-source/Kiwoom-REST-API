@@ -28,4 +28,5 @@ RUN python -m pip check \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_production_hardening.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_release_preflight.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_soak.py' -v \
+    && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_release_gate.py' -v \
     && python -c "import radar_web_app; assert radar_web_app.app is not None; print('Radar API import check passed')"
