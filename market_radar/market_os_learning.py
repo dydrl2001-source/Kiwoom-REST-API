@@ -51,6 +51,7 @@ from market_os_release import (
     canary_slices,
     canary_decision,
 )
+from market_os_full_release import full_release_gate, build_review_package as build_full_release_review
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
@@ -602,6 +603,65 @@ CREATE TABLE IF NOT EXISTS market_os_canary_decision_events (
 );
 CREATE INDEX IF NOT EXISTS idx_market_os_canary_decision_events
     ON market_os_canary_decision_events(release_candidate_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_full_release_gates (
+    release_candidate_id    TEXT PRIMARY KEY,
+    gate_state              TEXT NOT NULL,
+    review_eligible         BOOLEAN NOT NULL DEFAULT FALSE,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    state_since             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_full_release_gate
+    ON market_os_full_release_gates(gate_state,review_eligible,updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_full_release_gate_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    release_candidate_id    TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    from_state              TEXT,
+    to_state                TEXT NOT NULL,
+    review_eligible         BOOLEAN NOT NULL DEFAULT FALSE,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_full_release_gate_events
+    ON market_os_full_release_gate_events(release_candidate_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_full_release_reviews (
+    review_id               TEXT PRIMARY KEY,
+    release_candidate_id    TEXT NOT NULL,
+    revision                INTEGER NOT NULL,
+    source_gate_event_id    BIGINT NOT NULL,
+    content_hash            TEXT NOT NULL,
+    gate_state              TEXT NOT NULL,
+    review_state            TEXT NOT NULL DEFAULT 'PENDING' CHECK(review_state IN (
+                                'PENDING','RELEASE_READY','REJECTED',
+                                'STALE_CANARY','SUPERSEDED')),
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at             TIMESTAMPTZ,
+    reviewed_by             TEXT,
+    review_note             TEXT,
+    package                 JSONB NOT NULL,
+    UNIQUE(release_candidate_id,revision),
+    UNIQUE(release_candidate_id,source_gate_event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_full_release_reviews
+    ON market_os_full_release_reviews(review_state,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_full_release_review_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    review_id               TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type              TEXT NOT NULL,
+    from_review_state       TEXT,
+    to_review_state         TEXT NOT NULL,
+    note                    TEXT,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_full_release_review_events
+    ON market_os_full_release_review_events(review_id,event_time DESC);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -2175,6 +2235,248 @@ def refresh_canary_summaries():
     return {"written":written,"rollbacks":rollbacks}
 
 
+def _full_release_composition(cur,rc):
+    """Compare deterministic Canary stock-day sample with the eligible CONTROL universe."""
+    started=rc.get("canary_started_at")
+    base=rc.get("base_rule_version")
+    if not started or not base:
+        return {
+            "expected_pct":rc.get("canary_allocation_pct"),
+            "eligible_stock_days":0,"selected_stock_days":0,
+            "stance_universe":{},"stance_canary":{},
+            "tier_universe":{},"tier_canary":{},
+        }
+
+    cur.execute("""SELECT DISTINCT ON(stock_code,trade_day)
+                          stock_code,trade_day,market_stance,watch_tier
+                   FROM (
+                       SELECT stock_code,
+                              (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS trade_day,
+                              snapshot_time,market_stance,watch_tier
+                       FROM market_os_assessment_snapshots
+                       WHERE rule_version=%s AND snapshot_time>=%s
+                   ) x
+                   ORDER BY stock_code,trade_day,snapshot_time""",(base,started))
+    universe=cur.fetchall()
+
+    cur.execute("""SELECT DISTINCT ON(o.stock_code,o.trade_day)
+                          o.stock_code,o.trade_day,a.market_stance,a.watch_tier,o.assessment_time
+                   FROM market_os_canary_observations o
+                   JOIN market_os_assessment_snapshots a
+                     ON a.snapshot_time=o.assessment_time
+                    AND a.stock_code=o.stock_code
+                    AND a.rule_version=o.control_rule_version
+                   WHERE o.release_candidate_id=%s
+                   ORDER BY o.stock_code,o.trade_day,o.assessment_time""",
+                (rc["release_candidate_id"],))
+    selected=cur.fetchall()
+
+    def counts(rows,key):
+        out={}
+        for r in rows:
+            value=r[key] or "UNKNOWN"
+            out[value]=out.get(value,0)+1
+        return out
+
+    return {
+        "expected_pct":int(rc.get("canary_allocation_pct") or 0),
+        "eligible_stock_days":len(universe),
+        "selected_stock_days":len(selected),
+        "stance_universe":counts(universe,"market_stance"),
+        "stance_canary":counts(selected,"market_stance"),
+        "tier_universe":counts(universe,"watch_tier"),
+        "tier_canary":counts(selected,"watch_tier"),
+    }
+
+
+def refresh_full_release_reviews():
+    """Maintain Full Release Gate and freeze one review package per READY transition."""
+    with db() as c,c.cursor() as cur:
+        required=(
+            "market_os_release_candidates","market_os_canary_decisions",
+            "market_os_canary_summary","market_os_versioned_rulesets",
+            "market_os_ruleset_dry_run_summary","market_os_full_release_gates",
+        )
+        if any(not table_exists(cur,x) for x in required):
+            return {"gate_transitions":0,"reviews_generated":0,"reviews_staled":0}
+
+        cur.execute("""SELECT rc.release_candidate_id,rc.release_version_label,
+                              rc.source_ruleset_id,rc.package_hash,rc.package,rc.status,
+                              rc.canary_allocation_pct,rc.canary_started_at,
+                              cd.decision_state,cd.review_eligible,cd.primary_cohort,
+                              cd.reason_codes AS canary_reason_codes,cd.evidence AS canary_evidence,
+                              vr.ruleset_id,vr.version_label,vr.base_rule_version,
+                              vr.spec_hash,vr.spec,vr.status AS ruleset_status
+                       FROM market_os_release_candidates rc
+                       JOIN market_os_versioned_rulesets vr
+                         ON vr.ruleset_id=rc.source_ruleset_id
+                       LEFT JOIN market_os_canary_decisions cd
+                         ON cd.release_candidate_id=rc.release_candidate_id
+                       WHERE rc.canary_started_at IS NOT NULL
+                       ORDER BY rc.created_at""")
+        releases=cur.fetchall()
+        transitions=0;generated=0;staled=0
+
+        for row in releases:
+            rc=dict(row)
+            cur.execute("""SELECT horizon,cohort,evidence_state,membership_changes,
+                                  control_samples,candidate_samples,
+                                  control_avg_return_pct,candidate_avg_return_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_canary_summary
+                           WHERE release_candidate_id=%s""",(row["release_candidate_id"],))
+            canary_rows=[dict(x) for x in cur.fetchall()]
+
+            cur.execute("""SELECT horizon,cohort,evidence_state,membership_changes,
+                                  control_samples,candidate_samples,
+                                  control_avg_return_pct,candidate_avg_return_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_ruleset_dry_run_summary
+                           WHERE ruleset_id=%s""",(row["source_ruleset_id"],))
+            dry_rows=[dict(x) for x in cur.fetchall()]
+
+            composition=_full_release_composition(cur,{
+                **rc,"release_candidate_id":row["release_candidate_id"],
+                "base_rule_version":row["base_rule_version"],
+            })
+            canary_decision={
+                "decision_state":row["decision_state"],
+                "review_eligible":bool(row["review_eligible"]),
+                "primary_cohort":row["primary_cohort"],
+                "reason_codes":row["canary_reason_codes"] or [],
+                "evidence":row["canary_evidence"] or {},
+            }
+            release_candidate={
+                "release_candidate_id":row["release_candidate_id"],
+                "release_version_label":row["release_version_label"],
+                "source_ruleset_id":row["source_ruleset_id"],
+                "package_hash":row["package_hash"],
+                "package":row["package"] or {},
+                "status":row["status"],
+            }
+            ruleset={
+                "ruleset_id":row["ruleset_id"],"version_label":row["version_label"],
+                "base_rule_version":row["base_rule_version"],"spec_hash":row["spec_hash"],
+                "spec":row["spec"] or {},"status":row["ruleset_status"],
+            }
+            gate=full_release_gate(
+                release_candidate,canary_decision,canary_rows,dry_rows,
+                composition,ruleset,RULE_VERSION
+            )
+
+            cur.execute("""SELECT gate_state FROM market_os_full_release_gates
+                           WHERE release_candidate_id=%s""",(row["release_candidate_id"],))
+            old=cur.fetchone();old_state=old["gate_state"] if old else None
+            reasons_json=json.dumps(gate["reason_codes"],ensure_ascii=False)
+            evidence_json=json.dumps(gate["evidence"],ensure_ascii=False,default=str)
+            cur.execute("""INSERT INTO market_os_full_release_gates(
+                    release_candidate_id,gate_state,review_eligible,reason_codes,evidence,
+                    state_since,updated_at)
+                VALUES(%s,%s,%s,%s::jsonb,%s::jsonb,now(),now())
+                ON CONFLICT(release_candidate_id) DO UPDATE SET
+                    gate_state=excluded.gate_state,
+                    review_eligible=excluded.review_eligible,
+                    reason_codes=excluded.reason_codes,evidence=excluded.evidence,
+                    state_since=CASE
+                        WHEN market_os_full_release_gates.gate_state=excluded.gate_state
+                        THEN market_os_full_release_gates.state_since ELSE now() END,
+                    updated_at=now()""",
+                (row["release_candidate_id"],gate["state"],gate["review_eligible"],
+                 reasons_json,evidence_json))
+
+            gate_event_id=None
+            if old_state!=gate["state"]:
+                cur.execute("""INSERT INTO market_os_full_release_gate_events(
+                        release_candidate_id,from_state,to_state,review_eligible,
+                        reason_codes,evidence)
+                    VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb)
+                    RETURNING event_id""",
+                    (row["release_candidate_id"],old_state,gate["state"],
+                     gate["review_eligible"],reasons_json,evidence_json))
+                gate_event_id=cur.fetchone()["event_id"]
+                transitions+=1
+
+            # Pending human review immediately becomes stale if gate readiness is lost.
+            if gate["state"]!="FULL_RELEASE_REVIEW_READY":
+                cur.execute("""SELECT review_id FROM market_os_full_release_reviews
+                               WHERE release_candidate_id=%s AND review_state='PENDING'""",
+                            (row["release_candidate_id"],))
+                for pending in cur.fetchall():
+                    cur.execute("""UPDATE market_os_full_release_reviews
+                                   SET review_state='STALE_CANARY'
+                                   WHERE review_id=%s AND review_state='PENDING'""",
+                                (pending["review_id"],))
+                    if cur.rowcount:
+                        cur.execute("""INSERT INTO market_os_full_release_review_events(
+                                review_id,event_type,from_review_state,to_review_state,note,evidence)
+                            VALUES(%s,'CANARY_GATE_STALE','PENDING','STALE_CANARY',
+                                   'Full Release Gate no longer REVIEW_READY',%s::jsonb)""",
+                            (pending["review_id"],json.dumps({
+                                "gate_state":gate["state"],
+                                "reason_codes":gate["reason_codes"],
+                            },ensure_ascii=False)))
+                        staled+=1
+                continue
+
+            # A review package is frozen only on entry into REVIEW_READY.
+            if not gate_event_id:
+                continue
+            cur.execute("""SELECT 1 FROM market_os_full_release_reviews
+                           WHERE release_candidate_id=%s AND source_gate_event_id=%s""",
+                        (row["release_candidate_id"],gate_event_id))
+            if cur.fetchone():
+                continue
+
+            cur.execute("""SELECT review_id,revision,review_state
+                           FROM market_os_full_release_reviews
+                           WHERE release_candidate_id=%s
+                           ORDER BY revision DESC LIMIT 1""",(row["release_candidate_id"],))
+            prev=cur.fetchone()
+            revision=(int(prev["revision"])+1) if prev else 1
+            if prev and prev["review_state"]=="PENDING":
+                cur.execute("""UPDATE market_os_full_release_reviews
+                               SET review_state='SUPERSEDED'
+                               WHERE review_id=%s AND review_state='PENDING'""",(prev["review_id"],))
+                if cur.rowcount:
+                    cur.execute("""INSERT INTO market_os_full_release_review_events(
+                            review_id,event_type,from_review_state,to_review_state,note,evidence)
+                        VALUES(%s,'SUPERSEDED_BY_NEW_READY_GATE','PENDING','SUPERSEDED',
+                               'New FULL_RELEASE_REVIEW_READY transition',%s::jsonb)""",
+                        (prev["review_id"],json.dumps({"next_revision":revision},ensure_ascii=False)))
+
+            built=build_full_release_review(
+                release_candidate,gate_event_id,gate,canary_rows,dry_rows,
+                composition,ruleset,RULE_VERSION
+            )
+            review_id=built["review_id"]+f"-r{revision:03d}"
+            cur.execute("""INSERT INTO market_os_full_release_reviews(
+                    review_id,release_candidate_id,revision,source_gate_event_id,
+                    content_hash,gate_state,review_state,package)
+                VALUES(%s,%s,%s,%s,%s,%s,'PENDING',%s::jsonb)""",
+                (review_id,row["release_candidate_id"],revision,gate_event_id,
+                 built["content_hash"],gate["state"],
+                 json.dumps(built["package"],ensure_ascii=False,default=str)))
+            cur.execute("""INSERT INTO market_os_full_release_review_events(
+                    review_id,event_type,from_review_state,to_review_state,note,evidence)
+                VALUES(%s,'GENERATED',NULL,'PENDING',
+                       'Immutable Full Release Review package generated',%s::jsonb)""",
+                (review_id,json.dumps({
+                    "release_candidate_id":row["release_candidate_id"],
+                    "source_gate_event_id":gate_event_id,
+                    "content_hash":built["content_hash"],
+                },ensure_ascii=False)))
+            cur.execute("""UPDATE market_os_canary_decisions
+                           SET manual_review_state='FULL_RELEASE_REVIEW_PENDING'
+                           WHERE release_candidate_id=%s""",(row["release_candidate_id"],))
+            generated+=1
+
+        return {
+            "gate_transitions":transitions,
+            "reviews_generated":generated,
+            "reviews_staled":staled,
+        }
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(RULE_VERSION,))
@@ -2203,6 +2505,7 @@ def cycle():
     ruleset_summaries=refresh_ruleset_dry_run_summaries()
     canary_obs=capture_canary_observations()
     canary_stats=refresh_canary_summaries()
+    full_release=refresh_full_release_reviews()
     update_status(
         "OK",
         f"captured={captured} shadow_obs={shadow_obs} outcomes={outcomes} segments={segments} "
@@ -2211,11 +2514,14 @@ def cycle():
         f"dossiers_generated={dossiers['generated']} dossiers_staled={dossiers['staled']} "
         f"ruleset_obs={ruleset_obs['inserted']} ruleset_stale={ruleset_obs['staled']} "
         f"ruleset_summaries={ruleset_summaries} canary_obs={canary_obs['inserted']} "
-        f"canary_stale={canary_obs['staled']} canary_rollbacks={canary_stats['rollbacks']}",
+        f"canary_stale={canary_obs['staled']} canary_rollbacks={canary_stats['rollbacks']} "
+        f"full_release_transitions={full_release['gate_transitions']} "
+        f"full_release_reviews={full_release['reviews_generated']} "
+        f"full_release_stale={full_release['reviews_staled']}",
         last_snapshot=snap,last_outcome=bool(outcomes)
     )
     return (captured,outcomes,segments,registry,shadow_obs,shadow_summaries,dossiers,
-            ruleset_obs,ruleset_summaries,canary_obs,canary_stats)
+            ruleset_obs,ruleset_summaries,canary_obs,canary_stats,full_release)
 
 
 if __name__=="__main__":
@@ -2223,10 +2529,12 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s,r,so,ss,ad,ro,rs,co,cs=cycle()
+            a,o,s,r,so,ss,ad,ro,rs,co,cs,fr=cycle()
             if (a or o or so or r.get("transitions") or ad.get("generated")
                     or ad.get("staled") or ro.get("inserted") or ro.get("staled")
-                    or co.get("inserted") or co.get("staled") or cs.get("rollbacks")):
+                    or co.get("inserted") or co.get("staled") or cs.get("rollbacks")
+                    or fr.get("gate_transitions") or fr.get("reviews_generated")
+                    or fr.get("reviews_staled")):
                 print(
                     f"learning cycle assessments={a} shadow_obs={so} outcomes={o} segments={s} "
                     f"registry={r['active']} candidates={r['promotion_candidates']} "
@@ -2234,7 +2542,10 @@ if __name__=="__main__":
                     f"dossiers={ad['generated']} dossier_stale={ad['staled']} "
                     f"ruleset_obs={ro['inserted']} ruleset_stale={ro['staled']} summaries={rs} "
                     f"canary_obs={co['inserted']} canary_stale={co['staled']} "
-                    f"canary_rollbacks={cs['rollbacks']}",
+                    f"canary_rollbacks={cs['rollbacks']} "
+                    f"full_release_transitions={fr['gate_transitions']} "
+                    f"full_release_reviews={fr['reviews_generated']} "
+                    f"full_release_stale={fr['reviews_staled']}",
                     flush=True
                 )
         except Exception as exc:
