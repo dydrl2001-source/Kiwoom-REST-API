@@ -13,20 +13,24 @@ usage() {
   echo "  bash shadow_rule_admin.sh list"
   echo "  bash shadow_rule_admin.sh dossier <dossier_id>"
   echo "  bash shadow_rule_admin.sh ruleset <ruleset_id>"
+  echo "  bash shadow_rule_admin.sh release <release_candidate_id>"
   echo "  bash shadow_rule_admin.sh approve <candidate_key> --confirm"
   echo "  bash shadow_rule_admin.sh disable <shadow_rule_id> --confirm"
   echo "  bash shadow_rule_admin.sh review <dossier_id> <approve-dry-run|reject> --confirm"
   echo "  bash shadow_rule_admin.sh dry-run-start <dossier_id> --confirm"
   echo "  bash shadow_rule_admin.sh dry-run-stop <ruleset_id> --confirm"
+  echo "  bash shadow_rule_admin.sh release-create <ruleset_id> --confirm"
+  echo "  bash shadow_rule_admin.sh canary-start <release_candidate_id> --confirm"
+  echo "  bash shadow_rule_admin.sh canary-stop <release_candidate_id> --confirm"
 }
 
 case "$cmd" in
   list)
     ;;
-  dossier|ruleset)
+  dossier|ruleset|release)
     if [ -z "$id" ]; then usage; exit 1; fi
     ;;
-  approve|disable|dry-run-start|dry-run-stop)
+  approve|disable|dry-run-start|dry-run-stop|release-create|canary-start|canary-stop)
     if [ -z "$id" ] || [ "$arg" != "--confirm" ]; then usage; exit 1; fi
     ;;
   review)
@@ -46,6 +50,7 @@ import json,os,sys
 import psycopg
 from psycopg.rows import dict_row
 from market_os_ruleset import build_spec as build_versioned_ruleset
+from market_os_release import build_release_candidate
 
 cmd=sys.argv[1];ident=sys.argv[2] if len(sys.argv)>2 else ""
 arg=sys.argv[3] if len(sys.argv)>3 else ""
@@ -62,7 +67,10 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
               "market_os_adoption_dossier_events","market_os_versioned_rulesets",
               "market_os_ruleset_dry_run_observations","market_os_ruleset_dry_run_summary",
               "market_os_ruleset_events","market_os_ruleset_succession_decisions",
-              "market_os_ruleset_succession_events"]
+              "market_os_ruleset_succession_events","market_os_release_candidates",
+              "market_os_release_events","market_os_canary_observations",
+              "market_os_canary_summary","market_os_canary_decisions",
+              "market_os_canary_decision_events"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
@@ -138,7 +146,73 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"obs={r['observations']} changed={r['changed']} "
                   f"activated={r['activated_at']} last_eval={r['last_evaluated_at']}")
 
+        print("\n=== RELEASE CANDIDATES / CANARY ===")
+        cur.execute("""SELECT rc.release_candidate_id,rc.release_version_label,
+                              rc.source_ruleset_id,rc.status,rc.canary_allocation_pct,
+                              rc.created_at,rc.canary_started_at,rc.stopped_at,rc.stale_at,
+                              rc.rollback_at,rc.last_evaluated_at,
+                              cd.decision_state AS canary_state,
+                              cd.review_eligible AS canary_eligible,
+                              COUNT(o.*) AS observations,
+                              COUNT(o.*) FILTER(WHERE o.changed) AS changed
+                       FROM market_os_release_candidates rc
+                       LEFT JOIN market_os_canary_decisions cd
+                         ON cd.release_candidate_id=rc.release_candidate_id
+                       LEFT JOIN market_os_canary_observations o
+                         ON o.release_candidate_id=rc.release_candidate_id
+                       GROUP BY rc.release_candidate_id,cd.decision_state,cd.review_eligible
+                       ORDER BY rc.created_at DESC""")
+        releases=cur.fetchall()
+        if not releases:print("none")
+        for r in releases:
+            print(f"{r['release_candidate_id']} | {r['status']} | {r['release_version_label']} | "
+                  f"ruleset={r['source_ruleset_id']} canary={r['canary_allocation_pct']}% "
+                  f"decision={r['canary_state'] or '—'} eligible={r['canary_eligible'] or False} "
+                  f"obs={r['observations']} changed={r['changed']} "
+                  f"started={r['canary_started_at']} last_eval={r['last_evaluated_at']}")
+
         print("\nRead-only list. No live scores, thresholds, rulesets or orders were changed.")
+        raise SystemExit(0)
+
+    if cmd=="release":
+        cur.execute("""SELECT * FROM market_os_release_candidates
+                       WHERE release_candidate_id=%s""",(ident,))
+        rc=cur.fetchone()
+        if not rc:
+            raise SystemExit("release_candidate_id not found")
+        print("RELEASE CANDIDATE:",rc["release_candidate_id"])
+        print("Version:",rc["release_version_label"],"Status:",rc["status"])
+        print("Ruleset:",rc["source_ruleset_id"],"Canary:",str(rc["canary_allocation_pct"])+"%")
+        print("Package hash:",rc["package_hash"])
+        print("Created:",rc["created_at"],"Canary started:",rc["canary_started_at"])
+        print(json.dumps(rc["package"],ensure_ascii=False,indent=2,default=str))
+        print("\n=== CANARY DECISION ===")
+        cur.execute("""SELECT decision_state,review_eligible,primary_cohort,
+                              reason_codes,evidence,manual_review_state,state_since,updated_at
+                       FROM market_os_canary_decisions
+                       WHERE release_candidate_id=%s""",(ident,))
+        cd=cur.fetchone()
+        if not cd:
+            print("canary evidence 대기")
+        else:
+            print("State:",cd["decision_state"],"Eligible:",cd["review_eligible"],
+                  "Cohort:",cd["primary_cohort"],"Manual:",cd["manual_review_state"])
+            print("Reasons:",",".join(cd["reason_codes"] or []))
+            print(json.dumps(cd["evidence"],ensure_ascii=False,indent=2,default=str))
+        print("\n=== CANARY SUMMARY ===")
+        cur.execute("""SELECT * FROM market_os_canary_summary
+                       WHERE release_candidate_id=%s
+                       ORDER BY CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                WHEN 'D+1' THEN 3 ELSE 4 END,cohort""",(ident,))
+        rows=cur.fetchall()
+        if not rows:print("prospective canary outcomes 대기")
+        for x in rows:
+            print(f"{x['horizon']} {x['cohort']} {x['evidence_state']} "
+                  f"changes={x['membership_changes']} controlN={x['control_samples']} "
+                  f"candidateN={x['candidate_samples']} "
+                  f"dAvg={x['delta_avg_return_pct']} dPos={x['delta_positive_rate_pp']} "
+                  f"dMAE={x['delta_mae_pct']}")
+        print("\nRead-only release view. No live scores, tiers or orders were changed.")
         raise SystemExit(0)
 
     if cmd=="ruleset":
@@ -319,6 +393,130 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                        WHERE shadow_rule_id=%s""",(rs["source_shadow_rule_id"],))
         print("DRY_RUN_STOPPED:",ident)
         print("All observations and summaries remain preserved.")
+        print("Live Market OS scores/tiers/orders were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="release-create":
+        cur.execute("""SELECT vr.*,sd.decision_state,sd.review_eligible,
+                              sd.reason_codes,sd.evidence
+                       FROM market_os_versioned_rulesets vr
+                       JOIN market_os_ruleset_succession_decisions sd
+                         ON sd.ruleset_id=vr.ruleset_id
+                       WHERE vr.ruleset_id=%s FOR UPDATE""",(ident,))
+        rs=cur.fetchone()
+        if not rs:
+            raise SystemExit("ruleset_id not found")
+        if rs["status"]!="DRY_RUN_ACTIVE":
+            raise SystemExit("Release Candidate requires DRY_RUN_ACTIVE ruleset.")
+        if rs["decision_state"]!="SUCCESSION_CANDIDATE" or not rs["review_eligible"]:
+            raise SystemExit("Release Candidate requires current SUCCESSION_CANDIDATE + review_eligible=true.")
+        cur.execute("""SELECT event_id,event_time
+                       FROM market_os_ruleset_succession_events
+                       WHERE ruleset_id=%s AND to_state='SUCCESSION_CANDIDATE'
+                       ORDER BY event_time DESC,event_id DESC LIMIT 1""",(ident,))
+        ev=cur.fetchone()
+        if not ev:
+            raise SystemExit("SUCCESSION_CANDIDATE transition event missing")
+        cur.execute("""SELECT 1 FROM market_os_release_candidates
+                       WHERE source_ruleset_id=%s AND source_succession_event_id=%s""",
+                    (ident,ev["event_id"]))
+        if cur.fetchone():
+            raise SystemExit("A Release Candidate already exists for this succession transition.")
+        built=build_release_candidate(
+            dict(rs),ev["event_id"],
+            {"decision_state":rs["decision_state"],"review_eligible":rs["review_eligible"]},
+            20
+        )
+        pkg=built["package"]
+        cur.execute("""INSERT INTO market_os_release_candidates(
+                release_candidate_id,release_version_label,source_ruleset_id,
+                source_succession_event_id,package_hash,package,status,
+                canary_allocation_pct,note)
+            VALUES(%s,%s,%s,%s,%s,%s::jsonb,'RELEASE_CANDIDATE',%s,
+                   'Human-created immutable release candidate; canary not started')""",
+            (built["release_candidate_id"],built["release_version_label"],ident,
+             ev["event_id"],built["package_hash"],json.dumps(pkg,ensure_ascii=False),
+             pkg["canary"]["allocation_pct"]))
+        cur.execute("""INSERT INTO market_os_release_events(
+                release_candidate_id,event_type,from_status,to_status,evidence)
+            VALUES(%s,'HUMAN_RELEASE_CANDIDATE_CREATED',NULL,'RELEASE_CANDIDATE',%s::jsonb)""",
+            (built["release_candidate_id"],json.dumps({
+                "ruleset_id":ident,
+                "succession_event_id":ev["event_id"],
+                "package_hash":built["package_hash"],
+                "live_activation":False,
+            },ensure_ascii=False)))
+        cur.execute("""UPDATE market_os_ruleset_succession_decisions
+                       SET manual_review_state='RELEASE_CANDIDATE_CREATED'
+                       WHERE ruleset_id=%s""",(ident,))
+        print("RELEASE_CANDIDATE:",built["release_candidate_id"])
+        print("Version:",built["release_version_label"])
+        print("Canary allocation:",str(pkg["canary"]["allocation_pct"])+"%")
+        print("Canary has NOT started. Run canary-start explicitly.")
+        print("Live Market OS scores/tiers/orders were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="canary-start":
+        cur.execute("""SELECT rc.*,vr.status AS ruleset_status,
+                              sd.decision_state,sd.review_eligible
+                       FROM market_os_release_candidates rc
+                       JOIN market_os_versioned_rulesets vr
+                         ON vr.ruleset_id=rc.source_ruleset_id
+                       JOIN market_os_ruleset_succession_decisions sd
+                         ON sd.ruleset_id=rc.source_ruleset_id
+                       WHERE rc.release_candidate_id=%s FOR UPDATE""",(ident,))
+        rc=cur.fetchone()
+        if not rc:
+            raise SystemExit("release_candidate_id not found")
+        if rc["status"]!="RELEASE_CANDIDATE":
+            raise SystemExit("Canary start requires RELEASE_CANDIDATE. Current="+str(rc["status"]))
+        if rc["ruleset_status"]!="DRY_RUN_ACTIVE" or rc["decision_state"]!="SUCCESSION_CANDIDATE" or not rc["review_eligible"]:
+            raise SystemExit("Canary start requires active ruleset + current SUCCESSION_CANDIDATE.")
+        cur.execute("""UPDATE market_os_release_candidates
+                       SET status='CANARY_ACTIVE',canary_started_at=now(),
+                           note='Human-started deterministic preview canary; live CONTROL unchanged'
+                       WHERE release_candidate_id=%s""",(ident,))
+        cur.execute("""INSERT INTO market_os_release_events(
+                release_candidate_id,event_type,from_status,to_status,evidence)
+            VALUES(%s,'HUMAN_CANARY_STARTED','RELEASE_CANDIDATE','CANARY_ACTIVE',
+                   %s::jsonb)""",
+            (ident,json.dumps({
+                "allocation_pct":rc["canary_allocation_pct"],
+                "assignment_unit":"STOCK_KST_DAY",
+                "primary_view_replacement":False,
+                "live_activation":False,
+            },ensure_ascii=False)))
+        cur.execute("""UPDATE market_os_ruleset_succession_decisions
+                       SET manual_review_state='CANARY_ACTIVE'
+                       WHERE ruleset_id=%s""",(rc["source_ruleset_id"],))
+        print("CANARY_ACTIVE:",ident)
+        print("Allocation:",str(rc["canary_allocation_pct"])+"% deterministic stock-day sample")
+        print("Primary Market OS watch_tier remains CONTROL.")
+        print("Live orders/positions were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="canary-stop":
+        cur.execute("""SELECT * FROM market_os_release_candidates
+                       WHERE release_candidate_id=%s FOR UPDATE""",(ident,))
+        rc=cur.fetchone()
+        if not rc:
+            raise SystemExit("release_candidate_id not found")
+        if rc["status"]!="CANARY_ACTIVE":
+            raise SystemExit("Only CANARY_ACTIVE can be manually stopped. Current="+str(rc["status"]))
+        cur.execute("""UPDATE market_os_release_candidates
+                       SET status='CANARY_STOPPED',stopped_at=now(),
+                           note='Human-stopped preview canary; evidence preserved'
+                       WHERE release_candidate_id=%s""",(ident,))
+        cur.execute("""INSERT INTO market_os_release_events(
+                release_candidate_id,event_type,from_status,to_status,evidence)
+            VALUES(%s,'HUMAN_CANARY_STOPPED','CANARY_ACTIVE','CANARY_STOPPED',
+                   %s::jsonb)""",
+            (ident,json.dumps({"live_activation":False},ensure_ascii=False)))
+        cur.execute("""UPDATE market_os_ruleset_succession_decisions
+                       SET manual_review_state='CANARY_STOPPED'
+                       WHERE ruleset_id=%s""",(rc["source_ruleset_id"],))
+        print("CANARY_STOPPED:",ident)
+        print("Existing Canary evidence remains preserved.")
         print("Live Market OS scores/tiers/orders were NOT changed.")
         raise SystemExit(0)
 
