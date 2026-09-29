@@ -668,3 +668,69 @@ Existing Shadow positions are never silently mutated; Rebalance only proposes ac
 > Recovery is a controlled state transition, not the disappearance of an error message.
 
 The system must be able to explain why it stopped, why it stayed stopped, who acknowledged the incident, and what evidence allowed it to resume.
+
+
+## Production Hardening
+
+Phase 10 separates application liveness, release readiness, schema state and recoverability.
+
+### Versioned schema bundle
+
+A one-shot schema migration service applies the operational AI overlay before dependent services start.
+
+Registry:
+
+- market_radar_schema_migrations
+- MARKET_RADAR_SCHEMA_VERSION
+- SHA-256 bundle checksum
+
+The same version with different schema contents is rejected as checksum drift.
+
+### Health endpoints
+
+- /health/live — process liveness
+- /health — DB reachability
+- /health/ready — DB + current schema version + fresh Risk Control status
+
+A process may be live while not ready.
+
+### Backup / restore
+
+Operational scripts:
+
+- local/backup_db.sh
+- local/restore_verify.sh
+
+Restore verification always uses a temporary database named market_radar_restore_check. A restore drill must not overwrite the primary database.
+
+### CI
+
+Market Radar CI now performs:
+
+- Python compilation
+- complete Market Radar unit-test discovery
+- static no-live-order guard
+- local Docker image build
+
+### Rollback
+
+Normal application rollback uses a known-good application commit/image while preserving the current database history.
+
+Database restore is treated as disaster recovery, not routine application rollback.
+
+### Release Candidate evidence
+
+A release candidate requires:
+
+- mergeable PR
+- branch not behind main
+- green CI
+- schema migration/check
+- successful backup
+- isolated restore drill
+- API readiness
+- fresh Risk Control
+- PASS Resilience Audit
+- no live-order path
+
+See market_radar/PRODUCTION_RUNBOOK.md.
