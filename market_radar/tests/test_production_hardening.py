@@ -38,6 +38,20 @@ class ProductionHardeningSourceTests(unittest.TestCase):
         self.assertIn("test_production_hardening.py",docker)
         self.assertIn("schema_migrate.py",docker)
 
+    def test_compose_uses_one_shot_schema_migration(self):
+        text=(self.root/"local"/"docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("schema-migrate:",text)
+        self.assertIn("service_completed_successfully",text)
+        self.assertIn("/health/live",text)
+
+    def test_ci_workflow_is_present(self):
+        workflow=self.root.parent/".github"/"workflows"/"market-radar-ci.yml"
+        if workflow.exists():
+            text=workflow.read_text(encoding="utf-8")
+            self.assertIn("Run Market Radar tests",text)
+            self.assertIn("Static live-order guard",text)
+            self.assertIn("Build local image",text)
+
     def test_no_live_order_action_added_to_hardening_files(self):
         for rel in ("schema_migrate.py","local/backup_db.sh","local/restore_verify.sh"):
             text=(self.root/rel).read_text(encoding="utf-8")
