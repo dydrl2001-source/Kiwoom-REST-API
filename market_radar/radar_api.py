@@ -36,6 +36,12 @@ try:
     from ai_brokerage.capacity import build_capacity_matrix as ai_build_capacity_matrix
     from ai_brokerage.capacity import strategy_capacity_rows as ai_strategy_capacity_rows
     from ai_brokerage.capacity import execution_adjusted_lifecycle as ai_execution_adjusted_lifecycle
+    from ai_brokerage.allocation import AllocationPolicy as AIAllocationPolicy
+    from ai_brokerage.allocation import correlation_matrix as ai_correlation_matrix
+    from ai_brokerage.allocation import optimize_allocations as ai_optimize_allocations
+    from ai_brokerage.execution_model import SizingPolicy as AISizingPolicy
+    from ai_brokerage.execution_model import BookPolicy as AIBookPolicy
+    from ai_brokerage.execution_model import estimate_book_capacity as ai_estimate_book_capacity
 except Exception:
     try:
         from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
@@ -48,6 +54,12 @@ except Exception:
         from market_radar.ai_brokerage.capacity import build_capacity_matrix as ai_build_capacity_matrix
         from market_radar.ai_brokerage.capacity import strategy_capacity_rows as ai_strategy_capacity_rows
         from market_radar.ai_brokerage.capacity import execution_adjusted_lifecycle as ai_execution_adjusted_lifecycle
+        from market_radar.ai_brokerage.allocation import AllocationPolicy as AIAllocationPolicy
+        from market_radar.ai_brokerage.allocation import correlation_matrix as ai_correlation_matrix
+        from market_radar.ai_brokerage.allocation import optimize_allocations as ai_optimize_allocations
+        from market_radar.ai_brokerage.execution_model import SizingPolicy as AISizingPolicy
+        from market_radar.ai_brokerage.execution_model import BookPolicy as AIBookPolicy
+        from market_radar.ai_brokerage.execution_model import estimate_book_capacity as ai_estimate_book_capacity
     except Exception:
         AIBrokerageDecisionEngine = None
         ai_context_from_dashboard_row = None
@@ -59,6 +71,12 @@ except Exception:
         ai_build_capacity_matrix = None
         ai_strategy_capacity_rows = None
         ai_execution_adjusted_lifecycle = None
+        AIAllocationPolicy = None
+        ai_correlation_matrix = None
+        ai_optimize_allocations = None
+        AISizingPolicy = None
+        AIBookPolicy = None
+        ai_estimate_book_capacity = None
 
 AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
@@ -1674,6 +1692,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                             "recent_turnover_seconds":seconds,
                             "recent_turnover_state":state,
                             "sor_turnover_krw":current.get("turnover_krw") if current else None,
+                            "price_krw":current.get("price_krw") if current else None,
                             "exchange_at":current.get("exchange_at") if current else None
                         }
                 except Exception:
@@ -1731,6 +1750,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "recent_turnover_seconds":(flow_map.get(code) or {}).get("recent_turnover_seconds"),
                     "recent_turnover_state":(flow_map.get(code) or {}).get("recent_turnover_state"),
                     "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
+                    "price_krw":(flow_map.get(code) or {}).get("price_krw"),
                     "quote_exchange_at":(flow_map.get(code) or {}).get("exchange_at"),
                     "catalyst": cat, "flow_state": flow,
                     "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
