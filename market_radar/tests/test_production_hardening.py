@@ -43,6 +43,7 @@ class ProductionHardeningSourceTests(unittest.TestCase):
         self.assertIn("schema-migrate:",text)
         self.assertIn("service_completed_successfully",text)
         self.assertIn("/health/live",text)
+        self.assertIn("soak-monitor-worker:",text)
 
     def test_ci_workflow_is_present(self):
         workflow=self.root.parent/".github"/"workflows"/"market-radar-ci.yml"
