@@ -135,6 +135,25 @@ services:
       orderbook-collector:
         condition: service_started
 
+  capital-allocation-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/capital_allocation_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-brokerage-worker:
+        condition: service_started
+      orderbook-collector:
+        condition: service_started
+      shadow-execution-engine:
+        condition: service_started
+
   paper-feedback-engine:
     build:
       context: ../..
