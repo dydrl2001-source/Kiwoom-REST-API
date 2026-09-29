@@ -451,6 +451,99 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"eligible={r['review_eligible']} "
                       f"reasons={','.join(r['reason_codes'] or [])}")
 
+        print('\n[RELEASE CANDIDATE / CANARY v2.0]')
+        if not exists('market_os_release_candidates'):
+            print('release candidate tables missing')
+        else:
+            cur.execute("""SELECT rc.release_candidate_id,rc.release_version_label,
+                                  rc.source_ruleset_id,rc.status,rc.canary_allocation_pct,
+                                  rc.created_at,rc.canary_started_at,rc.canary_last_scanned_at,
+                                  rc.last_evaluated_at,
+                                  cd.decision_state,cd.review_eligible,
+                                  COUNT(o.*) AS observations,
+                                  COUNT(o.*) FILTER(WHERE o.changed) AS changed
+                           FROM market_os_release_candidates rc
+                           LEFT JOIN market_os_canary_decisions cd
+                             ON cd.release_candidate_id=rc.release_candidate_id
+                           LEFT JOIN market_os_canary_observations o
+                             ON o.release_candidate_id=rc.release_candidate_id
+                           GROUP BY rc.release_candidate_id,cd.decision_state,cd.review_eligible
+                           ORDER BY rc.created_at DESC""")
+            rows=cur.fetchall()
+            if not rows:
+                print('release candidate 없음')
+            for r in rows:
+                print(f"{r['status']} {r['release_candidate_id']} "
+                      f"version={r['release_version_label']} ruleset={r['source_ruleset_id']} "
+                      f"canary={r['canary_allocation_pct']}% "
+                      f"decision={r['decision_state'] or '—'} eligible={r['review_eligible'] or False} "
+                      f"obs={r['observations']} changed={r['changed']} "
+                      f"started={r['canary_started_at']} scanned={r['canary_last_scanned_at']} "
+                      f"last_eval={r['last_evaluated_at']}")
+        if exists('market_os_canary_summary'):
+            print('\n[CANARY CONTROL vs CANDIDATE]')
+            cur.execute("""SELECT release_candidate_id,horizon,cohort,evidence_state,
+                                  membership_changes,control_samples,candidate_samples,
+                                  control_avg_return_pct,candidate_avg_return_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct
+                           FROM market_os_canary_summary
+                           ORDER BY release_candidate_id,
+                                    CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                    WHEN 'D+1' THEN 3 ELSE 4 END,cohort""")
+            rows=cur.fetchall()
+            if not rows:
+                print('canary outcomes 대기')
+            for r in rows[:80]:
+                print(f"{r['release_candidate_id']} {r['horizon']} {r['cohort']} "
+                      f"{r['evidence_state']} changes={r['membership_changes']} "
+                      f"controlN={r['control_samples']} candidateN={r['candidate_samples']} "
+                      f"dAvg={r['delta_avg_return_pct']} "
+                      f"dPos={r['delta_positive_rate_pp']} dMAE={r['delta_mae_pct']}")
+        if exists('market_os_canary_decisions'):
+            print('\n[CANARY SAFETY GATE]')
+            cur.execute("""SELECT release_candidate_id,decision_state,review_eligible,
+                                  primary_cohort,reason_codes,evidence,updated_at
+                           FROM market_os_canary_decisions
+                           ORDER BY CASE decision_state
+                               WHEN 'CANARY_PROMOTION_CANDIDATE' THEN 1
+                               WHEN 'CANARY_HEALTHY' THEN 2
+                               WHEN 'CANARY_COLLECTING' THEN 3
+                               WHEN 'CANARY_ROLLBACK_REQUIRED' THEN 4 ELSE 5 END,
+                               updated_at DESC""")
+            for r in cur.fetchall():
+                ev=r['evidence'] or {}
+                print(f"{r['decision_state']} eligible={r['review_eligible']} "
+                      f"{r['release_candidate_id']} cohort={r['primary_cohort'] or '—'} "
+                      f"30m={ev.get('overall_30m','—')} close={ev.get('overall_close','—')} "
+                      f"D+1={ev.get('overall_d1','—')} recent30={ev.get('recent_30m','—')} "
+                      f"recentClose={ev.get('recent_close','—')} "
+                      f"reasons={','.join(r['reason_codes'] or [])}")
+        if exists('market_os_canary_observations'):
+            print('\n[RECENT CANARY PREVIEW]')
+            cur.execute("""SELECT o.assessment_time,o.stock_code,a.stock_name,
+                                  o.release_candidate_id,o.assignment_bucket,o.allocation_pct,
+                                  o.control_tier,o.candidate_tier,o.changed
+                           FROM market_os_canary_observations o
+                           LEFT JOIN market_os_assessment_snapshots a
+                             ON a.snapshot_time=o.assessment_time
+                            AND a.stock_code=o.stock_code
+                            AND a.rule_version=o.control_rule_version
+                           ORDER BY o.assessment_time DESC,o.stock_code LIMIT 20""")
+            for r in cur.fetchall():
+                print(f"{r['assessment_time']} {r['stock_code']} {r['stock_name'] or ''} "
+                      f"{r['release_candidate_id']} {r['control_tier']}->{r['candidate_tier']} "
+                      f"changed={r['changed']} bucket={r['assignment_bucket']} "
+                      f"allocation={r['allocation_pct']}%")
+        if exists('market_os_release_events'):
+            print('\n[RELEASE / CANARY EVENTS]')
+            cur.execute("""SELECT event_time,release_candidate_id,event_type,
+                                  from_status,to_status
+                           FROM market_os_release_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            for r in cur.fetchall():
+                print(f"{r['event_time']} {r['release_candidate_id']} {r['event_type']} "
+                      f"{r['from_status'] or '—'}->{r['to_status']}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -487,5 +580,6 @@ print('Shadow Decision Gate v1.6: 30m+close, time-split stability, membership ch
 print('Adoption Review Dossier v1.7: one immutable dossier revision is generated per ACCEPT_CANDIDATE transition; human review can only approve a future dry-run or reject it.')
 print('Versioned Ruleset v1.8: APPROVED_DRY_RUN still requires explicit dry-run-start; activation creates a new prospective boundary and source Decision invalidation => STALE_SOURCE.')
 print('Ruleset Succession Gate v1.9: 30m+close, time splits, stance replication, impact concentration, frozen Shadow-effect retention and D+1 degradation are required before SUCCESSION_CANDIDATE; no live promotion.')
+print('Release Candidate / Canary v2.0: SUCCESSION_CANDIDATE requires human release-create and canary-start; deterministic <=20% stock-day preview never replaces primary CONTROL tier, and comparable harm auto-stops as CANARY_ROLLBACK_REQUIRED.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
