@@ -791,7 +791,10 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
         active=cur.fetchone()
         if active:
             raise SystemExit("Another switch is active: "+active["switch_transaction_id"]+" "+active["state"])
-        seed="|".join((ident,ctrl["control_hash"],src["spec_hash"],src["content_hash"]))
+        cur.execute("""SELECT COUNT(*) AS n FROM market_os_switch_transactions
+                       WHERE source_review_id=%s""",(ident,))
+        attempt=int(cur.fetchone()["n"] or 0)+1
+        seed="|".join((ident,ctrl["control_hash"],src["spec_hash"],src["content_hash"],str(attempt)))
         switch_id="sw-"+hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
         candidate=runtime_candidate_control(
             MARKET_OS_BASE_VERSION,
