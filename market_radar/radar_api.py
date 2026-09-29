@@ -46,6 +46,7 @@ try:
     from ai_brokerage.risk_control import evaluate_kill_switch as ai_evaluate_kill_switch
     from ai_brokerage.risk_control import evaluate_live_readiness as ai_evaluate_live_readiness
     from ai_brokerage.risk_control import rebalance_portfolio as ai_rebalance_portfolio
+    from ai_brokerage.release import evaluate_release_candidate as ai_evaluate_release_candidate
 except Exception:
     try:
         from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
@@ -68,6 +69,7 @@ except Exception:
         from market_radar.ai_brokerage.risk_control import evaluate_kill_switch as ai_evaluate_kill_switch
         from market_radar.ai_brokerage.risk_control import evaluate_live_readiness as ai_evaluate_live_readiness
         from market_radar.ai_brokerage.risk_control import rebalance_portfolio as ai_rebalance_portfolio
+        from market_radar.ai_brokerage.release import evaluate_release_candidate as ai_evaluate_release_candidate
     except Exception:
         AIBrokerageDecisionEngine = None
         ai_context_from_dashboard_row = None
@@ -89,6 +91,7 @@ except Exception:
         ai_evaluate_kill_switch = None
         ai_evaluate_live_readiness = None
         ai_rebalance_portfolio = None
+        ai_evaluate_release_candidate = None
 
 AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
@@ -1452,6 +1455,37 @@ def build_ai_soak_gate(cur):
         return {**out,"status":"ERROR","note":f"Soak Gate 집계 실패: {type(e).__name__}"}
 
 
+def build_ai_release_gate(cur, ai_risk_control, ai_resilience, ai_soak):
+    if not ai_evaluate_release_candidate:
+        return {"stage":"RC_BLOCKED","rc_ready":False,"gates":[],"failed_gates":["RELEASE_EVALUATOR_MISSING"],"live_enabled":False}
+    version=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.2")
+    schema_ok=False
+    if table_exists(cur,"market_radar_schema_migrations"):
+        cur.execute("SELECT 1 FROM market_radar_schema_migrations WHERE version=%s",(version,))
+        schema_ok=cur.fetchone() is not None
+    risk=ai_risk_control or {}
+    ready=risk.get("live_readiness") or {}
+    resilience=ai_resilience or {}
+    soak=ai_soak or {}
+    evidence={
+        "soak_stage":soak.get("stage"),
+        "soak_rc_candidate":soak.get("rc_candidate") is True,
+        "risk_state":(risk.get("kill_switch") or {}).get("state"),
+        "resilience_status":resilience.get("status"),
+        "schema_ok":schema_ok,
+        "schema_version":version if schema_ok else None,
+        "required_schema_version":version,
+        "live_enabled":ready.get("live_enabled"),
+        "live_order_path_present":False,
+        "ci_green_confirmed":_truthy_env("RC_CI_GREEN_CONFIRMED","0"),
+        "backup_restore_confirmed":_truthy_env("RC_BACKUP_RESTORE_CONFIRMED","0"),
+        "preflight_confirmed":_truthy_env("RC_PREFLIGHT_CONFIRMED","0"),
+        "persistent_staging_confirmed":_truthy_env("RC_PERSISTENT_STAGING","0"),
+        "branch_sync_confirmed":_truthy_env("RC_BRANCH_SYNC_CONFIRMED","0"),
+    }
+    return ai_evaluate_release_candidate(evidence)
+
+
 def build_shadow_execution_lab(cur):
     empty={
         "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
@@ -2446,6 +2480,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             )
             ai_resilience=build_ai_resilience_lab(cur)
             ai_soak=build_ai_soak_gate(cur)
+            ai_release=build_ai_release_gate(cur,ai_risk_control,ai_resilience,ai_soak)
             ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
@@ -2702,6 +2737,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "ai_risk_control": ai_risk_control,
         "ai_resilience": ai_resilience,
         "ai_soak": ai_soak,
+        "ai_release": ai_release,
         "ai_daily_review": ai_daily_review,
         "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
