@@ -135,6 +135,17 @@ jobs:
       - name: Run release preflight
         working-directory: market_radar
         run: python release_preflight.py --base-url http://127.0.0.1:8080 --token test
+      - name: Backup and isolated restore drill
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_dump "$DATABASE_URL" -Fc -f /tmp/market-radar-staging.dump
+          test -s /tmp/market-radar-staging.dump
+          sha256sum /tmp/market-radar-staging.dump
+          PGPASSWORD=market createdb -h 127.0.0.1 -U market market_radar_restore_check
+          PGPASSWORD=market pg_restore -h 127.0.0.1 -U market -d market_radar_restore_check --no-owner --no-privileges /tmp/market-radar-staging.dump
+          PGPASSWORD=market psql -h 127.0.0.1 -U market -d market_radar_restore_check -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) AS public_tables FROM pg_tables WHERE schemaname='public';"
+          PGPASSWORD=market psql -h 127.0.0.1 -U market -d market_radar_restore_check -v ON_ERROR_STOP=1 -c "SELECT version, checksum FROM market_radar_schema_migrations ORDER BY applied_at DESC LIMIT 1;"
       - name: Dump smoke logs on failure
         if: failure()
         run: cat /tmp/radar-api.log || true
