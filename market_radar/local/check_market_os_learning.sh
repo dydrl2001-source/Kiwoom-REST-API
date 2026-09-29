@@ -607,6 +607,48 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                       f"{r['from_review_state'] or '—'}->{r['to_review_state']} "
                       f"{r['note'] or ''}")
 
+        print('\n[REVERSIBLE CONTROL SWITCH v2.2]')
+        if not exists('market_os_control_state'):
+            print('control state table missing')
+        else:
+            cur.execute("""SELECT control_id,mode,active_version_label,base_rule_version,
+                                  ruleset_id,source_review_id,switch_transaction_id,
+                                  control_hash,activated_at,updated_at
+                           FROM market_os_control_state WHERE id=1""")
+            r=cur.fetchone()
+            if r:
+                print(f"CONTROL {r['control_id']} mode={r['mode']} "
+                      f"version={r['active_version_label']} base={r['base_rule_version']} "
+                      f"ruleset={r['ruleset_id'] or '—'} review={r['source_review_id'] or '—'} "
+                      f"switch={r['switch_transaction_id'] or '—'} "
+                      f"hash={r['control_hash'][:12]} activated={r['activated_at']} updated={r['updated_at']}")
+        if exists('market_os_switch_transactions'):
+            print('\n[SWITCH TRANSACTIONS]')
+            cur.execute("""SELECT switch_transaction_id,source_review_id,release_candidate_id,
+                                  ruleset_id,state,expected_control_hash,candidate_hash,
+                                  pre_switch_watch_count,prepared_at,committed_at,health_deadline,
+                                  completed_at,rollback_at,rollback_reason,note
+                           FROM market_os_switch_transactions
+                           ORDER BY prepared_at DESC LIMIT 20""")
+            rows=cur.fetchall()
+            if not rows:
+                print('switch transaction 없음')
+            for r in rows:
+                print(f"{r['state']} {r['switch_transaction_id']} review={r['source_review_id']} "
+                      f"ruleset={r['ruleset_id']} preWatch={r['pre_switch_watch_count']} "
+                      f"prepared={r['prepared_at']} committed={r['committed_at']} "
+                      f"health={r['health_deadline']} completed={r['completed_at']} "
+                      f"rollback={r['rollback_at']} reason={r['rollback_reason'] or '—'}")
+        if exists('market_os_switch_events'):
+            print('\n[SWITCH EVENTS]')
+            cur.execute("""SELECT event_time,switch_transaction_id,event_type,
+                                  from_state,to_state,evidence
+                           FROM market_os_switch_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            for r in cur.fetchall():
+                print(f"{r['event_time']} {r['switch_transaction_id']} {r['event_type']} "
+                      f"{r['from_state'] or '—'}->{r['to_state']} evidence={r['evidence'] or {}}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -645,5 +687,6 @@ print('Versioned Ruleset v1.8: APPROVED_DRY_RUN still requires explicit dry-run-
 print('Ruleset Succession Gate v1.9: 30m+close, time splits, stance replication, impact concentration, frozen Shadow-effect retention and D+1 degradation are required before SUCCESSION_CANDIDATE; no live promotion.')
 print('Release Candidate / Canary v2.0: SUCCESSION_CANDIDATE requires human release-create and canary-start; deterministic <=20% stock-day preview never replaces primary CONTROL tier, and comparable harm auto-stops as CANARY_ROLLBACK_REQUIRED.')
 print('Full Release Review v2.1: CANARY_PROMOTION_CANDIDATE is rechecked against full Dry Run effect alignment, Canary sample bias and CONTROL rollback identity; RELEASE_READY is human metadata only and no live switch exists.')
+print('Reversible CONTROL Switch v2.2: prepare never changes CONTROL; commit requires MARKET_OS_LIVE_SWITCH_ENABLED=1, expected CONTROL hash match and fresh RELEASE_READY evidence; hard health failures restore the previous CONTROL atomically. Orders/positions remain separate.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
