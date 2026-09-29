@@ -11,6 +11,7 @@ from market_os_control import (
     base_control as market_os_base_control,
     apply_watchlist as apply_market_os_control,
     requires_micro as market_os_control_requires_micro,
+    control_hash as market_os_control_hash,
 )
 
 SCHEMA='''
@@ -179,7 +180,7 @@ def active_market_os_control(cur):
     r=cur.fetchone()
     if not r:
         return base
-    return {
+    out={
         'control_id':r['control_id'],'mode':r['mode'],
         'active_version_label':r['active_version_label'],
         'base_rule_version':r['base_rule_version'],
@@ -191,6 +192,31 @@ def active_market_os_control(cur):
         'activated_at':r['activated_at'].isoformat() if r['activated_at'] else None,
         'updated_at':r['updated_at'].isoformat() if r['updated_at'] else None,
     }
+    if out['mode']=='BASE':
+        return out
+    reason=None
+    if market_os_control_hash(out)!=out.get('control_hash'):
+        reason='CONTROL_HASH_INVALID'
+    elif not out.get('switch_transaction_id') or not exists(cur,'market_os_switch_transactions'):
+        reason='SWITCH_TRANSACTION_MISSING'
+    else:
+        cur.execute("""SELECT state,candidate_hash FROM market_os_switch_transactions
+                       WHERE switch_transaction_id=%s""",(out['switch_transaction_id'],))
+        tx=cur.fetchone()
+        if not tx or tx['state'] not in ('COMMITTED','HEALTHY'):
+            reason='SWITCH_TRANSACTION_NOT_ACTIVE'
+        elif tx['candidate_hash']!=out.get('control_hash'):
+            reason='SWITCH_CANDIDATE_HASH_MISMATCH'
+    if reason:
+        return {
+            **base,
+            'selector_status':'FALLBACK_BASE',
+            'selector_fallback_reason':reason,
+            '_requested_control_id':out.get('control_id'),
+            '_requested_switch_transaction_id':out.get('switch_transaction_id'),
+        }
+    out['selector_status']='VALID'
+    return out
 
 
 def runtime_market_os_microstructure(cur,codes):
@@ -588,7 +614,14 @@ def desk_payload(include_tracking=True):
         market_os,control_meta=apply_market_os_control(
             market_os_base,market_os_control,control_micro
         )
-        control_meta={**market_os_control,**control_meta,'requested_control_id':market_os_control.get('control_id')}
+        control_meta={
+            **market_os_control,**control_meta,
+            'requested_control_id':market_os_control.get('_requested_control_id') or market_os_control.get('control_id'),
+            'requested_switch_transaction_id':market_os_control.get('_requested_switch_transaction_id') or market_os_control.get('switch_transaction_id'),
+        }
+        if market_os_control.get('selector_status')=='FALLBACK_BASE':
+            control_meta['apply_status']='FALLBACK_BASE'
+            control_meta['error']=market_os_control.get('selector_fallback_reason')
     except Exception as exc:
         fallback=market_os_base_control(MARKET_OS_VERSION)
         market_os,base_meta=apply_market_os_control(market_os_base,fallback,{})
