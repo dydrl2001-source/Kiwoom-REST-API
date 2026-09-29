@@ -14,6 +14,7 @@ usage() {
   echo "  bash shadow_rule_admin.sh dossier <dossier_id>"
   echo "  bash shadow_rule_admin.sh ruleset <ruleset_id>"
   echo "  bash shadow_rule_admin.sh release <release_candidate_id>"
+  echo "  bash shadow_rule_admin.sh full-release <review_id>"
   echo "  bash shadow_rule_admin.sh approve <candidate_key> --confirm"
   echo "  bash shadow_rule_admin.sh disable <shadow_rule_id> --confirm"
   echo "  bash shadow_rule_admin.sh review <dossier_id> <approve-dry-run|reject> --confirm"
@@ -22,12 +23,13 @@ usage() {
   echo "  bash shadow_rule_admin.sh release-create <ruleset_id> --confirm"
   echo "  bash shadow_rule_admin.sh canary-start <release_candidate_id> --confirm"
   echo "  bash shadow_rule_admin.sh canary-stop <release_candidate_id> --confirm"
+  echo "  bash shadow_rule_admin.sh full-release-review <review_id> <approve|reject> --confirm"
 }
 
 case "$cmd" in
   list)
     ;;
-  dossier|ruleset|release)
+  dossier|ruleset|release|full-release)
     if [ -z "$id" ]; then usage; exit 1; fi
     ;;
   approve|disable|dry-run-start|dry-run-stop|release-create|canary-start|canary-stop)
@@ -35,6 +37,11 @@ case "$cmd" in
     ;;
   review)
     if [ -z "$id" ] || { [ "$arg" != "approve-dry-run" ] && [ "$arg" != "reject" ]; } || [ "$confirm" != "--confirm" ]; then
+      usage; exit 1
+    fi
+    ;;
+  full-release-review)
+    if [ -z "$id" ] || { [ "$arg" != "approve" ] && [ "$arg" != "reject" ]; } || [ "$confirm" != "--confirm" ]; then
       usage; exit 1
     fi
     ;;
@@ -70,7 +77,9 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
               "market_os_ruleset_succession_events","market_os_release_candidates",
               "market_os_release_events","market_os_canary_observations",
               "market_os_canary_summary","market_os_canary_decisions",
-              "market_os_canary_decision_events"]
+              "market_os_canary_decision_events","market_os_full_release_gates",
+              "market_os_full_release_gate_events","market_os_full_release_reviews",
+              "market_os_full_release_review_events"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
@@ -171,7 +180,47 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"obs={r['observations']} changed={r['changed']} "
                   f"started={r['canary_started_at']} last_eval={r['last_evaluated_at']}")
 
+        print("\n=== FULL RELEASE REVIEWS ===")
+        cur.execute("""SELECT fr.review_id,fr.release_candidate_id,fr.revision,
+                              fr.gate_state,fr.review_state,fr.created_at,fr.reviewed_at,
+                              fr.content_hash,g.review_eligible,g.gate_state AS current_gate_state
+                       FROM market_os_full_release_reviews fr
+                       LEFT JOIN market_os_full_release_gates g
+                         ON g.release_candidate_id=fr.release_candidate_id
+                       ORDER BY CASE fr.review_state WHEN 'PENDING' THEN 1
+                                WHEN 'RELEASE_READY' THEN 2 WHEN 'REJECTED' THEN 3
+                                ELSE 4 END,fr.created_at DESC""")
+        reviews=cur.fetchall()
+        if not reviews:print("none")
+        for r in reviews:
+            print(f"{r['review_id']} | rev={r['revision']} | {r['review_state']} | "
+                  f"release={r['release_candidate_id']} frozenGate={r['gate_state']} "
+                  f"currentGate={r['current_gate_state'] or '—'} "
+                  f"eligible={r['review_eligible'] or False} "
+                  f"created={r['created_at']} reviewed={r['reviewed_at']} "
+                  f"hash={r['content_hash'][:12]}")
+
         print("\nRead-only list. No live scores, thresholds, rulesets or orders were changed.")
+        raise SystemExit(0)
+
+    if cmd=="full-release":
+        cur.execute("""SELECT fr.*,g.gate_state AS current_gate_state,
+                              g.review_eligible AS current_review_eligible
+                       FROM market_os_full_release_reviews fr
+                       LEFT JOIN market_os_full_release_gates g
+                         ON g.release_candidate_id=fr.release_candidate_id
+                       WHERE fr.review_id=%s""",(ident,))
+        fr=cur.fetchone()
+        if not fr:
+            raise SystemExit("review_id not found")
+        print("FULL RELEASE REVIEW:",fr["review_id"])
+        print("Release:",fr["release_candidate_id"],"Revision:",fr["revision"])
+        print("Frozen gate:",fr["gate_state"],"Review:",fr["review_state"])
+        print("Current gate:",fr["current_gate_state"],"Eligible:",fr["current_review_eligible"])
+        print("Hash:",fr["content_hash"])
+        print("Created:",fr["created_at"],"Reviewed:",fr["reviewed_at"],"By:",fr["reviewed_by"])
+        print(json.dumps(fr["package"],ensure_ascii=False,indent=2,default=str))
+        print("\nRead-only full release review. No live switch or order change was performed.")
         raise SystemExit(0)
 
     if cmd=="release":
@@ -518,6 +567,80 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
         print("CANARY_STOPPED:",ident)
         print("Existing Canary evidence remains preserved.")
         print("Live Market OS scores/tiers/orders were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="full-release-review":
+        cur.execute("""SELECT * FROM market_os_full_release_reviews
+                       WHERE review_id=%s FOR UPDATE""",(ident,))
+        fr=cur.fetchone()
+        if not fr:
+            raise SystemExit("review_id not found")
+        if fr["review_state"]!="PENDING":
+            raise SystemExit("Only PENDING full release reviews can be decided. Current="+str(fr["review_state"]))
+
+        cur.execute("""SELECT g.gate_state,g.review_eligible,
+                              rc.status AS release_status,rc.source_ruleset_id,
+                              cd.decision_state AS canary_state,
+                              cd.review_eligible AS canary_eligible,
+                              vr.status AS ruleset_status,
+                              sd.decision_state AS succession_state,
+                              sd.review_eligible AS succession_eligible
+                       FROM market_os_full_release_gates g
+                       JOIN market_os_release_candidates rc
+                         ON rc.release_candidate_id=g.release_candidate_id
+                       JOIN market_os_canary_decisions cd
+                         ON cd.release_candidate_id=g.release_candidate_id
+                       JOIN market_os_versioned_rulesets vr
+                         ON vr.ruleset_id=rc.source_ruleset_id
+                       JOIN market_os_ruleset_succession_decisions sd
+                         ON sd.ruleset_id=rc.source_ruleset_id
+                       WHERE g.release_candidate_id=%s FOR UPDATE""",
+                    (fr["release_candidate_id"],))
+        current=cur.fetchone()
+        if not current:
+            raise SystemExit("current full release source state missing")
+
+        if arg=="approve":
+            if current["gate_state"]!="FULL_RELEASE_REVIEW_READY" or not current["review_eligible"]:
+                raise SystemExit("Release approval requires current FULL_RELEASE_REVIEW_READY.")
+            if current["release_status"]!="CANARY_ACTIVE":
+                raise SystemExit("Release approval requires CANARY_ACTIVE.")
+            if current["canary_state"]!="CANARY_PROMOTION_CANDIDATE" or not current["canary_eligible"]:
+                raise SystemExit("Release approval requires current CANARY_PROMOTION_CANDIDATE.")
+            if current["ruleset_status"]!="DRY_RUN_ACTIVE":
+                raise SystemExit("Release approval requires DRY_RUN_ACTIVE source ruleset.")
+            if current["succession_state"]!="SUCCESSION_CANDIDATE" or not current["succession_eligible"]:
+                raise SystemExit("Release approval requires current SUCCESSION_CANDIDATE.")
+            target="RELEASE_READY"
+            event="HUMAN_RELEASE_READY_APPROVED"
+            note="Human approved Full Release Review as RELEASE_READY metadata only; no live switch exists in v2.1."
+            manual="RELEASE_READY"
+        else:
+            target="REJECTED"
+            event="HUMAN_FULL_RELEASE_REJECTED"
+            note="Human rejected this Full Release Review; Canary evidence remains preserved."
+            manual="FULL_RELEASE_REJECTED"
+
+        cur.execute("""UPDATE market_os_full_release_reviews
+                       SET review_state=%s,reviewed_at=now(),reviewed_by='MANUAL_SCRIPT',
+                           review_note=%s
+                       WHERE review_id=%s""",(target,note,ident))
+        cur.execute("""UPDATE market_os_canary_decisions
+                       SET manual_review_state=%s
+                       WHERE release_candidate_id=%s""",(manual,fr["release_candidate_id"]))
+        cur.execute("""INSERT INTO market_os_full_release_review_events(
+                review_id,event_type,from_review_state,to_review_state,note,evidence)
+            VALUES(%s,%s,'PENDING',%s,%s,%s::jsonb)""",
+            (ident,event,target,note,json.dumps({
+                "release_candidate_id":fr["release_candidate_id"],
+                "content_hash":fr["content_hash"],
+                "live_switch_created":False,
+                "orders_changed":False,
+                "primary_view_switched":False,
+            },ensure_ascii=False)))
+        print(target+":",ident)
+        print(note)
+        print("Live Market OS CONTROL, orders and positions were NOT changed.")
         raise SystemExit(0)
 
     if cmd=="approve":
