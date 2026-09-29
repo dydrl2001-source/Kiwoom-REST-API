@@ -334,6 +334,23 @@
    body.append(el('div','Full Release 이력','mos-section-title'));const fhScroll=el('div',null,'mos-scroll'),fhTable=el('table',null,'mos-learn-table'),fhHead=el('tr');['시각','대상','이벤트','이전','현재','근거/메모'].forEach(v=>fhHead.append(el('th',v)));const fhThead=el('thead');fhThead.append(fhHead);const fhBody=el('tbody');
    for(const e of [...frge.map(x=>({...x,_kind:'GATE'})),...frre.map(x=>({...x,_kind:x.event_type}))].sort((a,b)=>String(b.event_time).localeCompare(String(a.event_time))).slice(0,25)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.review_id||e.release_candidate_id||'—','mos-code'),el('td',e._kind||'—'),el('td',e.from_review_state||e.from_state||'—'),el('td',e.to_review_state||e.to_state||'—'),el('td',e.note||(e.reason_codes||[]).join(' · ')||'—','mos-micro'));fhBody.append(tr);}
    if(!frge.length&&!frre.length){const tr=el('tr'),td=el('td','아직 Full Release Gate/심사 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);fhBody.append(tr);}fhTable.append(fhThead,fhBody);fhScroll.append(fhTable);body.append(fhScroll);
+   body.append(el('div','Reversible CONTROL Switch','mos-section-title'));
+   const sw=learn.control_switch||{},swc=sw.current||{},sws=sw.summary||{},swt=sw.transactions||[],swe=sw.events||[],swGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['Live switch',sw.live_switch_enabled?'ON':'OFF',sw.live_switch_enabled?'commit 명령 허용':'commit kill switch'],
+     ['CONTROL',swc.mode||'BASE',swc.active_version_label||learn.rule_version||'—'],
+     ['Prepared',sws.prepared||0,'CONTROL 미변경'],
+     ['Health window',sws.committed||0,'commit 후 자동 감시'],
+     ['Healthy',sws.healthy||0,'health window 통과'],
+     ['Auto rollback',sws.auto_rolled_back||0,'hard failure 자동 복구']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',String(b)),el('div',note,'mos-micro'));swGrid.append(card);}body.append(swGrid);
+   body.append(el('div',sw.notice||'CONTROL selector는 atomic transaction으로만 변경됩니다.','mos-note'));
+   const swScroll=el('div',null,'mos-scroll'),swTable=el('table',null,'mos-learn-table'),swHead=el('tr');['상태','Switch','Review','Ruleset','기존 CONTROL','후보 CONTROL','준비','Commit','Health deadline','완료/롤백','이유'].forEach(v=>swHead.append(el('th',v)));const swThead=el('thead');swThead.append(swHead);const swBody=el('tbody');
+   for(const t of swt.slice(0,30)){const tr=el('tr'),prev=t.previous_control||{},cand=t.candidate_control||{};const cls=t.state==='HEALTHY'?'mos-up':(t.state==='AUTO_ROLLED_BACK'||t.state==='ROLLED_BACK')?'mos-down':'';tr.append(el('td',t.state,cls),el('td',(t.switch_transaction_id||'').slice(0,18),'mos-code'),el('td',(t.source_review_id||'').slice(0,18),'mos-code'),el('td',(t.ruleset_id||'').slice(0,16),'mos-code'),el('td',prev.active_version_label||'—','mos-code'),el('td',cand.active_version_label||'—','mos-code'),el('td',stamp(t.prepared_at)),el('td',stamp(t.committed_at)),el('td',stamp(t.health_deadline)),el('td',stamp(t.rollback_at||t.completed_at)),el('td',t.rollback_reason||t.note||'—','mos-micro'));swBody.append(tr);}
+   if(!swt.length){const tr=el('tr'),td=el('td','RELEASE_READY review가 있어도 switch-prepare → switch-commit을 사람이 별도로 실행해야 CONTROL이 바뀝니다.','mos-empty');td.colSpan=11;tr.append(td);swBody.append(tr);}swTable.append(swThead,swBody);swScroll.append(swTable);body.append(swScroll);
+   body.append(el('div','Switch 이력','mos-section-title'));const sxScroll=el('div',null,'mos-scroll'),sxTable=el('table',null,'mos-learn-table'),sxHead=el('tr');['시각','Switch','이벤트','이전','현재','근거'].forEach(v=>sxHead.append(el('th',v)));const sxThead=el('thead');sxThead.append(sxHead);const sxBody=el('tbody');
+   for(const e of swe.slice(0,30)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.switch_transaction_id||'').slice(0,18),'mos-code'),el('td',e.event_type||'—'),el('td',e.from_state||'—'),el('td',e.to_state||'—'),el('td',JSON.stringify(e.evidence||{}).slice(0,180),'mos-micro'));sxBody.append(tr);}
+   if(!swe.length){const tr=el('tr'),td=el('td','아직 CONTROL switch 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);sxBody.append(tr);}sxTable.append(sxThead,sxBody);sxScroll.append(sxTable);body.append(sxScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
