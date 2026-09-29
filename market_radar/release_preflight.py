@@ -58,8 +58,9 @@ def check(base_url: str, token: str | None=None) -> dict[str,Any]:
             alloc=dashboard.get("ai_allocation") or {}
             shadow=dashboard.get("shadow_execution") or {}
             resilience=dashboard.get("ai_resilience") or {}
+            soak=dashboard.get("ai_soak") or {}
             add("ai_brokerage_contract",
-                all(k in dashboard for k in ("ai_brokerage","ai_capacity","ai_allocation","ai_risk_control","ai_resilience","shadow_execution")),
+                all(k in dashboard for k in ("ai_brokerage","ai_capacity","ai_allocation","ai_risk_control","ai_resilience","ai_soak","shadow_execution")),
                 {"broker_status":broker.get("status")})
             add("paper_only",broker.get("paper_only") is True,{"paper_only":broker.get("paper_only")})
             add("live_disabled",ready_live.get("live_enabled") is False,
@@ -70,6 +71,7 @@ def check(base_url: str, token: str | None=None) -> dict[str,Any]:
             add("allocation_present",isinstance(alloc,dict),{"status":alloc.get("status")})
             add("shadow_present",isinstance(shadow,dict),{"status":shadow.get("status")})
             add("resilience_present",isinstance(resilience,dict),{"status":resilience.get("status")})
+            add("soak_present",isinstance(soak,dict),{"stage":soak.get("stage"),"rc_candidate":soak.get("rc_candidate")})
     else:
         add("dashboard_contract","SKIPPED",{"reason":"DASHBOARD_TOKEN not supplied"})
 
