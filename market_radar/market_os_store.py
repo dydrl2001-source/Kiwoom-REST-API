@@ -583,6 +583,12 @@ def learning_payload():
             "live_switch_enabled":os.getenv("MARKET_OS_LIVE_SWITCH_ENABLED","0").strip().lower() in {"1","true","yes","on"},
             "notice":"CONTROL switch는 RELEASE_READY review에서 prepare→commit의 별도 사람 승인으로만 진행됩니다. 주문/포지션은 변경하지 않으며 health window 실패 시 이전 CONTROL로 자동 rollback합니다."
         },
+        "execution_firewall":{
+            "enabled":os.getenv("MARKET_OS_EXECUTION_INTENTS_ENABLED","0").strip().lower() in {"1","true","yes","on"},
+            "intents":[],"events":[],"runs":[],
+            "summary":{"pending":0,"approved":0,"rejected":0,"expired":0,"stale":0},
+            "notice":"HEALTHY RULESET CONTROL의 FOCUS+확정 Trigger만 짧은 human review intent로 만듭니다. 승인해도 quantity/limit price/broker order/position change는 생성하지 않습니다."
+        },
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
@@ -1146,13 +1152,56 @@ def learning_payload():
                 x=dict(r)
                 x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
                 learning["control_switch"]["events"].append(x)
+        if exists(cur,"market_os_execution_intents"):
+            cur.execute("""SELECT intent_id,policy_version,intent_kind,status,stock_code,stock_name,
+                                  snapshot_time,expires_at,control_id,control_hash,
+                                  active_version_label,switch_transaction_id,reference_price_krw,
+                                  watch_tier,base_watch_tier,trigger_state,market_stance,
+                                  catalyst_grade,risk_flags,evidence_hash,evidence,
+                                  created_at,reviewed_at,reviewed_by,review_note
+                           FROM market_os_execution_intents
+                           ORDER BY CASE status WHEN 'REVIEW_PENDING' THEN 1
+                                    WHEN 'HUMAN_APPROVED_INTENT' THEN 2
+                                    WHEN 'HUMAN_REJECTED' THEN 3 ELSE 4 END,
+                                    created_at DESC LIMIT 60""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("snapshot_time","expires_at","created_at","reviewed_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["execution_firewall"]["intents"].append(x)
+            intents=learning["execution_firewall"]["intents"]
+            sm=learning["execution_firewall"]["summary"]
+            sm["pending"]=sum(x["status"]=="REVIEW_PENDING" for x in intents)
+            sm["approved"]=sum(x["status"]=="HUMAN_APPROVED_INTENT" for x in intents)
+            sm["rejected"]=sum(x["status"]=="HUMAN_REJECTED" for x in intents)
+            sm["expired"]=sum(x["status"]=="EXPIRED" for x in intents)
+            sm["stale"]=sum(x["status"]=="STALE_CONTROL" for x in intents)
+        if exists(cur,"market_os_execution_intent_events"):
+            cur.execute("""SELECT event_id,intent_id,event_time,event_type,
+                                  from_status,to_status,reason_codes,evidence
+                           FROM market_os_execution_intent_events
+                           ORDER BY event_time DESC LIMIT 40""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["execution_firewall"]["events"].append(x)
+        if exists(cur,"market_os_execution_firewall_runs"):
+            cur.execute("""SELECT run_id,run_time,policy_version,enabled,control_id,control_hash,
+                                  switch_transaction_id,switch_state,assessed,review_eligible,
+                                  created_intents,blocked,block_reasons,note
+                           FROM market_os_execution_firewall_runs
+                           ORDER BY run_time DESC LIMIT 20""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["run_time"]=r["run_time"].isoformat() if r["run_time"] else None
+                learning["execution_firewall"]["runs"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
                                   COUNT(*) FILTER(WHERE watch_tier='PREP') AS prep
                            FROM market_os_assessment_snapshots
                            WHERE rule_version=%s AND snapshot_time>now()-interval '14 days'
-                           GROUP BY d ORDER BY d""",(RULE_VERSION,))
+                           GROUP BY d ORDER BY d""",(active_rule_version,))
             learning["daily_assessments"]=[
                 {"date":r["d"].isoformat(),"count":r["n"],"focus":r["focus"],"prep":r["prep"]}
                 for r in cur.fetchall()
