@@ -52,6 +52,11 @@ from market_os_release import (
     canary_decision,
 )
 from market_os_full_release import full_release_gate, build_review_package as build_full_release_review
+from market_os_control import (
+    base_control as runtime_base_control,
+    candidate_control as runtime_candidate_control,
+    control_hash as runtime_control_hash,
+)
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
@@ -663,6 +668,58 @@ CREATE TABLE IF NOT EXISTS market_os_full_release_review_events (
 CREATE INDEX IF NOT EXISTS idx_market_os_full_release_review_events
     ON market_os_full_release_review_events(review_id,event_time DESC);
 
+CREATE TABLE IF NOT EXISTS market_os_control_state (
+    id                      INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
+    control_id              TEXT NOT NULL,
+    mode                    TEXT NOT NULL CHECK(mode IN ('BASE','RULESET')),
+    active_version_label    TEXT NOT NULL,
+    base_rule_version       TEXT NOT NULL,
+    ruleset_id              TEXT,
+    ruleset_hash            TEXT,
+    ruleset_spec            JSONB,
+    source_review_id        TEXT,
+    switch_transaction_id   TEXT,
+    control_hash            TEXT NOT NULL,
+    activated_at            TIMESTAMPTZ,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS market_os_switch_transactions (
+    switch_transaction_id   TEXT PRIMARY KEY,
+    source_review_id        TEXT NOT NULL,
+    release_candidate_id    TEXT NOT NULL,
+    ruleset_id              TEXT NOT NULL,
+    state                   TEXT NOT NULL CHECK(state IN (
+                                'PREPARED_SWITCH','COMMITTED','HEALTHY',
+                                'ROLLED_BACK','AUTO_ROLLED_BACK','CANCELLED')),
+    expected_control_hash   TEXT NOT NULL,
+    previous_control        JSONB NOT NULL,
+    candidate_control       JSONB NOT NULL,
+    candidate_hash          TEXT NOT NULL,
+    pre_switch_watch_count  INTEGER NOT NULL DEFAULT 0,
+    prepared_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    committed_at            TIMESTAMPTZ,
+    health_deadline         TIMESTAMPTZ,
+    completed_at            TIMESTAMPTZ,
+    rollback_at             TIMESTAMPTZ,
+    rollback_reason         TEXT,
+    note                    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_switch_state
+    ON market_os_switch_transactions(state,prepared_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_switch_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    switch_transaction_id   TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type              TEXT NOT NULL,
+    from_state              TEXT,
+    to_state                TEXT NOT NULL,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_switch_events
+    ON market_os_switch_events(switch_transaction_id,event_time DESC);
+
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
     updated_at          TIMESTAMPTZ NOT NULL,
@@ -690,6 +747,15 @@ def ensure_schema():
     with db() as c,c.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(72419071)")
         cur.execute(SCHEMA)
+        base=runtime_base_control(RULE_VERSION)
+        cur.execute("""INSERT INTO market_os_control_state(
+                id,control_id,mode,active_version_label,base_rule_version,
+                ruleset_id,ruleset_hash,ruleset_spec,source_review_id,
+                switch_transaction_id,control_hash,activated_at,updated_at)
+            VALUES(1,%s,%s,%s,%s,NULL,NULL,NULL,NULL,NULL,%s,NULL,now())
+            ON CONFLICT(id) DO NOTHING""",
+            (base["control_id"],base["mode"],base["active_version_label"],
+             base["base_rule_version"],base["control_hash"]))
 
 
 def session_bucket(ts):
