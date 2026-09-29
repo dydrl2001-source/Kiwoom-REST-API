@@ -20,7 +20,8 @@ def canonical_json(value):
 
 
 def control_hash(control):
-    return hashlib.sha256(canonical_json(control).encode("utf-8")).hexdigest()
+    payload={k:v for k,v in dict(control or {}).items() if k!="control_hash"}
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def base_control(base_version):
