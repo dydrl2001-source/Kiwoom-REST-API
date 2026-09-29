@@ -351,6 +351,27 @@
    body.append(el('div','Switch 이력','mos-section-title'));const sxScroll=el('div',null,'mos-scroll'),sxTable=el('table',null,'mos-learn-table'),sxHead=el('tr');['시각','Switch','이벤트','이전','현재','근거'].forEach(v=>sxHead.append(el('th',v)));const sxThead=el('thead');sxThead.append(sxHead);const sxBody=el('tbody');
    for(const e of swe.slice(0,30)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.switch_transaction_id||'').slice(0,18),'mos-code'),el('td',e.event_type||'—'),el('td',e.from_state||'—'),el('td',e.to_state||'—'),el('td',JSON.stringify(e.evidence||{}).slice(0,180),'mos-micro'));sxBody.append(tr);}
    if(!swe.length){const tr=el('tr'),td=el('td','아직 CONTROL switch 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);sxBody.append(tr);}sxTable.append(sxThead,sxBody);sxScroll.append(sxTable);body.append(sxScroll);
+   body.append(el('div','Execution Firewall','mos-section-title'));
+   const ef=learn.execution_firewall||{},efs=ef.summary||{},efi=ef.intents||[],efe=ef.events||[],efr=ef.runs||[],efGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['Intent engine',ef.enabled?'ON':'OFF',ef.enabled?'human review 후보 생성':'기본 OFF'],
+     ['검토대기',efs.pending||0,'TTL 안에 사람 판단 필요'],
+     ['사람승인',efs.approved||0,'주문 아님'],
+     ['기각',efs.rejected||0,'사람이 거절'],
+     ['만료',efs.expired||0,'TTL 경과'],
+     ['Control stale',efs.stale||0,'CONTROL identity 변경']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',String(b)),el('div',note,'mos-micro'));efGrid.append(card);}body.append(efGrid);
+   body.append(el('div',ef.notice||'실행 후보는 사람 검토용 intent일 뿐 주문이 아닙니다.','mos-note'));
+   const intentKo=x=>({REVIEW_PENDING:'검토대기',HUMAN_APPROVED_INTENT:'사람승인',HUMAN_REJECTED:'기각',EXPIRED:'만료',STALE_CONTROL:'Control stale'})[x]||x||'—';
+   const eiScroll=el('div',null,'mos-scroll'),eiTable=el('table',null,'mos-learn-table'),eiHead=el('tr');['상태','Intent','종목','CONTROL','Tier','Trigger','Stance','Catalyst','기준가','만료','주문생성'].forEach(v=>eiHead.append(el('th',v)));const eiThead=el('thead');eiThead.append(eiHead);const eiBody=el('tbody');
+   for(const x of efi.slice(0,40)){const tr=el('tr'),ex=(x.evidence||{}).execution||{};const cls=x.status==='HUMAN_APPROVED_INTENT'?'mos-up':x.status==='HUMAN_REJECTED'?'mos-down':'';tr.append(el('td',intentKo(x.status),cls),el('td',(x.intent_id||'').slice(0,18),'mos-code'),el('td',(x.stock_name||x.stock_code||'—')+' · '+(x.stock_code||'')),el('td',x.active_version_label||'—','mos-code'),el('td',(x.base_watch_tier||'—')+'→'+(x.watch_tier||'—')),el('td',x.trigger_state||'—'),el('td',x.market_stance||'—'),el('td',x.catalyst_grade||'—'),el('td',x.reference_price_krw==null?'—':fmt(x.reference_price_krw,0)),el('td',stamp(x.expires_at)),el('td',ex.broker_order_created?'YES':'NO',ex.broker_order_created?'mos-down':''));eiBody.append(tr);}
+   if(!efi.length){const tr=el('tr'),td=el('td','HEALTHY RULESET CONTROL + FOCUS + 확정 Trigger 조건을 충족해도 intent 기능이 ON일 때만 생성됩니다.','mos-empty');td.colSpan=11;tr.append(td);eiBody.append(tr);}eiTable.append(eiThead,eiBody);eiScroll.append(eiTable);body.append(eiScroll);
+   body.append(el('div','Firewall 최근 실행','mos-section-title'));const erScroll=el('div',null,'mos-scroll'),erTable=el('table',null,'mos-learn-table'),erHead=el('tr');['시각','ON','Switch','상태','평가','Eligible','생성','Blocked','차단 근거'].forEach(v=>erHead.append(el('th',v)));const erThead=el('thead');erThead.append(erHead);const erBody=el('tbody');
+   for(const r of efr.slice(0,15)){const tr=el('tr');tr.append(el('td',stamp(r.run_time)),el('td',r.enabled?'ON':'OFF'),el('td',(r.switch_transaction_id||'—').slice(0,18),'mos-code'),el('td',r.switch_state||'—'),el('td',r.assessed??0),el('td',r.review_eligible??0),el('td',r.created_intents??0),el('td',r.blocked??0),el('td',Object.entries(r.block_reasons||{}).map(([k,v])=>k+':'+v).join(' · ')||'—','mos-micro'));erBody.append(tr);}
+   if(!efr.length){const tr=el('tr'),td=el('td','Execution Firewall 실행 이력이 없습니다.','mos-empty');td.colSpan=9;tr.append(td);erBody.append(tr);}erTable.append(erThead,erBody);erScroll.append(erTable);body.append(erScroll);
+   body.append(el('div','Intent 이력','mos-section-title'));const eeScroll=el('div',null,'mos-scroll'),eeTable=el('table',null,'mos-learn-table'),eeHead=el('tr');['시각','Intent','이벤트','이전','현재','근거'].forEach(v=>eeHead.append(el('th',v)));const eeThead=el('thead');eeThead.append(eeHead);const eeBody=el('tbody');
+   for(const e of efe.slice(0,25)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.intent_id||'').slice(0,18),'mos-code'),el('td',e.event_type||'—'),el('td',e.from_status||'—'),el('td',e.to_status||'—'),el('td',(e.reason_codes||[]).join(' · ')||'—','mos-micro'));eeBody.append(tr);}
+   if(!efe.length){const tr=el('tr'),td=el('td','아직 intent 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);eeBody.append(tr);}eeTable.append(eeThead,eeBody);eeScroll.append(eeTable);body.append(eeScroll);
    body.append(el('div','Validation Gate','mos-section-title'));
    const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
    for(const [a,b,note] of [
