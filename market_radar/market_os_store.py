@@ -568,6 +568,12 @@ def learning_payload():
                        "observations":0,"changed":0},
             "notice":"Release Candidate는 deterministic stock-day Canary preview에서만 candidate tier를 계산합니다. 기본 Market OS watch_tier와 주문/포지션은 CONTROL 그대로입니다."
         },
+        "full_release_review":{
+            "gates":[],"gate_events":[],"reviews":[],"review_events":[],
+            "summary":{"more_data":0,"review_ready":0,"pending":0,
+                       "release_ready":0,"rejected":0,"stale_canary":0,"superseded":0},
+            "notice":"Canary promotion 후보를 전체 Dry Run, Canary 대표성, CONTROL rollback identity와 다시 대조한 immutable Full Release Review입니다. RELEASE_READY도 배포가 아닙니다."
+        },
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
@@ -1030,6 +1036,77 @@ def learning_payload():
                 x["assessment_time"]=r["assessment_time"].isoformat() if r["assessment_time"] else None
                 x["trade_day"]=r["trade_day"].isoformat() if hasattr(r["trade_day"],"isoformat") else str(r["trade_day"])
                 learning["release_canary"]["recent_observations"].append(x)
+        if exists(cur,"market_os_full_release_gates"):
+            cur.execute("""SELECT g.release_candidate_id,g.gate_state,g.review_eligible,
+                                  g.reason_codes,g.evidence,g.state_since,g.updated_at,
+                                  rc.release_version_label,rc.status,rc.source_ruleset_id
+                           FROM market_os_full_release_gates g
+                           LEFT JOIN market_os_release_candidates rc
+                             ON rc.release_candidate_id=g.release_candidate_id
+                           ORDER BY CASE g.gate_state WHEN 'FULL_RELEASE_REVIEW_READY' THEN 1 ELSE 2 END,
+                                    g.updated_at DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("state_since","updated_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["full_release_review"]["gates"].append(x)
+            learning["full_release_review"]["summary"]["more_data"]=sum(
+                x["gate_state"]=="FULL_RELEASE_MORE_DATA"
+                for x in learning["full_release_review"]["gates"]
+            )
+            learning["full_release_review"]["summary"]["review_ready"]=sum(
+                x["gate_state"]=="FULL_RELEASE_REVIEW_READY"
+                for x in learning["full_release_review"]["gates"]
+            )
+        if exists(cur,"market_os_full_release_gate_events"):
+            cur.execute("""SELECT event_id,release_candidate_id,event_time,from_state,to_state,
+                                  review_eligible,reason_codes,evidence
+                           FROM market_os_full_release_gate_events
+                           ORDER BY event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["full_release_review"]["gate_events"].append(x)
+        if exists(cur,"market_os_full_release_reviews"):
+            cur.execute("""SELECT fr.review_id,fr.release_candidate_id,fr.revision,
+                                  fr.source_gate_event_id,fr.content_hash,fr.gate_state,
+                                  fr.review_state,fr.created_at,fr.reviewed_at,
+                                  fr.reviewed_by,fr.review_note,fr.package,
+                                  rc.release_version_label
+                           FROM market_os_full_release_reviews fr
+                           LEFT JOIN market_os_release_candidates rc
+                             ON rc.release_candidate_id=fr.release_candidate_id
+                           ORDER BY CASE fr.review_state
+                               WHEN 'PENDING' THEN 1 WHEN 'RELEASE_READY' THEN 2
+                               WHEN 'REJECTED' THEN 3 WHEN 'STALE_CANARY' THEN 4
+                               WHEN 'SUPERSEDED' THEN 5 ELSE 6 END,
+                               fr.created_at DESC,fr.revision DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("created_at","reviewed_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["full_release_review"]["reviews"].append(x)
+            for state,key in (
+                ("PENDING","pending"),("RELEASE_READY","release_ready"),
+                ("REJECTED","rejected"),("STALE_CANARY","stale_canary"),
+                ("SUPERSEDED","superseded")
+            ):
+                learning["full_release_review"]["summary"][key]=sum(
+                    x["review_state"]==state
+                    for x in learning["full_release_review"]["reviews"]
+                )
+        if exists(cur,"market_os_full_release_review_events"):
+            cur.execute("""SELECT e.event_id,e.review_id,e.event_time,e.event_type,
+                                  e.from_review_state,e.to_review_state,e.note,e.evidence,
+                                  fr.release_candidate_id,fr.revision
+                           FROM market_os_full_release_review_events e
+                           LEFT JOIN market_os_full_release_reviews fr
+                             ON fr.review_id=e.review_id
+                           ORDER BY e.event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["full_release_review"]["review_events"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
