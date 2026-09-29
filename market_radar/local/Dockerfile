@@ -13,7 +13,7 @@ RUN python -m pip check \
         evidence_identity.py news_feed.py paper_trade_engine.py paper_feedback_engine.py ai_brokerage_worker.py orderbook_collector.py shadow_execution_engine.py capital_allocation_worker.py risk_control_worker.py resilience_audit_worker.py soak_monitor_worker.py risk_recovery_cli.py \
         ai_brokerage/models.py ai_brokerage/strategy_registry.py ai_brokerage/desks.py \
         ai_brokerage/decision_engine.py ai_brokerage/adapter.py ai_brokerage/analytics.py \
-        ai_brokerage/execution_model.py ai_brokerage/capacity.py ai_brokerage/allocation.py ai_brokerage/risk_control.py ai_brokerage/resilience.py ai_brokerage/soak.py \
+        ai_brokerage/execution_model.py ai_brokerage/capacity.py ai_brokerage/allocation.py ai_brokerage/risk_control.py ai_brokerage/resilience.py ai_brokerage/soak.py ai_brokerage/release.py \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_sector_board.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_mobile_ui.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_paper_trade.py' -v \
