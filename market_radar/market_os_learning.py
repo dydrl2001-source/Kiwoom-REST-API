@@ -2073,6 +2073,7 @@ def refresh_canary_summaries():
             return {"written":0,"rollbacks":0}
         cur.execute("""SELECT release_candidate_id,status
                        FROM market_os_release_candidates
+                       WHERE canary_started_at IS NOT NULL
                        ORDER BY created_at""")
         for rc in cur.fetchall():
             cur.execute("""SELECT o.assessment_time,o.stock_code,o.trade_day,
