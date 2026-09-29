@@ -801,6 +801,30 @@ def active_control_snapshot(cur):
     return out
 
 
+def write_control_state(cur,control,activated_at=None):
+    x=dict(control or {})
+    cur.execute("""INSERT INTO market_os_control_state(
+            id,control_id,mode,active_version_label,base_rule_version,
+            ruleset_id,ruleset_hash,ruleset_spec,source_review_id,
+            switch_transaction_id,control_hash,activated_at,updated_at)
+        VALUES(1,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,now())
+        ON CONFLICT(id) DO UPDATE SET
+            control_id=excluded.control_id,mode=excluded.mode,
+            active_version_label=excluded.active_version_label,
+            base_rule_version=excluded.base_rule_version,
+            ruleset_id=excluded.ruleset_id,ruleset_hash=excluded.ruleset_hash,
+            ruleset_spec=excluded.ruleset_spec,source_review_id=excluded.source_review_id,
+            switch_transaction_id=excluded.switch_transaction_id,
+            control_hash=excluded.control_hash,activated_at=excluded.activated_at,
+            updated_at=now()""",
+        (x.get("control_id"),x.get("mode"),x.get("active_version_label"),
+         x.get("base_rule_version"),x.get("ruleset_id"),x.get("ruleset_hash"),
+         json.dumps(x.get("ruleset_spec"),ensure_ascii=False) if x.get("ruleset_spec") is not None else None,
+         x.get("source_review_id"),x.get("switch_transaction_id"),
+         x.get("control_hash") or runtime_control_hash(x),
+         activated_at))
+
+
 def safe_num(v):
     try:
         x=float(v)
@@ -2583,6 +2607,81 @@ def refresh_full_release_reviews():
         }
 
 
+def refresh_control_switch_health(control_meta=None):
+    """Monitor the post-commit health window and auto-rollback hard failures."""
+    control_meta=dict(control_meta or {})
+    with db() as c,c.cursor() as cur:
+        if not table_exists(cur,"market_os_switch_transactions"):
+            return {"state":"NO_SWITCH","auto_rollback":0,"healthy":0}
+        cur.execute("""SELECT * FROM market_os_switch_transactions
+                       WHERE state='COMMITTED'
+                       ORDER BY committed_at DESC LIMIT 1 FOR UPDATE""")
+        tx=cur.fetchone()
+        if not tx:
+            return {"state":"NO_ACTIVE_HEALTH_WINDOW","auto_rollback":0,"healthy":0}
+
+        current=active_control_snapshot(cur)
+        reasons=[]
+        if current.get("switch_transaction_id")!=tx["switch_transaction_id"]:
+            reasons.append("CONTROL_TRANSACTION_MISMATCH")
+        if current.get("control_hash")!=tx["candidate_hash"]:
+            reasons.append("CONTROL_HASH_MISMATCH")
+        if runtime_control_hash(current)!=current.get("control_hash"):
+            reasons.append("CONTROL_IDENTITY_CORRUPT")
+        if (control_meta.get("requested_switch_transaction_id")==tx["switch_transaction_id"]
+                and control_meta.get("apply_status")=="FALLBACK_BASE"):
+            reasons.append("RUNTIME_FALLBACK_BASE")
+
+        cur.execute("""SELECT fr.review_state,g.gate_state,g.review_eligible
+                       FROM market_os_full_release_reviews fr
+                       LEFT JOIN market_os_full_release_gates g
+                         ON g.release_candidate_id=fr.release_candidate_id
+                       WHERE fr.review_id=%s""",(tx["source_review_id"],))
+        review=cur.fetchone()
+        if (not review or review["review_state"]!="RELEASE_READY"
+                or review["gate_state"]!="FULL_RELEASE_REVIEW_READY"
+                or not review["review_eligible"]):
+            reasons.append("RELEASE_REVIEW_REVOKED")
+
+        if reasons:
+            previous=dict(tx["previous_control"] or {})
+            write_control_state(
+                cur,previous,
+                parse_dt(previous.get("activated_at")) if previous.get("activated_at") else None
+            )
+            cur.execute("""UPDATE market_os_switch_transactions
+                           SET state='AUTO_ROLLED_BACK',rollback_at=now(),completed_at=now(),
+                               rollback_reason=%s
+                           WHERE switch_transaction_id=%s AND state='COMMITTED'""",
+                        (",".join(reasons),tx["switch_transaction_id"]))
+            cur.execute("""INSERT INTO market_os_switch_events(
+                    switch_transaction_id,event_type,from_state,to_state,evidence)
+                VALUES(%s,'AUTO_HEALTH_ROLLBACK','COMMITTED','AUTO_ROLLED_BACK',%s::jsonb)""",
+                (tx["switch_transaction_id"],json.dumps({
+                    "reason_codes":reasons,
+                    "restored_control_id":previous.get("control_id"),
+                    "runtime_control_meta":control_meta,
+                },ensure_ascii=False,default=str)))
+            return {"state":"AUTO_ROLLED_BACK","auto_rollback":1,"healthy":0,"reason_codes":reasons}
+
+        if tx["health_deadline"] and datetime.now(timezone.utc)>=tx["health_deadline"]:
+            cur.execute("""UPDATE market_os_switch_transactions
+                           SET state='HEALTHY',completed_at=now(),
+                               note='Post-switch health window completed'
+                           WHERE switch_transaction_id=%s AND state='COMMITTED'""",
+                        (tx["switch_transaction_id"],))
+            if cur.rowcount:
+                cur.execute("""INSERT INTO market_os_switch_events(
+                        switch_transaction_id,event_type,from_state,to_state,evidence)
+                    VALUES(%s,'HEALTH_WINDOW_PASSED','COMMITTED','HEALTHY',%s::jsonb)""",
+                    (tx["switch_transaction_id"],json.dumps({
+                        "control_id":current.get("control_id"),
+                        "control_hash":current.get("control_hash"),
+                    },ensure_ascii=False)))
+                return {"state":"HEALTHY","auto_rollback":0,"healthy":1}
+        return {"state":"COMMITTED","auto_rollback":0,"healthy":0}
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         rule_version=active_control_version(cur)
@@ -2601,7 +2700,8 @@ def update_status(status,note,last_snapshot=None,last_outcome=False):
 
 
 def cycle():
-    captured,snap=capture_assessments()
+    captured,snap,control_meta=capture_assessments()
+    switch_health=refresh_control_switch_health(control_meta)
     shadow_obs=capture_shadow_observations()
     outcomes=resolve_outcomes()
     segments=refresh_segments()
@@ -2624,11 +2724,13 @@ def cycle():
         f"canary_stale={canary_obs['staled']} canary_rollbacks={canary_stats['rollbacks']} "
         f"full_release_transitions={full_release['gate_transitions']} "
         f"full_release_reviews={full_release['reviews_generated']} "
-        f"full_release_stale={full_release['reviews_staled']}",
+        f"full_release_stale={full_release['reviews_staled']} "
+        f"switch_health={switch_health['state']} "
+        f"switch_auto_rollback={switch_health['auto_rollback']}",
         last_snapshot=snap,last_outcome=bool(outcomes)
     )
     return (captured,outcomes,segments,registry,shadow_obs,shadow_summaries,dossiers,
-            ruleset_obs,ruleset_summaries,canary_obs,canary_stats,full_release)
+            ruleset_obs,ruleset_summaries,canary_obs,canary_stats,full_release,switch_health)
 
 
 if __name__=="__main__":
@@ -2636,12 +2738,13 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s,r,so,ss,ad,ro,rs,co,cs,fr=cycle()
+            a,o,s,r,so,ss,ad,ro,rs,co,cs,fr,sh=cycle()
             if (a or o or so or r.get("transitions") or ad.get("generated")
                     or ad.get("staled") or ro.get("inserted") or ro.get("staled")
                     or co.get("inserted") or co.get("staled") or cs.get("rollbacks")
                     or fr.get("gate_transitions") or fr.get("reviews_generated")
-                    or fr.get("reviews_staled")):
+                    or fr.get("reviews_staled") or sh.get("auto_rollback")
+                    or sh.get("healthy")):
                 print(
                     f"learning cycle assessments={a} shadow_obs={so} outcomes={o} segments={s} "
                     f"registry={r['active']} candidates={r['promotion_candidates']} "
@@ -2652,7 +2755,8 @@ if __name__=="__main__":
                     f"canary_rollbacks={cs['rollbacks']} "
                     f"full_release_transitions={fr['gate_transitions']} "
                     f"full_release_reviews={fr['reviews_generated']} "
-                    f"full_release_stale={fr['reviews_staled']}",
+                    f"full_release_stale={fr['reviews_staled']} "
+                    f"switch_health={sh['state']} auto_rb={sh['auto_rollback']}",
                     flush=True
                 )
         except Exception as exc:
