@@ -541,3 +541,130 @@ This branch intentionally contains no live-order execution path.
 > Readiness evidence can justify a human review of live deployment, but it cannot authorize live deployment by itself.
 
 The operating control layer therefore remains separate from broker execution.
+
+
+## Resilience / Chaos / Incident Recovery
+
+Phase 9 adds a non-destructive resilience layer above Portfolio Control.
+
+### Raw vs Effective Kill Switch
+
+The dashboard distinguishes:
+
+- Raw Kill Switch: what current metrics say now
+- Effective Kill Switch: what the system is actually allowed to do after recovery-latch policy
+
+A recovered sensor does not immediately reopen Shadow entries.
+
+Example:
+
+Raw RUN → Effective HALT
+
+means the original trigger has cleared but the current incident is still recovery-latched.
+
+### Recovery latch
+
+Default policy:
+
+- healthy observations required: 3
+- explicit acknowledgement required: yes
+
+A HALT incident receives a unique incident ID.
+
+Recovery requires:
+
+1. raw state returns to RUN
+2. RUN remains healthy for the configured consecutive observations
+3. the current incident ID is acknowledged
+4. the Risk Control worker verifies both conditions
+
+DEGRADED observations reset the healthy streak.
+
+There is intentionally no force-run command.
+
+### Acknowledgement CLI
+
+The CLI can:
+
+- show current incident/recovery status
+- acknowledge the exact current incident ID
+
+It cannot:
+
+- force RUN
+- clear a latch
+- skip the healthy streak
+- alter a Shadow position
+- call a broker-order endpoint
+
+See:
+
+- market_radar/INCIDENT_RECOVERY_RUNBOOK.md
+- market_radar/risk_recovery_cli.py
+
+### Synthetic Chaos Suite
+
+The Resilience Audit worker runs synthetic inputs through the deterministic safety logic.
+
+Current scenarios include:
+
+- daily loss breach
+- Kiwoom stale
+- regime engine error
+- portfolio risk breach
+- implementation-shortfall spike
+- execution rejection spike
+- portfolio correlation spike
+- order-book stale
+- low BOOK coverage
+- correlation evidence gap
+- manual halt
+
+The suite does not stop services or corrupt data. It changes only in-memory synthetic metrics.
+
+### Incident replay
+
+Persisted Risk Control snapshots are replayed to audit HALT → RUN transitions.
+
+An unsafe recovery transition is flagged if RUN occurs without:
+
+- raw RUN
+- the required healthy streak
+- required acknowledgement
+
+### Persistent incident history
+
+Tables:
+
+- ai_risk_control_snapshots
+- ai_risk_control_status
+- ai_incident_events
+- ai_resilience_audit_runs
+- ai_resilience_status
+
+This preserves:
+
+- incident ID
+- hard trigger
+- first/last seen time
+- acknowledgement time
+- recovery streak
+- recovery state
+- close time
+- synthetic/replay audit result
+
+### Fail-safe behavior
+
+With RISK_CONTROL_REQUIRED=1:
+
+- missing Risk Control status blocks new Shadow entry
+- stale Risk Control status blocks new Shadow entry
+- effective HALT blocks new Shadow entry
+
+Existing Shadow positions are never silently mutated; Rebalance only proposes actions.
+
+### Principle
+
+> Recovery is a controlled state transition, not the disappearance of an error message.
+
+The system must be able to explain why it stopped, why it stayed stopped, who acknowledged the incident, and what evidence allowed it to resume.
