@@ -57,12 +57,23 @@ from market_os_control import (
     candidate_control as runtime_candidate_control,
     control_hash as runtime_control_hash,
 )
+from market_os_execution import (
+    POLICY_VERSION as EXECUTION_POLICY_VERSION,
+    evaluate as execution_firewall_evaluate,
+    intent_id as execution_intent_id,
+    snapshot as execution_intent_snapshot,
+)
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(30,int(os.getenv("MARKET_OS_LEARNING_POLL_SECONDS","60")))
 SHADOW_LAB_ENABLED=os.getenv("MARKET_OS_SHADOW_LAB_ENABLED","1").strip().lower() in {"1","true","yes","on"}
 RULESET_DRY_RUN_ENABLED=os.getenv("MARKET_OS_RULESET_DRY_RUN_ENABLED","1").strip().lower() in {"1","true","yes","on"}
 CANARY_ENABLED=os.getenv("MARKET_OS_CANARY_ENABLED","1").strip().lower() in {"1","true","yes","on"}
+EXECUTION_INTENTS_ENABLED=os.getenv("MARKET_OS_EXECUTION_INTENTS_ENABLED","0").strip().lower() in {"1","true","yes","on"}
+EXECUTION_INTENT_TTL=max(30,min(300,int(os.getenv("MARKET_OS_INTENT_TTL_SECONDS","120"))))
+EXECUTION_INTENT_COOLDOWN_MIN=max(1,min(240,int(os.getenv("MARKET_OS_INTENT_COOLDOWN_MINUTES","30"))))
+EXECUTION_INTENT_DAILY_LIMIT=max(1,min(50,int(os.getenv("MARKET_OS_INTENT_DAILY_LIMIT","12"))))
+EXECUTION_INTENT_MAX_PENDING=max(1,min(10,int(os.getenv("MARKET_OS_INTENT_MAX_PENDING","3"))))
 KST=ZoneInfo("Asia/Seoul")
 
 SCHEMA=r"""
@@ -719,6 +730,72 @@ CREATE TABLE IF NOT EXISTS market_os_switch_events (
 );
 CREATE INDEX IF NOT EXISTS idx_market_os_switch_events
     ON market_os_switch_events(switch_transaction_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_execution_intents (
+    intent_id               TEXT PRIMARY KEY,
+    policy_version          TEXT NOT NULL,
+    intent_kind             TEXT NOT NULL DEFAULT 'LONG_ENTRY_REVIEW',
+    status                  TEXT NOT NULL CHECK(status IN (
+                                'REVIEW_PENDING','HUMAN_APPROVED_INTENT',
+                                'HUMAN_REJECTED','EXPIRED','STALE_CONTROL')),
+    stock_code              TEXT NOT NULL,
+    stock_name              TEXT,
+    snapshot_time           TIMESTAMPTZ NOT NULL,
+    expires_at              TIMESTAMPTZ NOT NULL,
+    control_id              TEXT NOT NULL,
+    control_hash            TEXT NOT NULL,
+    active_version_label    TEXT NOT NULL,
+    switch_transaction_id   TEXT NOT NULL,
+    reference_price_krw     NUMERIC,
+    watch_tier              TEXT NOT NULL,
+    base_watch_tier         TEXT,
+    trigger_state           TEXT,
+    market_stance           TEXT,
+    catalyst_grade          TEXT,
+    risk_flags              JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence_hash           TEXT NOT NULL,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at             TIMESTAMPTZ,
+    reviewed_by             TEXT,
+    review_note             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_execution_intent_status
+    ON market_os_execution_intents(status,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_os_execution_intent_stock
+    ON market_os_execution_intents(stock_code,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_execution_intent_events (
+    event_id                BIGSERIAL PRIMARY KEY,
+    intent_id               TEXT NOT NULL,
+    event_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type              TEXT NOT NULL,
+    from_status             TEXT,
+    to_status               TEXT NOT NULL,
+    reason_codes            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_execution_intent_events
+    ON market_os_execution_intent_events(intent_id,event_time DESC);
+
+CREATE TABLE IF NOT EXISTS market_os_execution_firewall_runs (
+    run_id                  BIGSERIAL PRIMARY KEY,
+    run_time                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    policy_version          TEXT NOT NULL,
+    enabled                 BOOLEAN NOT NULL,
+    control_id              TEXT,
+    control_hash            TEXT,
+    switch_transaction_id   TEXT,
+    switch_state            TEXT,
+    assessed                INTEGER NOT NULL DEFAULT 0,
+    review_eligible         INTEGER NOT NULL DEFAULT 0,
+    created_intents         INTEGER NOT NULL DEFAULT 0,
+    blocked                 INTEGER NOT NULL DEFAULT 0,
+    block_reasons           JSONB NOT NULL DEFAULT '{}'::jsonb,
+    note                    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_market_os_execution_firewall_runs
+    ON market_os_execution_firewall_runs(run_time DESC);
 
 CREATE TABLE IF NOT EXISTS market_os_learning_status (
     id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1),
@@ -2682,6 +2759,158 @@ def refresh_control_switch_health(control_meta=None):
         return {"state":"COMMITTED","auto_rollback":0,"healthy":0}
 
 
+def refresh_execution_intents():
+    """Create short-lived human review intents from a HEALTHY active CONTROL only."""
+    now=datetime.now(timezone.utc)
+    payload=desk_payload(include_tracking=False)
+    control=payload.get("market_os_control") or {}
+    sample=parse_dt(payload.get("sample_time"))
+    age=(now-sample).total_seconds() if sample else None
+    candidates=list(payload.get("market_os_watchlist") or [])
+    rows={r.get("code"):r for r in (payload.get("rows") or []) if r.get("code")}
+    created=0;expired=0;staled=0
+    block_counts=defaultdict(int)
+
+    with db() as c,c.cursor() as cur:
+        # Pending review has a hard TTL and is invalidated by any CONTROL identity change.
+        cur.execute("""SELECT intent_id FROM market_os_execution_intents
+                       WHERE status='REVIEW_PENDING' AND expires_at<=%s
+                       FOR UPDATE""",(now,))
+        for r in cur.fetchall():
+            cur.execute("""UPDATE market_os_execution_intents
+                           SET status='EXPIRED',review_note='TTL expired'
+                           WHERE intent_id=%s AND status='REVIEW_PENDING'""",(r["intent_id"],))
+            if cur.rowcount:
+                cur.execute("""INSERT INTO market_os_execution_intent_events(
+                        intent_id,event_type,from_status,to_status,reason_codes,evidence)
+                    VALUES(%s,'AUTO_EXPIRED','REVIEW_PENDING','EXPIRED',
+                           '["INTENT_EXPIRED"]'::jsonb,'{}'::jsonb)""",(r["intent_id"],))
+                expired+=1
+
+        cur.execute("""SELECT intent_id,control_hash,switch_transaction_id
+                       FROM market_os_execution_intents
+                       WHERE status='REVIEW_PENDING' FOR UPDATE""")
+        for r in cur.fetchall():
+            if (r["control_hash"]==control.get("control_hash")
+                    and r["switch_transaction_id"]==control.get("switch_transaction_id")):
+                continue
+            cur.execute("""UPDATE market_os_execution_intents
+                           SET status='STALE_CONTROL',review_note='CONTROL identity changed'
+                           WHERE intent_id=%s AND status='REVIEW_PENDING'""",(r["intent_id"],))
+            if cur.rowcount:
+                cur.execute("""INSERT INTO market_os_execution_intent_events(
+                        intent_id,event_type,from_status,to_status,reason_codes,evidence)
+                    VALUES(%s,'AUTO_STALE_CONTROL','REVIEW_PENDING','STALE_CONTROL',
+                           '["CONTROL_IDENTITY_CHANGED"]'::jsonb,%s::jsonb)""",
+                    (r["intent_id"],json.dumps({
+                        "current_control_hash":control.get("control_hash"),
+                        "current_switch_transaction_id":control.get("switch_transaction_id"),
+                    },ensure_ascii=False)))
+                staled+=1
+
+        switch_state=None
+        switch_id=control.get("switch_transaction_id")
+        if switch_id and table_exists(cur,"market_os_switch_transactions"):
+            cur.execute("""SELECT state FROM market_os_switch_transactions
+                           WHERE switch_transaction_id=%s""",(switch_id,))
+            sr=cur.fetchone()
+            switch_state=sr["state"] if sr else None
+
+        if not EXECUTION_INTENTS_ENABLED:
+            cur.execute("""INSERT INTO market_os_execution_firewall_runs(
+                    policy_version,enabled,control_id,control_hash,switch_transaction_id,
+                    switch_state,assessed,review_eligible,created_intents,blocked,
+                    block_reasons,note)
+                VALUES(%s,FALSE,%s,%s,%s,%s,0,0,0,0,'{}'::jsonb,
+                       'Execution intents disabled; broker execution unavailable')""",
+                (EXECUTION_POLICY_VERSION,control.get("control_id"),control.get("control_hash"),
+                 switch_id,switch_state))
+            return {"created":0,"expired":expired,"staled":staled,"eligible":0,"blocked":0}
+
+        cur.execute("""SELECT COUNT(*) AS n FROM market_os_execution_intents
+                       WHERE status='REVIEW_PENDING'""")
+        pending=int(cur.fetchone()["n"] or 0)
+        cur.execute("""SELECT COUNT(*) AS n FROM market_os_execution_intents
+                       WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date=
+                             (%s AT TIME ZONE 'Asia/Seoul')::date""",(now,))
+        daily=int(cur.fetchone()["n"] or 0)
+
+        eligible=0
+        for candidate in candidates:
+            decision=execution_firewall_evaluate(candidate,control,switch_state,age)
+            if not decision["eligible"]:
+                for reason in decision["reason_codes"]:
+                    block_counts[reason]+=1
+                continue
+            eligible+=1
+            if pending>=EXECUTION_INTENT_MAX_PENDING:
+                block_counts["PENDING_LIMIT"]+=1
+                continue
+            if daily>=EXECUTION_INTENT_DAILY_LIMIT:
+                block_counts["DAILY_LIMIT"]+=1
+                continue
+            code=candidate.get("code")
+            cur.execute("""SELECT 1 FROM market_os_execution_intents
+                           WHERE stock_code=%s
+                             AND created_at>%s-(%s || ' minutes')::interval
+                           LIMIT 1""",(code,now,EXECUTION_INTENT_COOLDOWN_MIN))
+            if cur.fetchone():
+                block_counts["STOCK_COOLDOWN"]+=1
+                continue
+
+            expires_at=sample+timedelta(seconds=EXECUTION_INTENT_TTL)
+            if expires_at<=now:
+                block_counts["TTL_ALREADY_EXPIRED"]+=1
+                continue
+            iid=execution_intent_id(control.get("control_hash"),code,sample.isoformat())
+            reference=safe_num((rows.get(code) or {}).get("price_krw"))
+            frozen=execution_intent_snapshot(
+                candidate,control,reference,sample,expires_at
+            )
+            cur.execute("""INSERT INTO market_os_execution_intents(
+                    intent_id,policy_version,intent_kind,status,stock_code,stock_name,
+                    snapshot_time,expires_at,control_id,control_hash,active_version_label,
+                    switch_transaction_id,reference_price_krw,watch_tier,base_watch_tier,
+                    trigger_state,market_stance,catalyst_grade,risk_flags,evidence_hash,evidence)
+                VALUES(%s,%s,'LONG_ENTRY_REVIEW','REVIEW_PENDING',%s,%s,%s,%s,%s,%s,%s,%s,
+                       %s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s::jsonb)
+                ON CONFLICT(intent_id) DO NOTHING""",
+                (iid,EXECUTION_POLICY_VERSION,code,candidate.get("name"),
+                 sample,expires_at,control.get("control_id"),control.get("control_hash"),
+                 control.get("active_version_label"),switch_id,reference,
+                 candidate.get("watch_tier"),candidate.get("base_watch_tier"),
+                 candidate.get("trigger_state"),candidate.get("market_stance"),
+                 candidate.get("catalyst_grade"),
+                 json.dumps(candidate.get("risk_flags") or [],ensure_ascii=False),
+                 frozen["evidence_hash"],
+                 json.dumps(frozen["evidence"],ensure_ascii=False,default=str)))
+            if cur.rowcount:
+                cur.execute("""INSERT INTO market_os_execution_intent_events(
+                        intent_id,event_type,from_status,to_status,reason_codes,evidence)
+                    VALUES(%s,'INTENT_CREATED',NULL,'REVIEW_PENDING','[]'::jsonb,%s::jsonb)""",
+                    (iid,json.dumps({
+                        "control_hash":control.get("control_hash"),
+                        "switch_transaction_id":switch_id,
+                        "broker_order_created":False,
+                    },ensure_ascii=False)))
+                created+=1;pending+=1;daily+=1
+
+        blocked=sum(block_counts.values())
+        cur.execute("""INSERT INTO market_os_execution_firewall_runs(
+                policy_version,enabled,control_id,control_hash,switch_transaction_id,
+                switch_state,assessed,review_eligible,created_intents,blocked,
+                block_reasons,note)
+            VALUES(%s,TRUE,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,
+                   'Human review intents only; no broker adapter or quantity generation')""",
+            (EXECUTION_POLICY_VERSION,control.get("control_id"),control.get("control_hash"),
+             switch_id,switch_state,len(candidates),eligible,created,blocked,
+             json.dumps(dict(block_counts),ensure_ascii=False)))
+        return {
+            "created":created,"expired":expired,"staled":staled,
+            "eligible":eligible,"blocked":blocked,
+        }
+
+
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
         rule_version=active_control_version(cur)
@@ -2713,6 +2942,7 @@ def cycle():
     canary_obs=capture_canary_observations()
     canary_stats=refresh_canary_summaries()
     full_release=refresh_full_release_reviews()
+    execution=refresh_execution_intents()
     update_status(
         "OK",
         f"captured={captured} shadow_obs={shadow_obs} outcomes={outcomes} segments={segments} "
@@ -2726,11 +2956,14 @@ def cycle():
         f"full_release_reviews={full_release['reviews_generated']} "
         f"full_release_stale={full_release['reviews_staled']} "
         f"switch_health={switch_health['state']} "
-        f"switch_auto_rollback={switch_health['auto_rollback']}",
+        f"switch_auto_rollback={switch_health['auto_rollback']} "
+        f"intents_created={execution['created']} intent_expired={execution['expired']} "
+        f"intent_stale={execution['staled']}",
         last_snapshot=snap,last_outcome=bool(outcomes)
     )
     return (captured,outcomes,segments,registry,shadow_obs,shadow_summaries,dossiers,
-            ruleset_obs,ruleset_summaries,canary_obs,canary_stats,full_release,switch_health)
+            ruleset_obs,ruleset_summaries,canary_obs,canary_stats,full_release,switch_health,
+            execution)
 
 
 if __name__=="__main__":
@@ -2738,13 +2971,14 @@ if __name__=="__main__":
     print(f"Market OS learning started · poll={POLL}s · rule={RULE_VERSION}",flush=True)
     while True:
         try:
-            a,o,s,r,so,ss,ad,ro,rs,co,cs,fr,sh=cycle()
+            a,o,s,r,so,ss,ad,ro,rs,co,cs,fr,sh,ex=cycle()
             if (a or o or so or r.get("transitions") or ad.get("generated")
                     or ad.get("staled") or ro.get("inserted") or ro.get("staled")
                     or co.get("inserted") or co.get("staled") or cs.get("rollbacks")
                     or fr.get("gate_transitions") or fr.get("reviews_generated")
                     or fr.get("reviews_staled") or sh.get("auto_rollback")
-                    or sh.get("healthy")):
+                    or sh.get("healthy") or ex.get("created") or ex.get("expired")
+                    or ex.get("staled")):
                 print(
                     f"learning cycle assessments={a} shadow_obs={so} outcomes={o} segments={s} "
                     f"registry={r['active']} candidates={r['promotion_candidates']} "
@@ -2756,7 +2990,8 @@ if __name__=="__main__":
                     f"full_release_transitions={fr['gate_transitions']} "
                     f"full_release_reviews={fr['reviews_generated']} "
                     f"full_release_stale={fr['reviews_staled']} "
-                    f"switch_health={sh['state']} auto_rb={sh['auto_rollback']}",
+                    f"switch_health={sh['state']} auto_rb={sh['auto_rollback']} "
+                    f"intents={ex['created']} expired={ex['expired']} stale={ex['staled']}",
                     flush=True
                 )
         except Exception as exc:
