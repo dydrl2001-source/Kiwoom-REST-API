@@ -1072,6 +1072,237 @@ def build_ai_allocation(cur, rows, ai_brokerage, ai_capacity):
     return out
 
 
+def _truthy_env(name,default="0"):
+    return os.getenv(name,default).strip().lower() in ("1","true","yes","on")
+
+
+def _age_from_iso(value):
+    if not value:return None
+    try:
+        dt=datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:dt=dt.replace(tzinfo=timezone.utc)
+        return max(0.0,(datetime.now(timezone.utc)-dt.astimezone(timezone.utc)).total_seconds())
+    except Exception:
+        return None
+
+
+def build_ai_risk_control(
+    cur, rows, ai_brokerage, ai_capacity, ai_allocation, shadow_execution,
+    kiwoom, orderbook, regime, chartfeed
+):
+    empty={
+        "status":"WAITING","kill_switch":{"state":"DEGRADED","allow_new_shadow_entries":True,
+        "hard_triggers":[],"warnings":[{"code":"RISK_CONTROL_NOT_READY"}]},
+        "live_readiness":{"stage":"RESEARCH_ONLY","live_enabled":False,"gates":[],"failed_gates":[]},
+        "rebalance":{"status":"WAITING","actions":[],"replacements":[],"summary":{}},
+        "metrics":{},"note":"운영 통제 데이터 축적 대기"
+    }
+    if not AIRiskControlPolicy or not ai_evaluate_kill_switch or not ai_evaluate_live_readiness or not ai_rebalance_portfolio:
+        return empty
+
+    policy=AIRiskControlPolicy(
+        max_daily_loss_pct=max(.1,min(20.0,float(os.getenv("RISK_MAX_DAILY_LOSS_PCT","2.0")))),
+        hard_risk_utilization_pct=max(100.0,min(200.0,float(os.getenv("RISK_HARD_UTILIZATION_PCT","105")))),
+        warn_risk_utilization_pct=max(50.0,min(100.0,float(os.getenv("RISK_WARN_UTILIZATION_PCT","90")))),
+        max_critical_feed_age_sec=max(30,min(900,int(os.getenv("RISK_CRITICAL_FEED_MAX_AGE_SECONDS","180")))),
+        max_orderbook_age_sec=max(15,min(600,int(os.getenv("RISK_ORDERBOOK_MAX_AGE_SECONDS","90")))),
+        max_median_round_trip_is_bps=max(5.0,min(300.0,float(os.getenv("RISK_MAX_MEDIAN_IS_BPS","60")))),
+        warn_median_round_trip_is_bps=max(5.0,min(200.0,float(os.getenv("RISK_WARN_MEDIAN_IS_BPS","40")))),
+        max_execution_reject_pct=max(5.0,min(100.0,float(os.getenv("RISK_MAX_EXECUTION_REJECT_PCT","50")))),
+        warn_execution_reject_pct=max(1.0,min(100.0,float(os.getenv("RISK_WARN_EXECUTION_REJECT_PCT","30")))),
+        min_book_coverage_pct=max(0.0,min(100.0,float(os.getenv("RISK_MIN_BOOK_COVERAGE_PCT","50")))),
+        max_portfolio_corr=max(.5,min(.999,float(os.getenv("RISK_MAX_PORTFOLIO_CORR","0.92")))),
+        warn_portfolio_corr=max(.3,min(.99,float(os.getenv("RISK_WARN_PORTFOLIO_CORR","0.80")))),
+        max_unknown_corr_pairs=max(0,min(50,int(os.getenv("RISK_MAX_UNKNOWN_CORR_PAIRS","3")))),
+        min_live_paper_closed=max(20,int(os.getenv("LIVE_READINESS_MIN_PAPER_CLOSED","100"))),
+        min_live_shadow_closed=max(20,int(os.getenv("LIVE_READINESS_MIN_SHADOW_CLOSED","60"))),
+        min_live_book_closed=max(10,int(os.getenv("LIVE_READINESS_MIN_BOOK_CLOSED","40"))),
+        min_live_operating_days=max(3,int(os.getenv("LIVE_READINESS_MIN_OPERATING_DAYS","10"))),
+        min_live_book_coverage_pct=max(50.0,min(100.0,float(os.getenv("LIVE_READINESS_MIN_BOOK_COVERAGE_PCT","80")))),
+        min_live_supported_strategies=max(1,int(os.getenv("LIVE_READINESS_MIN_SUPPORTED_STRATEGIES","1"))),
+    )
+    equity=max(1_000_000,float(os.getenv("SHADOW_ACCOUNT_EQUITY_KRW","100000000")))
+
+    paper_closed=0
+    if table_exists(cur,"radar_paper_trades"):
+        cur.execute("SELECT COUNT(*) FROM radar_paper_trades WHERE status='CLOSED' AND return_pct IS NOT NULL")
+        paper_closed=int(cur.fetchone()[0] or 0)
+
+    shadow_closed=book_closed=operating_days=0
+    daily_shadow_return=None
+    execution_reject_pct=None
+    if table_exists(cur,"ai_shadow_trades"):
+        cur.execute("""SELECT COUNT(*) FILTER(WHERE status='CLOSED'),
+                              COUNT(*) FILTER(WHERE status='CLOSED' AND entry_model_mode='BOOK_V2'),
+                              COUNT(DISTINCT (entry_at AT TIME ZONE 'Asia/Seoul')::date)
+                       FROM ai_shadow_trades""")
+        r=cur.fetchone()
+        shadow_closed=int(r[0] or 0);book_closed=int(r[1] or 0);operating_days=int(r[2] or 0)
+        cur.execute("""SELECT SUM(net_pnl_krw)
+                       FROM ai_shadow_trades
+                       WHERE status='CLOSED'
+                         AND (exit_at AT TIME ZONE 'Asia/Seoul')::date
+                             =(now() AT TIME ZONE 'Asia/Seoul')::date""")
+        pnl=cur.fetchone()[0]
+        if pnl is not None:
+            daily_shadow_return=float(pnl)/equity*100.0
+        cur.execute("""SELECT COUNT(*) AS n,
+                              COUNT(*) FILTER(WHERE status='REJECTED') AS rejected
+                       FROM (
+                         SELECT status FROM ai_shadow_trades
+                         ORDER BY created_at DESC LIMIT 50
+                       ) x""")
+        rr=cur.fetchone()
+        if rr and int(rr[0] or 0)>0:
+            execution_reject_pct=int(rr[1] or 0)/int(rr[0])*100.0
+
+    allocation_days=0
+    if table_exists(cur,"ai_allocation_snapshots"):
+        cur.execute("""SELECT COUNT(DISTINCT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date)
+                       FROM ai_allocation_snapshots""")
+        allocation_days=int(cur.fetchone()[0] or 0)
+
+    allocations=(ai_allocation or {}).get("allocations") or []
+    max_corr=max([float(x.get("max_positive_corr") or 0) for x in allocations] or [0.0])
+    unknown_corr=sum(int(x.get("unknown_correlation_peers") or 0) for x in allocations)
+    risk_util=((ai_allocation or {}).get("summary") or {}).get("risk_utilization_pct")
+    shadow_summary=(shadow_execution or {}).get("summary") or {}
+    book_cov=shadow_summary.get("book_coverage_pct")
+    median_is=shadow_summary.get("median_round_trip_is_bps")
+
+    critical_feeds={
+        "kiwoom":{
+            "status":(kiwoom or {}).get("status"),
+            "age_sec":_age_from_iso((kiwoom or {}).get("last_success")),
+        },
+        "regime":{
+            "status":(regime or {}).get("status"),
+            "age_sec":_age_from_iso((regime or {}).get("last_market_data_at") or (regime or {}).get("updated_at")),
+        },
+        "chart":{
+            "status":(chartfeed or {}).get("status"),
+            "age_sec":_age_from_iso((chartfeed or {}).get("last_success")),
+        },
+    }
+    orderbook_feed={
+        "status":(orderbook or {}).get("status"),
+        "age_sec":_age_from_iso((orderbook or {}).get("updated_at")),
+    }
+    metrics={
+        "daily_shadow_return_pct":daily_shadow_return,
+        "risk_utilization_pct":risk_util,
+        "median_round_trip_is_bps":median_is,
+        "execution_reject_pct":execution_reject_pct,
+        "book_coverage_pct":book_cov,
+        "max_portfolio_corr":max_corr,
+        "unknown_corr_pairs":unknown_corr,
+        "critical_feeds":critical_feeds,
+        "orderbook_feed":orderbook_feed,
+        "manual_halt":_truthy_env("RISK_MANUAL_HALT","0"),
+    }
+    kill=ai_evaluate_kill_switch(metrics,policy)
+
+    final_rows=(ai_capacity or {}).get("final_lifecycle") or []
+    supported=sum(1 for x in final_rows if x.get("action")=="PROMOTE_CANDIDATE_EXECUTION_ADJUSTED")
+    critical_feeds_ok=all(
+        str((v or {}).get("status") or "") not in ("ERROR","FAILED","DOWN","NOT_CONFIGURED","WAITING_FOR_CREDENTIALS")
+        and ((v or {}).get("age_sec") is None or float((v or {}).get("age_sec"))<=policy.max_critical_feed_age_sec)
+        for v in critical_feeds.values()
+    )
+    orderbook_ok=(
+        str(orderbook_feed.get("status") or "")=="OK"
+        and (orderbook_feed.get("age_sec") is None or float(orderbook_feed.get("age_sec"))<=policy.max_orderbook_age_sec)
+    )
+    readiness_metrics={
+        "broker_mode":(kiwoom or {}).get("mode"),
+        "paper_closed":paper_closed,
+        "shadow_closed":shadow_closed,
+        "book_closed":book_closed,
+        "operating_days":operating_days,
+        "book_coverage_pct":book_cov,
+        "supported_strategies":supported,
+        "costs_configured":_truthy_env("LIVE_READINESS_COSTS_CONFIRMED","0"),
+        "orderbook_ok":orderbook_ok,
+        "critical_feeds_ok":critical_feeds_ok,
+        "allocation_snapshots":allocation_days,
+        "live_order_path_present":False,
+    }
+    readiness=ai_evaluate_live_readiness(readiness_metrics,kill,policy)
+
+    row_map={str(x.get("code") or ""):x for x in (rows or [])}
+    packet_map={str(x.get("stock_code") or ""):x for x in ((ai_brokerage or {}).get("candidates") or [])}
+    final_map={x.get("strategy_id"):x for x in final_rows}
+    open_positions=[]
+    if table_exists(cur,"ai_shadow_trades"):
+        cur.execute("""SELECT stock_code,stock_name,market_theme,strategy_id,strategy_family,
+                              risk_at_entry_krw,stop_pct,entry_fill_price_krw,entry_at
+                       FROM ai_shadow_trades WHERE status='OPEN'""")
+        raw_open=cur.fetchall()
+        codes=[str(x[0]) for x in raw_open if x and x[0]]
+        latest_prices={}
+        if codes and table_exists(cur,"radar_flow_quotes"):
+            cur.execute("""SELECT DISTINCT ON(stock_code) stock_code,payload
+                           FROM radar_flow_quotes
+                           WHERE stock_code=ANY(%s)
+                           ORDER BY stock_code,batch_time DESC""",(codes,))
+            for code,payload in cur.fetchall():
+                try:
+                    px=float((payload or {}).get("price_krw"))
+                    if px>0:latest_prices[str(code)]=px
+                except Exception:
+                    pass
+        series=_allocation_price_series(cur,codes+[str(x.get("stock_code")) for x in allocations if x.get("stock_code")])
+        corr=ai_correlation_matrix(series,min_obs=max(10,min(60,int(os.getenv("ALLOCATION_CORRELATION_MIN_OBS","20"))))) if ai_correlation_matrix else {}
+        for code,name,theme,sid,family,risk,stop,entry_px,entry_at in raw_open:
+            code=str(code)
+            packet=packet_map.get(code) or {}
+            final=final_map.get(sid) or {}
+            px=latest_prices.get(code) or (row_map.get(code) or {}).get("price_krw")
+            try:px=float(px) if px is not None else None
+            except Exception:px=None
+            try:entry=float(entry_px) if entry_px is not None else None
+            except Exception:entry=None
+            current_ret=(px/entry-1.0)*100.0 if px and entry and entry>0 else None
+            peers=[]
+            for other in codes:
+                if other==code:continue
+                v=(corr.get(code) or {}).get(other)
+                if v is not None:peers.append(float(v))
+            max_pos_corr=max([v for v in peers if v>0] or [0.0])
+            conviction=float(packet.get("conviction") or 50)
+            action=final.get("action")
+            scale=1.0 if action=="PROMOTE_CANDIDATE_EXECUTION_ADJUSTED" else .35 if action=="EXECUTION_GATE_PENDING" else .2
+            if action in ("EXECUTION_BLOCKED","DEMOTE_OR_REWORK"):scale=0.0
+            open_positions.append({
+                "stock_code":code,"stock_name":name,"market_theme":theme,
+                "strategy_id":sid,"strategy_family":family,
+                "risk_krw":float(risk or 0),"stop_pct":float(stop or 0) if stop is not None else None,
+                "current_return_pct":current_ret,"ai_state":packet.get("state") or "UNKNOWN",
+                "final_action":action,"priority_score":(conviction/100.0)*scale,
+                "max_positive_corr":max_pos_corr,"entry_at":iso(entry_at),
+            })
+    rebalance=ai_rebalance_portfolio(open_positions,allocations,kill,{
+        "watch_reduce_fraction":max(.1,min(.9,float(os.getenv("REBALANCE_WATCH_REDUCE_FRACTION","0.5")))),
+        "high_corr_reduce_fraction":max(.1,min(.9,float(os.getenv("REBALANCE_HIGH_CORR_REDUCE_FRACTION","0.25")))),
+        "high_corr_threshold":max(.5,min(.99,float(os.getenv("REBALANCE_HIGH_CORR_THRESHOLD","0.90")))),
+        "replacement_priority_gap":max(.05,min(.8,float(os.getenv("REBALANCE_REPLACEMENT_PRIORITY_GAP","0.15")))),
+    })
+
+    return {
+        "status":"OK",
+        "kill_switch":kill,
+        "live_readiness":readiness,
+        "rebalance":rebalance,
+        "metrics":{
+            **metrics,
+            **readiness_metrics,
+            "critical_feeds_ok":critical_feeds_ok,
+            "orderbook_ok":orderbook_ok,
+        },
+        "note":"운영 통제·rebalance·live-readiness 모두 shadow/read-only 제안; live execution은 비활성",
+    }
+
+
 def build_shadow_execution_lab(cur):
     empty={
         "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
@@ -2022,9 +2253,13 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             ai_strategy_performance=build_ai_strategy_performance(cur)
             ai_capacity=build_ai_capacity_analysis(cur,ai_strategy_performance)
             ai_allocation=build_ai_allocation(cur,rows,ai_brokerage,ai_capacity)
-            ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             shadow_execution=build_shadow_execution_lab(cur)
             shadow_execution["orderbook_feed"]=orderbook
+            ai_risk_control=build_ai_risk_control(
+                cur,rows,ai_brokerage,ai_capacity,ai_allocation,shadow_execution,
+                kiwoom,orderbook,regime,chartfeed
+            )
+            ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -2277,6 +2512,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "ai_strategy_performance": ai_strategy_performance,
         "ai_capacity": ai_capacity,
         "ai_allocation": ai_allocation,
+        "ai_risk_control": ai_risk_control,
         "ai_daily_review": ai_daily_review,
         "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
