@@ -14,6 +14,19 @@ services:
       timeout: 5s
       retries: 20
 
+  schema-migrate:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: "no"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/schema_migrate.py apply
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   radar-api:
     build:
       context: ../..
