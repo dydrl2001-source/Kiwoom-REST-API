@@ -69,7 +69,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://market:market@127.0.0.1:5432/market_radar
       DASHBOARD_TOKEN: test
-      MARKET_RADAR_SCHEMA_VERSION: 2026.09.29.1
+      MARKET_RADAR_SCHEMA_VERSION: 2026.09.29.2
       RISK_CONTROL_REQUIRED: "1"
       RISK_CONTROL_STATUS_MAX_AGE_SECONDS: "120"
       KIWOOM_MODE: demo
