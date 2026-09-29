@@ -544,6 +544,69 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                 print(f"{r['event_time']} {r['release_candidate_id']} {r['event_type']} "
                       f"{r['from_status'] or '—'}->{r['to_status']}")
 
+        print('\n[FULL RELEASE REVIEW GATE v2.1]')
+        if not exists('market_os_full_release_gates'):
+            print('full release gate tables missing')
+        else:
+            cur.execute("""SELECT g.release_candidate_id,g.gate_state,g.review_eligible,
+                                  g.reason_codes,g.evidence,g.updated_at,
+                                  rc.release_version_label,rc.status
+                           FROM market_os_full_release_gates g
+                           LEFT JOIN market_os_release_candidates rc
+                             ON rc.release_candidate_id=g.release_candidate_id
+                           ORDER BY CASE g.gate_state
+                               WHEN 'FULL_RELEASE_REVIEW_READY' THEN 1 ELSE 2 END,
+                               g.updated_at DESC""")
+            rows=cur.fetchall()
+            if not rows:
+                print('full release gate 없음')
+            for r in rows:
+                ev=r['evidence'] or {};al=ev.get('effect_alignment') or {}
+                bias=ev.get('sample_bias') or {};rb=(ev.get('rollback') or {}).get('rollback_target') or {}
+                r30=(al.get('30m') or {}).get('avg_effect_ratio')
+                rcl=(al.get('close') or {}).get('avg_effect_ratio')
+                print(f"{r['gate_state']} eligible={r['review_eligible']} "
+                      f"{r['release_candidate_id']} version={r['release_version_label'] or '—'} "
+                      f"releaseStatus={r['status'] or '—'} "
+                      f"effect30={r30 if r30 is not None else '—'} "
+                      f"effectClose={rcl if rcl is not None else '—'} "
+                      f"allocation={bias.get('actual_pct','—')}/{bias.get('expected_pct','—')}% "
+                      f"stanceTVD={bias.get('stance_tvd','—')} tierTVD={bias.get('tier_tvd','—')} "
+                      f"rollback={rb.get('target_id','—')} "
+                      f"reasons={','.join(r['reason_codes'] or [])}")
+        if exists('market_os_full_release_reviews'):
+            print('\n[FULL RELEASE REVIEWS]')
+            cur.execute("""SELECT fr.review_id,fr.release_candidate_id,fr.revision,
+                                  fr.gate_state,fr.review_state,fr.created_at,fr.reviewed_at,
+                                  fr.content_hash,g.gate_state AS current_gate,
+                                  g.review_eligible AS current_eligible
+                           FROM market_os_full_release_reviews fr
+                           LEFT JOIN market_os_full_release_gates g
+                             ON g.release_candidate_id=fr.release_candidate_id
+                           ORDER BY CASE fr.review_state
+                               WHEN 'PENDING' THEN 1 WHEN 'RELEASE_READY' THEN 2
+                               WHEN 'REJECTED' THEN 3 WHEN 'STALE_CANARY' THEN 4 ELSE 5 END,
+                               fr.created_at DESC""")
+            rows=cur.fetchall()
+            if not rows:
+                print('full release review 없음')
+            for r in rows[:30]:
+                print(f"{r['review_state']} {r['review_id']} rev={r['revision']} "
+                      f"release={r['release_candidate_id']} frozen={r['gate_state']} "
+                      f"current={r['current_gate'] or '—'} eligible={r['current_eligible'] or False} "
+                      f"created={r['created_at']} reviewed={r['reviewed_at']} "
+                      f"hash={r['content_hash'][:12]}")
+        if exists('market_os_full_release_review_events'):
+            print('\n[FULL RELEASE REVIEW EVENTS]')
+            cur.execute("""SELECT event_time,review_id,event_type,
+                                  from_review_state,to_review_state,note
+                           FROM market_os_full_release_review_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            for r in cur.fetchall():
+                print(f"{r['event_time']} {r['review_id']} {r['event_type']} "
+                      f"{r['from_review_state'] or '—'}->{r['to_review_state']} "
+                      f"{r['note'] or ''}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -581,5 +644,6 @@ print('Adoption Review Dossier v1.7: one immutable dossier revision is generated
 print('Versioned Ruleset v1.8: APPROVED_DRY_RUN still requires explicit dry-run-start; activation creates a new prospective boundary and source Decision invalidation => STALE_SOURCE.')
 print('Ruleset Succession Gate v1.9: 30m+close, time splits, stance replication, impact concentration, frozen Shadow-effect retention and D+1 degradation are required before SUCCESSION_CANDIDATE; no live promotion.')
 print('Release Candidate / Canary v2.0: SUCCESSION_CANDIDATE requires human release-create and canary-start; deterministic <=20% stock-day preview never replaces primary CONTROL tier, and comparable harm auto-stops as CANARY_ROLLBACK_REQUIRED.')
+print('Full Release Review v2.1: CANARY_PROMOTION_CANDIDATE is rechecked against full Dry Run effect alignment, Canary sample bias and CONTROL rollback identity; RELEASE_READY is human metadata only and no live switch exists.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
