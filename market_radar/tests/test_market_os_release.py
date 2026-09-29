@@ -89,12 +89,25 @@ class ReleaseCanaryPureTests(unittest.TestCase):
         self.assertEqual(d['state'],'CANARY_HEALTHY')
         self.assertFalse(d['review_eligible'])
 
-    def test_canary_promotion_requires_strong_30m_and_close(self):
+    def test_canary_promotion_requires_strong_30m_close_and_recent_confirmation(self):
+        good30=self.cell(changes=8,n=32,days=5,stocks=7)
+        goodclose=self.cell('close',changes=8,n=32,days=5,stocks=7,cavg=.1,kavg=.4)
+        slices=[
+            {'scope_type':'WINDOW','scope_value':'RECENT',
+             **self.cell('30m','REVIEW',changes=4,n=16,days=2,stocks=5)},
+            {'scope_type':'WINDOW','scope_value':'RECENT',
+             **self.cell('close','REVIEW',changes=4,n=16,days=2,stocks=5,cavg=.1,kavg=.35)},
+        ]
+        d=release.canary_decision([good30,goodclose],slices)
+        self.assertEqual(d['state'],'CANARY_PROMOTION_CANDIDATE')
+        self.assertTrue(d['review_eligible'])
+
+    def test_canary_stays_healthy_without_recent_confirmation(self):
         good30=self.cell(changes=8,n=32,days=5,stocks=7)
         goodclose=self.cell('close',changes=8,n=32,days=5,stocks=7,cavg=.1,kavg=.4)
         d=release.canary_decision([good30,goodclose],[])
-        self.assertEqual(d['state'],'CANARY_PROMOTION_CANDIDATE')
-        self.assertTrue(d['review_eligible'])
+        self.assertEqual(d['state'],'CANARY_HEALTHY')
+        self.assertFalse(d['review_eligible'])
 
 
 if __name__=='__main__':
