@@ -1352,3 +1352,258 @@ Immutable human review:
 Review audit log:
 - `market_os_full_release_review_events`
 
+## Reversible CONTROL Switch v2.2 — Atomic Selector, Health Window, Rollback
+
+`RELEASE_READY`도 자동으로 CONTROL을 변경하지 않는다. v2.2에서 처음으로 primary Market OS의 CONTROL identity를 바꿀 수 있지만, **prepare와 commit을 분리한 DB transaction**으로만 수행한다.
+
+주문 실행·포지션·비중 로직은 이 switch와 분리하며 v2.2가 변경하지 않는다.
+
+### Runtime CONTROL selector
+
+기존 `market-os-v1` base engine 코드는 그대로 유지한다.
+
+singleton `market_os_control_state`가 현재 CONTROL을 가리킨다.
+
+모드:
+
+- `BASE`: 기존 `market-os-v1`
+- `RULESET`: base engine + 승인된 immutable ruleset overlay 1개
+
+RULESET mode를 runtime에서 인정하려면:
+
+1. CONTROL 자체의 canonical hash가 유효해야 한다.
+2. `switch_transaction_id`가 존재해야 한다.
+3. 대응 switch transaction state가 `COMMITTED` 또는 `HEALTHY`이어야 한다.
+4. transaction의 `candidate_hash`와 current CONTROL hash가 일치해야 한다.
+
+하나라도 실패하면 primary dashboard는 candidate를 적용하지 않고 BASE로 fallback한다. health-window worker는 이 상태를 hard failure로 보고 rollback 근거로 사용한다.
+
+### Base engine과 overlay
+
+v2.2 switch는 v2.1에서 검증한 범위를 넘지 않는다.
+
+- Radar / Theme / Setup / Catalyst / Trigger / Risk base 계산 유지
+- 승인된 tier overlay 1개만 primary CONTROL에 적용
+- `BLOCKED` 해제 금지
+- universe expansion 없음
+- multiple overlay 없음
+- 주문 실행 변화 없음
+
+따라서 switch 후 `market_os_version`은 candidate version label로 바뀌지만 base engine은 immutable `market-os-v1`을 유지한다.
+
+### Prepare
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh switch-prepare <review_id> --confirm
+```
+
+Prepare는 CONTROL을 변경하지 않는다.
+
+필수조건:
+
+- Full Release review = `RELEASE_READY`
+- current Full Release Gate = `FULL_RELEASE_REVIEW_READY`
+- Release Candidate = `CANARY_ACTIVE`
+- Canary Decision = `CANARY_PROMOTION_CANDIDATE`
+- Canary `review_eligible=true`
+- Versioned Ruleset = `DRY_RUN_ACTIVE`
+- Succession = `SUCCESSION_CANDIDATE`
+- Succession `review_eligible=true`
+- current CONTROL mode = `BASE`
+- current CONTROL hash 유효
+- 기존 `PREPARED_SWITCH` 또는 `COMMITTED` transaction 없음
+
+Prepare 시 동결:
+
+- expected current CONTROL hash
+- previous CONTROL snapshot
+- candidate CONTROL snapshot
+- candidate hash
+- source review / release / ruleset
+- 현재 학습 snapshot의 watch count
+- prepared timestamp
+
+취소 후 같은 review를 다시 prepare할 수 있으나 새로운 attempt 번호로 별도 transaction ID를 만든다.
+
+### Commit kill switch
+
+실제 CONTROL 변경은 기본적으로 비활성화되어 있다.
+
+```text
+MARKET_OS_LIVE_SWITCH_ENABLED=0
+```
+
+`switch-commit`을 실행하려면 명시적으로 1로 변경해야 한다.
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh switch-commit <switch_transaction_id> --confirm
+```
+
+Commit 직전에도:
+
+- prepared transaction 상태
+- prepare TTL
+- current CONTROL hash = expected CONTROL hash
+- current CONTROL identity hash 유효
+- Full Release / Canary / Ruleset / Succession 현재 자격
+- stored candidate hash 유효
+- source ruleset ID/hash 일치
+
+를 다시 검사한다.
+
+하나라도 어긋나면 commit하지 않는다.
+
+### Prepare TTL
+
+기본:
+
+```text
+MARKET_OS_SWITCH_PREPARE_TTL_SECONDS=1800
+```
+
+허용 범위는 코드에서 300–3600초로 제한한다.
+
+오래된 prepare를 그대로 commit할 수 없으며 fresh prepare를 다시 해야 한다.
+
+### Atomic commit
+
+Commit은 같은 PostgreSQL transaction 안에서:
+
+1. CONTROL row lock
+2. expected hash 검증
+3. candidate CONTROL write
+4. switch state `PREPARED_SWITCH → COMMITTED`
+5. health deadline 기록
+6. audit event 기록
+
+을 수행한다.
+
+중간 일부만 적용된 상태를 정상 상태로 인정하지 않는다.
+
+### Health window
+
+기본:
+
+```text
+MARKET_OS_SWITCH_HEALTH_SECONDS=900
+```
+
+코드상 300–3600초 범위다.
+
+`COMMITTED` 상태에서 learning worker가 매 cycle 확인한다.
+
+Hard failure:
+
+- current CONTROL transaction ID 불일치
+- current CONTROL hash ≠ candidate hash
+- CONTROL canonical identity 손상
+- runtime selector가 candidate 적용에 실패하여 `FALLBACK_BASE`
+- source Full Release review가 더 이상 `RELEASE_READY`
+- current Full Release Gate가 더 이상 `FULL_RELEASE_REVIEW_READY`
+- Full Release gate `review_eligible=false`
+
+Hard failure 발생 시 같은 DB transaction에서 previous CONTROL snapshot을 복원하고:
+
+```text
+COMMITTED
+→ AUTO_ROLLED_BACK
+```
+
+으로 전환한다.
+
+Health deadline까지 hard failure가 없으면:
+
+```text
+COMMITTED
+→ HEALTHY
+```
+
+가 된다.
+
+`HEALTHY`는 health window를 통과했다는 의미이며 주문/포지션 승인을 뜻하지 않는다.
+
+### Manual rollback
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh switch-rollback <switch_transaction_id> --confirm
+```
+
+`COMMITTED` 또는 `HEALTHY`에서 허용한다.
+
+안전조건:
+
+- 현재 CONTROL의 `switch_transaction_id`가 해당 transaction과 일치
+- 현재 CONTROL hash가 transaction candidate hash와 일치
+
+해야 한다.
+
+조건이 맞으면 동결된 `previous_control` snapshot을 원자적으로 복원하고:
+
+```text
+→ ROLLED_BACK
+```
+
+으로 기록한다.
+
+### Prepared switch cancel
+
+아직 commit하지 않은 transaction은:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh switch-cancel <switch_transaction_id> --confirm
+```
+
+로 `CANCELLED` 처리할 수 있다.
+
+CONTROL은 한 번도 변경되지 않는다.
+
+### Assessment version transition
+
+switch commit 후 새 Market OS assessment snapshot은 candidate의 `active_version_label`을 `rule_version`으로 저장한다.
+
+따라서:
+
+- switch 전 학습 자료 = 기존 CONTROL version
+- switch 후 학습 자료 = 새 CONTROL version
+- rollback 후 새 자료 = 복원된 CONTROL version
+
+으로 구분된다.
+
+학습 segment / Promotion Registry는 현재 active CONTROL version을 기준으로 갱신한다.
+
+### 저장 구조
+
+현재 CONTROL:
+- `market_os_control_state`
+
+switch transaction:
+- `market_os_switch_transactions`
+
+switch audit events:
+- `market_os_switch_events`
+
+Transaction state:
+
+- `PREPARED_SWITCH`
+- `COMMITTED`
+- `HEALTHY`
+- `ROLLED_BACK`
+- `AUTO_ROLLED_BACK`
+- `CANCELLED`
+
+### v2.2의 명확한 한계
+
+v2.2는 primary Market OS의 **관찰 tier CONTROL**을 교체할 수 있다.
+
+하지만 다음은 하지 않는다.
+
+- 증권사 주문 API 호출 안 함
+- 자동 매수·매도 안 함
+- 포지션 생성/청산 안 함
+- 주문 수량/비중 변경 안 함
+- account risk budget 변경 안 함
+- multiple ruleset chain switch 안 함
+- RULESET CONTROL에서 다른 RULESET CONTROL로 직접 upgrade 안 함
+
+v2.2 최초 switch는 `BASE → 검증된 RULESET`만 허용한다. 다음 ruleset으로의 연속 upgrade는 별도 release cycle에서 설계한다.
+
