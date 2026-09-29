@@ -993,6 +993,7 @@ def build_ai_allocation(cur, rows, ai_brokerage, ai_capacity):
         max_positions=max(1,min(50,int(os.getenv("SHADOW_PORTFOLIO_MAX_OPEN","5")))),
         risk_chunk_pct=max(.01,min(.5,float(os.getenv("ALLOCATION_RISK_CHUNK_PCT","0.05")))),
         correlation_penalty_weight=max(0.0,min(1.0,float(os.getenv("ALLOCATION_CORRELATION_PENALTY","0.65")))),
+        unknown_correlation_penalty=max(0.0,min(.5,float(os.getenv("ALLOCATION_UNKNOWN_CORRELATION_PENALTY","0.15")))),
         high_correlation_threshold=max(.3,min(.99,float(os.getenv("ALLOCATION_HIGH_CORRELATION","0.80")))),
         pending_evidence_scale=max(.05,min(1.0,float(os.getenv("ALLOCATION_PENDING_SCALE","0.35")))),
         sample_building_scale=max(.01,min(.5,float(os.getenv("ALLOCATION_SAMPLE_SCALE","0.20")))),
