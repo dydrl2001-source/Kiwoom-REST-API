@@ -880,6 +880,185 @@ def build_ai_capacity_analysis(cur, strategy_performance):
         return {**empty,"status":"ERROR","note":f"Capacity 분석 실패: {type(e).__name__}"}
 
 
+def _allocation_volatility_bps(cur,code):
+    if not table_exists(cur,"market_minute_bars"):
+        return None
+    cur.execute("""SELECT close_price FROM market_minute_bars
+                   WHERE stock_code=%s AND interval_min=3
+                   ORDER BY bar_time DESC LIMIT 21""",(code,))
+    xs=[]
+    for r in reversed(cur.fetchall()):
+        try:
+            v=float(r[0])
+            if v>0:xs.append(v)
+        except Exception:
+            pass
+    if len(xs)<6:return None
+    vals=[abs(b/a-1.0)*10000 for a,b in zip(xs[:-1],xs[1:]) if a>0]
+    if not vals:return None
+    vals.sort()
+    n=len(vals)
+    return vals[n//2] if n%2 else (vals[n//2-1]+vals[n//2])/2
+
+
+def _allocation_price_series(cur,codes):
+    if not codes or not table_exists(cur,"market_minute_bars"):
+        return {}
+    cur.execute("""SELECT stock_code,bar_time,close_price
+                   FROM market_minute_bars
+                   WHERE stock_code=ANY(%s) AND interval_min=3
+                     AND bar_time>now()-interval '6 hours'
+                   ORDER BY stock_code,bar_time""",(list(codes),))
+    out={}
+    for code,bar_time,close in cur.fetchall():
+        try:
+            px=float(close)
+            if px>0:out.setdefault(str(code),{})[bar_time.isoformat()]=px
+        except Exception:
+            continue
+    return out
+
+
+def _allocation_book_capacity(cur,code):
+    if not ai_estimate_book_capacity or not AIBookPolicy or not table_exists(cur,"market_orderbook_snapshots"):
+        return None
+    max_age=max(5,min(120,int(os.getenv("SHADOW_BOOK_MAX_AGE_SECONDS","30"))))
+    cur.execute("""SELECT snapshot_time,best_ask_krw,best_bid_krw,spread_bps,asks,bids,quality_flags
+                   FROM market_orderbook_snapshots
+                   WHERE stock_code=%s
+                   ORDER BY snapshot_time DESC LIMIT 1""",(code,))
+    r=cur.fetchone()
+    if not r:return None
+    snap=r[0]
+    if snap and (datetime.now(timezone.utc)-snap.astimezone(timezone.utc)).total_seconds()>max_age:
+        return None
+    flags=list(r[6] or [])
+    if "CROSSED_BOOK" in flags:return None
+    book={
+        "best_ask_krw":float(r[1]) if r[1] is not None else None,
+        "best_bid_krw":float(r[2]) if r[2] is not None else None,
+        "spread_bps":float(r[3]) if r[3] is not None else None,
+        "asks":list(r[4] or []),"bids":list(r[5] or []),
+    }
+    policy=AIBookPolicy(
+        displayed_liquidity_haircut=max(.05,min(1.0,float(os.getenv("SHADOW_BOOK_LIQUIDITY_HAIRCUT","0.5")))),
+        max_levels=10,
+        max_spread_bps=max(5.0,min(500.0,float(os.getenv("SHADOW_BOOK_MAX_SPREAD_BPS","120")))),
+        commission_bps=max(0.0,float(os.getenv("SHADOW_COMMISSION_BPS","0"))),
+        sell_tax_bps=max(0.0,float(os.getenv("SHADOW_SELL_TAX_BPS","0"))),
+    )
+    cap=ai_estimate_book_capacity(
+        "BUY",book,policy,
+        max_implementation_shortfall_bps=max(5.0,min(200.0,float(os.getenv("SHADOW_BOOK_CAPACITY_MAX_IS_BPS","30"))))
+    )
+    cap["snapshot_time"]=iso(snap)
+    return cap
+
+
+def build_ai_allocation(cur, rows, ai_brokerage, ai_capacity):
+    empty={
+        "status":"WAITING","paper_only":True,"allocations":[],"rejected":[],
+        "correlations":{},"summary":{},"note":"PAPER_ENTRY 후보와 capacity 근거 대기"
+    }
+    if not ai_optimize_allocations or not AIAllocationPolicy or not AISizingPolicy:
+        return empty
+    packets=(ai_brokerage or {}).get("candidates") or []
+    paper_entries=[x for x in packets if x.get("state")=="PAPER_ENTRY"]
+    if not paper_entries:
+        return empty
+    row_map={str(x.get("code") or ""):x for x in (rows or [])}
+    final_map={x.get("strategy_id"):x for x in ((ai_capacity or {}).get("final_lifecycle") or [])}
+    exec_map={x.get("strategy_id"):x for x in ((ai_capacity or {}).get("execution_rows") or [])}
+    cap_map={x.get("strategy_id"):x for x in ((ai_capacity or {}).get("strategy_capacity") or [])}
+
+    open_positions=[]
+    open_codes=set()
+    if table_exists(cur,"ai_shadow_trades") and column_exists(cur,"ai_shadow_trades","risk_at_entry_krw"):
+        cur.execute("""SELECT stock_code,market_theme,strategy_family,risk_at_entry_krw
+                       FROM ai_shadow_trades WHERE status='OPEN'""")
+        for code,theme,family,risk in cur.fetchall():
+            open_codes.add(str(code))
+            open_positions.append({
+                "stock_code":str(code),"market_theme":theme,
+                "strategy_family":family,"risk_krw":float(risk or 0)
+            })
+
+    policy=AIAllocationPolicy(
+        account_equity_krw=max(1_000_000,float(os.getenv("SHADOW_ACCOUNT_EQUITY_KRW","100000000"))),
+        max_total_risk_pct=max(.1,min(20.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_TOTAL_RISK_PCT","2.0")))),
+        max_single_risk_pct=max(.05,min(5.0,float(os.getenv("SHADOW_RISK_PER_TRADE_PCT","0.5")))),
+        max_theme_risk_pct=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_THEME_RISK_PCT","0.8")))),
+        max_family_risk_pct=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_FAMILY_RISK_PCT","1.2")))),
+        max_position_pct=max(.5,min(50.0,float(os.getenv("SHADOW_MAX_POSITION_PCT","10")))),
+        max_positions=max(1,min(50,int(os.getenv("SHADOW_PORTFOLIO_MAX_OPEN","5")))),
+        risk_chunk_pct=max(.01,min(.5,float(os.getenv("ALLOCATION_RISK_CHUNK_PCT","0.05")))),
+        correlation_penalty_weight=max(0.0,min(1.0,float(os.getenv("ALLOCATION_CORRELATION_PENALTY","0.65")))),
+        high_correlation_threshold=max(.3,min(.99,float(os.getenv("ALLOCATION_HIGH_CORRELATION","0.80")))),
+        pending_evidence_scale=max(.05,min(1.0,float(os.getenv("ALLOCATION_PENDING_SCALE","0.35")))),
+        sample_building_scale=max(.01,min(.5,float(os.getenv("ALLOCATION_SAMPLE_SCALE","0.20")))),
+    )
+    sizing_policy=AISizingPolicy(
+        account_equity_krw=policy.account_equity_krw,
+        risk_per_trade_pct=policy.max_single_risk_pct,
+        max_position_pct=policy.max_position_pct,
+    )
+
+    candidates=[]
+    pre_rejected=[]
+    codes=[]
+    for packet in paper_entries:
+        code=str(packet.get("stock_code") or "")
+        if not code:continue
+        if code in open_codes:
+            pre_rejected.append({"stock_code":code,"stock_name":packet.get("stock_name"),
+                                 "reasons":["ALREADY_OPEN_SHADOW"]})
+            continue
+        st=packet.get("selected_strategy") or {}
+        sid=st.get("strategy_id")
+        if not sid:
+            pre_rejected.append({"stock_code":code,"stock_name":packet.get("stock_name"),
+                                 "reasons":["NO_SELECTED_STRATEGY"]})
+            continue
+        row=row_map.get(code) or {}
+        price=row.get("price_krw")
+        try:price=float(price) if price is not None else None
+        except Exception:price=None
+        vol=_allocation_volatility_bps(cur,code)
+        sizing=sizing_policy.size(price,vol) if price else {}
+        stop=sizing.get("stop_pct")
+        final=final_map.get(sid) or {}
+        exe=exec_map.get(sid) or {}
+        cap=cap_map.get(sid) or {}
+        point=_allocation_book_capacity(cur,code)
+        candidates.append({
+            "stock_code":code,"stock_name":packet.get("stock_name") or row.get("name"),
+            "state":packet.get("state"),"conviction":packet.get("conviction"),
+            "strategy_id":sid,"strategy_name":st.get("name"),
+            "strategy_family":st.get("family") or exe.get("strategy_family"),
+            "strategy_fit":st.get("fit_score"),"market_theme":row.get("market_theme"),
+            "price_krw":price,"stop_pct":stop,"volatility_bps":vol,
+            "final_action":final.get("action"),"capacity_state":cap.get("state"),
+            "evidence_capacity_krw":cap.get("evidence_capacity_krw"),
+            "point_in_time_capacity_krw":(point or {}).get("capacity_notional_krw"),
+            "point_in_time_capacity_is_bps":(point or {}).get("capacity_is_bps"),
+            "median_net_return_pct":exe.get("median_net_return_pct"),
+            "profit_factor":exe.get("profit_factor"),"positive_pct":exe.get("positive_pct"),
+            "median_round_trip_is_bps":exe.get("median_round_trip_is_bps"),
+            "median_return_drag_pct":exe.get("median_return_drag_pct"),
+            "book_coverage_pct":exe.get("book_coverage_pct"),
+        })
+        codes.append(code)
+
+    series=_allocation_price_series(cur,codes)
+    correlations=ai_correlation_matrix(series,min_obs=max(10,min(60,int(os.getenv("ALLOCATION_CORRELATION_MIN_OBS","20"))))) if ai_correlation_matrix else {}
+    out=ai_optimize_allocations(candidates,correlations,open_positions,policy)
+    out["rejected"]=pre_rejected+(out.get("rejected") or [])
+    out["correlations"]=correlations
+    out["as_of"]=datetime.now(KST).isoformat()
+    out["note"]="Shadow capital allocation only · no broker orders · edge/capacity/correlation/risk constraints are inspectable"
+    return out
+
+
 def build_shadow_execution_lab(cur):
     empty={
         "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
@@ -1829,6 +2008,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             ai_morning_brief=build_ai_morning_brief(regime,sector_groups,ai_brokerage,paper_lab)
             ai_strategy_performance=build_ai_strategy_performance(cur)
             ai_capacity=build_ai_capacity_analysis(cur,ai_strategy_performance)
+            ai_allocation=build_ai_allocation(cur,rows,ai_brokerage,ai_capacity)
             ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             shadow_execution=build_shadow_execution_lab(cur)
             shadow_execution["orderbook_feed"]=orderbook
@@ -2083,6 +2263,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "ai_morning_brief": ai_morning_brief,
         "ai_strategy_performance": ai_strategy_performance,
         "ai_capacity": ai_capacity,
+        "ai_allocation": ai_allocation,
         "ai_daily_review": ai_daily_review,
         "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
