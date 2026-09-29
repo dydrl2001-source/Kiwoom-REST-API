@@ -1,0 +1,151 @@
+name: Market Radar CI
+
+on:
+  pull_request:
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-radar-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-radar-ci.yml"
+
+jobs:
+  market-radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install fastapi uvicorn "psycopg[binary]" requests telethon httpx2
+      - name: Compile Market Radar
+        working-directory: market_radar
+        run: python -m compileall -q .
+      - name: Run Market Radar tests
+        working-directory: market_radar
+        env:
+          DATABASE_URL: ""
+          DASHBOARD_TOKEN: test
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Static live-order guard
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          roots=[Path("market_radar/ai_brokerage"),Path("market_radar/risk_control_worker.py"),Path("market_radar/resilience_audit_worker.py"),Path("market_radar/capital_allocation_worker.py"),Path("market_radar/schema_migrate.py")]
+          banned=("send_order","place_order","/api/dostk/ordr")
+          for root in roots:
+              files=[root] if root.is_file() else list(root.rglob("*.py"))
+              for p in files:
+                  text=p.read_text(encoding="utf-8")
+                  for token in banned:
+                      assert token not in text, f"{token} found in {p}"
+          print("live-order guard PASS")
+          PY
+      - name: Build local image
+        run: docker build -f market_radar/local/Dockerfile -t market-radar-ci .
+
+
+  staging-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: market
+          POSTGRES_PASSWORD: market
+          POSTGRES_DB: market_radar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U market -d market_radar"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://market:market@127.0.0.1:5432/market_radar
+      DASHBOARD_TOKEN: test
+      MARKET_RADAR_SCHEMA_VERSION: 2026.09.29.2
+      RISK_CONTROL_REQUIRED: "1"
+      RISK_CONTROL_STATUS_MAX_AGE_SECONDS: "120"
+      KIWOOM_MODE: demo
+      LIVE_READINESS_COSTS_CONFIRMED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install smoke dependencies
+        run: python -m pip install --upgrade pip && python -m pip install fastapi uvicorn "psycopg[binary]" requests telethon httpx2
+      - name: Apply versioned schema
+        working-directory: market_radar
+        run: python schema_migrate.py apply
+      - name: Seed fresh fail-safe Risk Control status
+        working-directory: market_radar
+        run: |
+          python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["DATABASE_URL"]) as c, c.cursor() as cur:
+              cur.execute("""INSERT INTO ai_risk_control_status(
+                  id,updated_at,state,raw_state,allow_new_shadow_entries,live_stage,
+                  incident_id,recovery_state,healthy_streak,healthy_streak_required,
+                  ack_required,acknowledged_at,halted_at,recovered_at,note)
+                  VALUES(1,now(),'RUN','RUN',TRUE,'RESEARCH_ONLY',NULL,'NORMAL',0,3,TRUE,NULL,NULL,NULL,
+                         'ephemeral staging smoke seed; no broker orders')
+                  ON CONFLICT(id) DO UPDATE SET
+                    updated_at=now(),state='RUN',raw_state='RUN',
+                    allow_new_shadow_entries=TRUE,live_stage='RESEARCH_ONLY',
+                    recovery_state='NORMAL',healthy_streak=0""")
+          print("risk-control seed PASS")
+          PY
+      - name: Verify schema registry
+        working-directory: market_radar
+        run: python schema_migrate.py check
+      - name: Start radar-api
+        working-directory: market_radar
+        run: |
+          nohup python -m uvicorn radar_api:app --host 127.0.0.1 --port 8080 >/tmp/radar-api.log 2>&1 &
+          echo $! >/tmp/radar-api.pid
+          for i in $(seq 1 30); do
+            if python - <<'PY'
+          import urllib.request
+          urllib.request.urlopen("http://127.0.0.1:8080/health/live",timeout=2).read()
+          PY
+            then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/radar-api.log
+          exit 1
+      - name: Verify readiness
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          with urllib.request.urlopen("http://127.0.0.1:8080/health/ready",timeout=5) as r:
+              body=json.load(r)
+          assert body["status"]=="ready", body
+          assert all(body["checks"].values()), body
+          print("readiness PASS",body)
+          PY
+      - name: Run release preflight
+        working-directory: market_radar
+        run: python release_preflight.py --base-url http://127.0.0.1:8080 --token test
+      - name: Backup and isolated restore drill
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_dump "$DATABASE_URL" -Fc -f /tmp/market-radar-staging.dump
+          test -s /tmp/market-radar-staging.dump
+          sha256sum /tmp/market-radar-staging.dump
+          PGPASSWORD=market createdb -h 127.0.0.1 -U market market_radar_restore_check
+          PGPASSWORD=market pg_restore -h 127.0.0.1 -U market -d market_radar_restore_check --no-owner --no-privileges /tmp/market-radar-staging.dump
+          PGPASSWORD=market psql -h 127.0.0.1 -U market -d market_radar_restore_check -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) AS public_tables FROM pg_tables WHERE schemaname='public';"
+          PGPASSWORD=market psql -h 127.0.0.1 -U market -d market_radar_restore_check -v ON_ERROR_STOP=1 -c "SELECT version, checksum FROM market_radar_schema_migrations ORDER BY applied_at DESC LIMIT 1;"
+      - name: Dump smoke logs on failure
+        if: failure()
+        run: cat /tmp/radar-api.log || true

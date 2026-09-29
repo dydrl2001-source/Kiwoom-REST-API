@@ -1,0 +1,38 @@
+name: Persistent Staging Soak Pulse
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: Optional operator note
+        required: false
+        default: manual soak pulse
+
+jobs:
+  soak-pulse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      DASHBOARD_TOKEN: ${{ secrets.STAGING_DASHBOARD_TOKEN }}
+      MARKET_RADAR_SCHEMA_VERSION: 2026.09.29.2
+      SOAK_MIN_DURATION_HOURS: "72"
+      SOAK_MIN_SAMPLES: "36"
+      SOAK_MIN_READY_PASS_PCT: "99"
+      SOAK_MIN_RESILIENCE_PASS_PCT: "99"
+      SOAK_MIN_RISK_FRESH_PCT: "99"
+      RISK_CONTROL_STATUS_MAX_AGE_SECONDS: "120"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate staging secrets exist
+        run: |
+          test -n "$DATABASE_URL"
+          test -n "$DASHBOARD_TOKEN"
+      - name: Install runtime dependencies
+        run: python -m pip install --upgrade pip && python -m pip install fastapi uvicorn "psycopg[binary]" requests telethon httpx2
+      - name: Record one persistent soak pulse
+        working-directory: market_radar
+        run: python persistent_soak_pulse.py

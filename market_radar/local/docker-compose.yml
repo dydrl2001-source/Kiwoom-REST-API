@@ -14,6 +14,19 @@ services:
       timeout: 5s
       retries: 20
 
+  schema-migrate:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: "no"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/schema_migrate.py apply
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   radar-api:
     build:
       context: ../..
@@ -25,9 +38,16 @@ services:
     command: python /app/radar_web_app.py
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD","python","-c","import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/live',timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   kiwoom-feed:
     build:
@@ -41,6 +61,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   candidate-tracker:
     build:
@@ -54,7 +76,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       kiwoom-feed:
+        condition: service_started
+      mimosa-engine:
+        condition: service_started
+
+  ai-brokerage-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/ai_brokerage_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      candidate-tracker:
+        condition: service_started
+      market-regime:
         condition: service_started
       mimosa-engine:
         condition: service_started
@@ -71,9 +116,137 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       candidate-tracker:
         condition: service_started
       mimosa-engine:
+        condition: service_started
+      ai-brokerage-worker:
+        condition: service_started
+
+  orderbook-collector:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/orderbook_collector.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      kiwoom-feed:
+        condition: service_started
+      ai-brokerage-worker:
+        condition: service_started
+
+  risk-control-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/risk_control_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      ai-brokerage-worker:
+        condition: service_started
+      orderbook-collector:
+        condition: service_started
+      chart-feed:
+        condition: service_started
+      market-regime:
+        condition: service_started
+
+  resilience-audit-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/resilience_audit_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      risk-control-worker:
+        condition: service_started
+
+  soak-monitor-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/soak_monitor_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      risk-control-worker:
+        condition: service_started
+      resilience-audit-worker:
+        condition: service_started
+
+  shadow-execution-engine:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/shadow_execution_engine.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      paper-trade-engine:
+        condition: service_started
+      kiwoom-feed:
+        condition: service_started
+      chart-feed:
+        condition: service_started
+      orderbook-collector:
+        condition: service_started
+      risk-control-worker:
+        condition: service_started
+
+  capital-allocation-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/capital_allocation_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      ai-brokerage-worker:
+        condition: service_started
+      orderbook-collector:
+        condition: service_started
+      shadow-execution-engine:
         condition: service_started
 
   paper-feedback-engine:
@@ -88,6 +261,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       paper-trade-engine:
         condition: service_started
 
@@ -103,6 +278,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   market-theme-feed:
     build:
@@ -116,6 +293,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   news-feed:
     build:
@@ -129,6 +308,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   chart-feed:
     build:
@@ -142,6 +323,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   mimosa-engine:
     build:
@@ -155,6 +338,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       chart-feed:
         condition: service_started
 
@@ -170,6 +355,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   dart-feed:
     build:
@@ -183,6 +370,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   research-engine:
     build:
@@ -196,6 +385,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   deep-research-engine:
     build:
@@ -209,6 +400,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       research-engine:
         condition: service_started
 
@@ -224,6 +417,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   telegram-collector:
     build:
@@ -240,6 +435,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   telegram-login:
     build:

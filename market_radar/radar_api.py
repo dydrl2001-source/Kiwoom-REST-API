@@ -25,6 +25,75 @@ except Exception:
     def usable_as_catalyst(q): return q not in ("ENTITY_CONFLICT","LIST_MENTION","MISSING_NAME")
     def usable_for_theme(q): return q in ("VERIFIED","CONTEXT_VERIFIED")
     def stock_context(text,name,radius=130): return str(text or "")
+try:
+    from ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
+    from ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
+    from ai_brokerage.analytics import summarize_strategy_rows as ai_summarize_strategy_rows
+    from ai_brokerage.analytics import build_context_matrix as ai_build_context_matrix
+    from ai_brokerage.analytics import lifecycle_candidates as ai_lifecycle_candidates
+    from ai_brokerage.analytics import build_daily_review as ai_build_daily_review
+    from ai_brokerage.capacity import execution_adjusted_strategy_rows as ai_execution_adjusted_strategy_rows
+    from ai_brokerage.capacity import build_capacity_matrix as ai_build_capacity_matrix
+    from ai_brokerage.capacity import strategy_capacity_rows as ai_strategy_capacity_rows
+    from ai_brokerage.capacity import execution_adjusted_lifecycle as ai_execution_adjusted_lifecycle
+    from ai_brokerage.allocation import AllocationPolicy as AIAllocationPolicy
+    from ai_brokerage.allocation import correlation_matrix as ai_correlation_matrix
+    from ai_brokerage.allocation import optimize_allocations as ai_optimize_allocations
+    from ai_brokerage.execution_model import SizingPolicy as AISizingPolicy
+    from ai_brokerage.execution_model import BookPolicy as AIBookPolicy
+    from ai_brokerage.execution_model import estimate_book_capacity as ai_estimate_book_capacity
+    from ai_brokerage.risk_control import RiskControlPolicy as AIRiskControlPolicy
+    from ai_brokerage.risk_control import evaluate_kill_switch as ai_evaluate_kill_switch
+    from ai_brokerage.risk_control import evaluate_live_readiness as ai_evaluate_live_readiness
+    from ai_brokerage.risk_control import rebalance_portfolio as ai_rebalance_portfolio
+    from ai_brokerage.release import evaluate_release_candidate as ai_evaluate_release_candidate
+except Exception:
+    try:
+        from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
+        from market_radar.ai_brokerage.adapter import context_from_dashboard_row as ai_context_from_dashboard_row
+        from market_radar.ai_brokerage.analytics import summarize_strategy_rows as ai_summarize_strategy_rows
+        from market_radar.ai_brokerage.analytics import build_context_matrix as ai_build_context_matrix
+        from market_radar.ai_brokerage.analytics import lifecycle_candidates as ai_lifecycle_candidates
+        from market_radar.ai_brokerage.analytics import build_daily_review as ai_build_daily_review
+        from market_radar.ai_brokerage.capacity import execution_adjusted_strategy_rows as ai_execution_adjusted_strategy_rows
+        from market_radar.ai_brokerage.capacity import build_capacity_matrix as ai_build_capacity_matrix
+        from market_radar.ai_brokerage.capacity import strategy_capacity_rows as ai_strategy_capacity_rows
+        from market_radar.ai_brokerage.capacity import execution_adjusted_lifecycle as ai_execution_adjusted_lifecycle
+        from market_radar.ai_brokerage.allocation import AllocationPolicy as AIAllocationPolicy
+        from market_radar.ai_brokerage.allocation import correlation_matrix as ai_correlation_matrix
+        from market_radar.ai_brokerage.allocation import optimize_allocations as ai_optimize_allocations
+        from market_radar.ai_brokerage.execution_model import SizingPolicy as AISizingPolicy
+        from market_radar.ai_brokerage.execution_model import BookPolicy as AIBookPolicy
+        from market_radar.ai_brokerage.execution_model import estimate_book_capacity as ai_estimate_book_capacity
+        from market_radar.ai_brokerage.risk_control import RiskControlPolicy as AIRiskControlPolicy
+        from market_radar.ai_brokerage.risk_control import evaluate_kill_switch as ai_evaluate_kill_switch
+        from market_radar.ai_brokerage.risk_control import evaluate_live_readiness as ai_evaluate_live_readiness
+        from market_radar.ai_brokerage.risk_control import rebalance_portfolio as ai_rebalance_portfolio
+        from market_radar.ai_brokerage.release import evaluate_release_candidate as ai_evaluate_release_candidate
+    except Exception:
+        AIBrokerageDecisionEngine = None
+        ai_context_from_dashboard_row = None
+        ai_summarize_strategy_rows = None
+        ai_build_context_matrix = None
+        ai_lifecycle_candidates = None
+        ai_build_daily_review = None
+        ai_execution_adjusted_strategy_rows = None
+        ai_build_capacity_matrix = None
+        ai_strategy_capacity_rows = None
+        ai_execution_adjusted_lifecycle = None
+        AIAllocationPolicy = None
+        ai_correlation_matrix = None
+        ai_optimize_allocations = None
+        AISizingPolicy = None
+        AIBookPolicy = None
+        ai_estimate_book_capacity = None
+        AIRiskControlPolicy = None
+        ai_evaluate_kill_switch = None
+        ai_evaluate_live_readiness = None
+        ai_rebalance_portfolio = None
+        ai_evaluate_release_candidate = None
+
+AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
 DB = os.getenv("DATABASE_URL", "")
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
@@ -38,7 +107,7 @@ _LEADER_CAL_CACHE_LOCK = threading.Lock()
 _LEADER_CAL_CACHE = None
 _LEADER_CAL_CACHE_AT = 0.0
 _LEADER_CAL_CACHE_KEY = None
-app = FastAPI(title="Market Radar", version="0.6.1")
+app = FastAPI(title="Market Radar", version="0.7.0")
 
 THEME_KEYWORDS = {
     "반도체/HBM": ["HBM", "반도체", "패키징", "테스트", "파운드리", "D램", "DRAM", "낸드"],
@@ -121,6 +190,13 @@ def get_db():
 def table_exists(cur, name: str) -> bool:
     cur.execute("SELECT to_regclass(%s)", (f"public.{name}",))
     return cur.fetchone()[0] is not None
+
+def column_exists(cur, table: str, column: str) -> bool:
+    cur.execute("""SELECT EXISTS(
+                   SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='public' AND table_name=%s AND column_name=%s)""",
+                (table,column))
+    return bool(cur.fetchone()[0])
 
 def iso(v):
     return v.isoformat() if v else None
@@ -634,6 +710,874 @@ def build_paper_feedback(cur):
         return empty
 
 
+def build_ai_morning_brief(regime, sector_groups, ai_brokerage, paper_lab):
+    label=(regime or {}).get("stable_label") or (regime or {}).get("candidate_label") or (regime or {}).get("status") or "장세 대기"
+    sectors=[]
+    for g in (sector_groups or [])[:3]:
+        sectors.append({
+            "name":g.get("name"),"strength":g.get("theme_strength"),
+            "change_rate":g.get("avg_change_rate"),"recent_turnover_krw":g.get("recent_turnover_krw")
+        })
+    candidates=(ai_brokerage or {}).get("candidates") or []
+    paper_entries=[x for x in candidates if x.get("state")=="PAPER_ENTRY"]
+    ready=[x for x in candidates if x.get("state")=="READY"]
+    blocked=[x for x in candidates if x.get("state")=="BLOCKED"]
+    strategies=[]
+    seen=set()
+    for x in paper_entries+ready:
+        st=x.get("selected_strategy") or {}
+        sid=st.get("strategy_id")
+        if sid and sid not in seen:
+            seen.add(sid)
+            strategies.append({"strategy_id":sid,"name":st.get("name"),"family":st.get("family"),"fit":st.get("fit_score")})
+    return {
+        "as_of":datetime.now(KST).isoformat(),
+        "regime":label,
+        "top_sectors":sectors,
+        "paper_entry_count":len(paper_entries),
+        "ready_count":len(ready),
+        "blocked_count":len(blocked),
+        "active_strategy_candidates":strategies[:5],
+        "paper_open_count":len((paper_lab or {}).get("open") or []),
+        "headline":f"{label} · PAPER {len(paper_entries)} · READY {len(ready)} · BLOCKED {len(blocked)}",
+        "note":"07:30형 운영 브리프 구조. 현재 저장·수집된 데이터만 사용하며 수익예측이 아님"
+    }
+
+
+def build_ai_strategy_performance(cur):
+    empty={"status":"WAITING","rows":[],"unassigned":0,
+           "note":"AI 전략이 귀속된 Paper Trade 표본을 기다리는 중"}
+    if not ai_summarize_strategy_rows or not ai_build_context_matrix or not ai_lifecycle_candidates or not table_exists(cur,"radar_paper_trades"):
+        return empty
+    try:
+        if not column_exists(cur,"radar_paper_trades","strategy_id"):return empty
+        cur.execute("""SELECT status,return_pct,mfe_pct,mae_pct,opened_at,closed_at,
+                              strategy_id,strategy_name,strategy_family,strategy_lifecycle,
+                              strategy_fit,ai_conviction,regime_label,
+                              ai_regime_trend,ai_regime_flow,ai_regime_sentiment,
+                              ai_catalyst_strength,ai_catalyst_identity,ai_chart_state,
+                              chart_state_entry
+                       FROM radar_paper_trades
+                       WHERE opened_at>now()-interval '90 days'
+                       ORDER BY opened_at""")
+        rows=[{
+            "status":r[0],"return_pct":r[1],"mfe_pct":r[2],"mae_pct":r[3],
+            "opened_at":iso(r[4]),"closed_at":iso(r[5]),"strategy_id":r[6],
+            "strategy_name":r[7],"strategy_family":r[8],"strategy_lifecycle":r[9],
+            "strategy_fit":r[10],"ai_conviction":r[11],"regime_label":r[12],
+            "ai_regime_trend":r[13],"ai_regime_flow":r[14],"ai_regime_sentiment":r[15],
+            "ai_catalyst_strength":r[16],"ai_catalyst_identity":r[17],
+            "ai_chart_state":r[18],"chart_state_entry":r[19]
+        } for r in cur.fetchall()]
+        registry={}
+        if AI_BROKERAGE_ENGINE:
+            registry={x.strategy_id:x.to_dict() for x in AI_BROKERAGE_ENGINE.registry.all()}
+        out=ai_summarize_strategy_rows(rows,registry)
+        matrix=ai_build_context_matrix(rows)
+        lifecycle=ai_lifecycle_candidates(out,matrix)
+        return {
+            "status":"OK" if out else "WAITING",
+            "rows":out,
+            "context_matrix":matrix,
+            "lifecycle_review":lifecycle,
+            "gates":{
+                "min_closed":30,"min_positive_pct":55,"min_median_return_pct":0.20,
+                "min_profit_factor":1.20,"min_context_cells":2,"min_cell_samples":5,
+                "max_context_concentration":0.70
+            },
+            "unassigned":sum(1 for x in rows if not x.get("strategy_id")),
+            "window_days":90,
+            "note":"전향적 Paper 표본만 사용. 승격·강등은 자동 적용하지 않고 후보로만 제시"
+        }
+    except Exception as e:
+        return {"error":str(type(e).__name__),"status":"ERROR","rows":[],"unassigned":0,
+                "note":"전략 성과 집계 실패"}
+
+
+def build_ai_daily_review(cur, paper_feedback):
+    empty={"status":"WAITING","decisions":{"decisions":0,"states":{},"top_strategies":[],"top_blockers":[]},
+           "paper":{"opened":0,"closed":0},"feedback_state":None,
+           "note":"오늘의 AI Brokerage 의사결정 이력을 기다리는 중"}
+    if not ai_build_daily_review:
+        return empty
+    try:
+        decisions=[]
+        if table_exists(cur,"ai_brokerage_decisions"):
+            cur.execute("""SELECT DISTINCT ON(stock_code,state,COALESCE(strategy_id,''))
+                                  snapshot_time,stock_code,stock_name,state,conviction,strategy_id,
+                                  strategy_name,strategy_family,packet
+                           FROM ai_brokerage_decisions
+                           WHERE (snapshot_time AT TIME ZONE 'Asia/Seoul')::date
+                                 =(now() AT TIME ZONE 'Asia/Seoul')::date
+                           ORDER BY stock_code,state,COALESCE(strategy_id,''),snapshot_time DESC""")
+            decisions=[{
+                "snapshot_time":iso(r[0]),"stock_code":r[1],"stock_name":r[2],"state":r[3],
+                "conviction":r[4],"strategy_id":r[5],"strategy_name":r[6],
+                "strategy_family":r[7],"packet":r[8] or {}
+            } for r in cur.fetchall()]
+        trades=[]
+        if table_exists(cur,"radar_paper_trades") and column_exists(cur,"radar_paper_trades","strategy_id"):
+            cur.execute("""SELECT status,return_pct,mfe_pct,mae_pct,opened_at,closed_at,
+                                  strategy_id,primary_type,exit_reason
+                           FROM radar_paper_trades
+                           WHERE (opened_at AT TIME ZONE 'Asia/Seoul')::date
+                                 =(now() AT TIME ZONE 'Asia/Seoul')::date
+                           ORDER BY opened_at""")
+            trades=[{
+                "status":r[0],"return_pct":r[1],"mfe_pct":r[2],"mae_pct":r[3],
+                "opened_at":iso(r[4]),"closed_at":iso(r[5]),"strategy_id":r[6],
+                "primary_type":r[7],"exit_reason":r[8]
+            } for r in cur.fetchall()]
+        out=ai_build_daily_review(decisions,trades,paper_feedback)
+        out["status"]="OK" if decisions or trades else "WAITING"
+        out["as_of"]=datetime.now(KST).isoformat()
+        out["note"]="19:00형 복기 구조. 반복 스냅샷은 종목·상태·전략 단위로 축약"
+        return out
+    except Exception as e:
+        return {**empty,"status":"ERROR","note":f"Daily Review 집계 실패: {type(e).__name__}"}
+
+
+def build_ai_capacity_analysis(cur, strategy_performance):
+    empty={
+        "status":"WAITING","execution_rows":[],"capacity_matrix":[],
+        "strategy_capacity":[],"final_lifecycle":[],
+        "note":"BOOK_V2 Shadow 표본 축적 대기"
+    }
+    funcs=(ai_execution_adjusted_strategy_rows,ai_build_capacity_matrix,
+           ai_strategy_capacity_rows,ai_execution_adjusted_lifecycle)
+    if any(x is None for x in funcs) or not table_exists(cur,"ai_shadow_trades"):
+        return empty
+    required=("entry_model_mode","entry_book_capacity_krw","entry_spread_bps",
+              "paper_return_pct","net_return_pct","return_drag_pct","round_trip_is_bps")
+    if any(not column_exists(cur,"ai_shadow_trades",x) for x in required):
+        return {**empty,"status":"WAITING_FOR_V2_SCHEMA","note":"Capacity v2 스키마 마이그레이션 대기"}
+    try:
+        cur.execute("""SELECT strategy_id,strategy_name,strategy_family,status,entry_model_mode,
+                              regime_label,requested_notional_krw,entry_book_capacity_krw,
+                              entry_spread_bps,entry_fill_ratio,paper_return_pct,net_return_pct,
+                              return_drag_pct,round_trip_is_bps,entry_at
+                       FROM ai_shadow_trades
+                       WHERE strategy_id IS NOT NULL
+                         AND entry_at>now()-interval '120 days'
+                       ORDER BY entry_at""")
+        rows=[{
+            "strategy_id":r[0],"strategy_name":r[1],"strategy_family":r[2],
+            "status":r[3],"entry_model_mode":r[4],"regime_label":r[5],
+            "requested_notional_krw":float(r[6]) if r[6] is not None else None,
+            "entry_book_capacity_krw":float(r[7]) if r[7] is not None else None,
+            "entry_spread_bps":r[8],"entry_fill_ratio":r[9],
+            "paper_return_pct":r[10],"net_return_pct":r[11],
+            "return_drag_pct":r[12],"round_trip_is_bps":r[13],
+            "entry_at":iso(r[14])
+        } for r in cur.fetchall()]
+        execution=ai_execution_adjusted_strategy_rows(rows)
+        matrix=ai_build_capacity_matrix(rows)
+        capacities=ai_strategy_capacity_rows(rows)
+        paper_review=(strategy_performance or {}).get("lifecycle_review") or []
+        final=ai_execution_adjusted_lifecycle(paper_review,execution,capacities)
+        return {
+            "status":"OK" if rows else "WAITING",
+            "execution_rows":execution,
+            "capacity_matrix":matrix,
+            "strategy_capacity":capacities,
+            "final_lifecycle":final,
+            "window_days":120,
+            "gates":{
+                "shadow_closed":20,"book_coverage_pct":60,"median_net_return_pct":0.10,
+                "positive_pct":50,"profit_factor":1.10,"max_drag_pct":0.50,
+                "max_round_trip_is_bps":40,
+                "capacity_min_book_closed":20,"capacity_min_bucket_closed":5,
+                "capacity_min_regimes":2
+            },
+            "note":"최종 승격은 Paper + execution-adjusted Shadow + BOOK_V2 capacity를 모두 검토하며 auto_apply=false"
+        }
+    except Exception as e:
+        return {**empty,"status":"ERROR","note":f"Capacity 분석 실패: {type(e).__name__}"}
+
+
+def _allocation_volatility_bps(cur,code):
+    if not table_exists(cur,"market_minute_bars"):
+        return None
+    cur.execute("""SELECT close_price FROM market_minute_bars
+                   WHERE stock_code=%s AND interval_min=3
+                   ORDER BY bar_time DESC LIMIT 21""",(code,))
+    xs=[]
+    for r in reversed(cur.fetchall()):
+        try:
+            v=float(r[0])
+            if v>0:xs.append(v)
+        except Exception:
+            pass
+    if len(xs)<6:return None
+    vals=[abs(b/a-1.0)*10000 for a,b in zip(xs[:-1],xs[1:]) if a>0]
+    if not vals:return None
+    vals.sort()
+    n=len(vals)
+    return vals[n//2] if n%2 else (vals[n//2-1]+vals[n//2])/2
+
+
+def _allocation_price_series(cur,codes):
+    if not codes or not table_exists(cur,"market_minute_bars"):
+        return {}
+    cur.execute("""SELECT stock_code,bar_time,close_price
+                   FROM market_minute_bars
+                   WHERE stock_code=ANY(%s) AND interval_min=3
+                     AND bar_time>now()-interval '6 hours'
+                   ORDER BY stock_code,bar_time""",(list(codes),))
+    out={}
+    for code,bar_time,close in cur.fetchall():
+        try:
+            px=float(close)
+            if px>0:out.setdefault(str(code),{})[bar_time.isoformat()]=px
+        except Exception:
+            continue
+    return out
+
+
+def _allocation_book_capacity(cur,code):
+    if not ai_estimate_book_capacity or not AIBookPolicy or not table_exists(cur,"market_orderbook_snapshots"):
+        return None
+    max_age=max(5,min(120,int(os.getenv("SHADOW_BOOK_MAX_AGE_SECONDS","30"))))
+    cur.execute("""SELECT snapshot_time,best_ask_krw,best_bid_krw,spread_bps,asks,bids,quality_flags
+                   FROM market_orderbook_snapshots
+                   WHERE stock_code=%s
+                   ORDER BY snapshot_time DESC LIMIT 1""",(code,))
+    r=cur.fetchone()
+    if not r:return None
+    snap=r[0]
+    if snap and (datetime.now(timezone.utc)-snap.astimezone(timezone.utc)).total_seconds()>max_age:
+        return None
+    flags=list(r[6] or [])
+    if "CROSSED_BOOK" in flags:return None
+    book={
+        "best_ask_krw":float(r[1]) if r[1] is not None else None,
+        "best_bid_krw":float(r[2]) if r[2] is not None else None,
+        "spread_bps":float(r[3]) if r[3] is not None else None,
+        "asks":list(r[4] or []),"bids":list(r[5] or []),
+    }
+    policy=AIBookPolicy(
+        displayed_liquidity_haircut=max(.05,min(1.0,float(os.getenv("SHADOW_BOOK_LIQUIDITY_HAIRCUT","0.5")))),
+        max_levels=10,
+        max_spread_bps=max(5.0,min(500.0,float(os.getenv("SHADOW_BOOK_MAX_SPREAD_BPS","120")))),
+        commission_bps=max(0.0,float(os.getenv("SHADOW_COMMISSION_BPS","0"))),
+        sell_tax_bps=max(0.0,float(os.getenv("SHADOW_SELL_TAX_BPS","0"))),
+    )
+    cap=ai_estimate_book_capacity(
+        "BUY",book,policy,
+        max_implementation_shortfall_bps=max(5.0,min(200.0,float(os.getenv("SHADOW_BOOK_CAPACITY_MAX_IS_BPS","30"))))
+    )
+    cap["snapshot_time"]=iso(snap)
+    return cap
+
+
+def build_ai_allocation(cur, rows, ai_brokerage, ai_capacity):
+    empty={
+        "status":"WAITING","paper_only":True,"allocations":[],"rejected":[],
+        "correlations":{},"summary":{},"note":"PAPER_ENTRY 후보와 capacity 근거 대기"
+    }
+    if not ai_optimize_allocations or not AIAllocationPolicy or not AISizingPolicy:
+        return empty
+    packets=(ai_brokerage or {}).get("candidates") or []
+    paper_entries=[x for x in packets if x.get("state")=="PAPER_ENTRY"]
+    if not paper_entries:
+        return empty
+    row_map={str(x.get("code") or ""):x for x in (rows or [])}
+    final_map={x.get("strategy_id"):x for x in ((ai_capacity or {}).get("final_lifecycle") or [])}
+    exec_map={x.get("strategy_id"):x for x in ((ai_capacity or {}).get("execution_rows") or [])}
+    cap_map={x.get("strategy_id"):x for x in ((ai_capacity or {}).get("strategy_capacity") or [])}
+
+    open_positions=[]
+    open_codes=set()
+    if table_exists(cur,"ai_shadow_trades") and column_exists(cur,"ai_shadow_trades","risk_at_entry_krw"):
+        cur.execute("""SELECT stock_code,market_theme,strategy_family,risk_at_entry_krw
+                       FROM ai_shadow_trades WHERE status='OPEN'""")
+        for code,theme,family,risk in cur.fetchall():
+            open_codes.add(str(code))
+            open_positions.append({
+                "stock_code":str(code),"market_theme":theme,
+                "strategy_family":family,"risk_krw":float(risk or 0)
+            })
+
+    policy=AIAllocationPolicy(
+        account_equity_krw=max(1_000_000,float(os.getenv("SHADOW_ACCOUNT_EQUITY_KRW","100000000"))),
+        max_total_risk_pct=max(.1,min(20.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_TOTAL_RISK_PCT","2.0")))),
+        max_single_risk_pct=max(.05,min(5.0,float(os.getenv("SHADOW_RISK_PER_TRADE_PCT","0.5")))),
+        max_theme_risk_pct=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_THEME_RISK_PCT","0.8")))),
+        max_family_risk_pct=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_FAMILY_RISK_PCT","1.2")))),
+        max_position_pct=max(.5,min(50.0,float(os.getenv("SHADOW_MAX_POSITION_PCT","10")))),
+        max_positions=max(1,min(50,int(os.getenv("SHADOW_PORTFOLIO_MAX_OPEN","5")))),
+        risk_chunk_pct=max(.01,min(.5,float(os.getenv("ALLOCATION_RISK_CHUNK_PCT","0.05")))),
+        correlation_penalty_weight=max(0.0,min(1.0,float(os.getenv("ALLOCATION_CORRELATION_PENALTY","0.65")))),
+        unknown_correlation_penalty=max(0.0,min(.5,float(os.getenv("ALLOCATION_UNKNOWN_CORRELATION_PENALTY","0.15")))),
+        high_correlation_threshold=max(.3,min(.99,float(os.getenv("ALLOCATION_HIGH_CORRELATION","0.80")))),
+        pending_evidence_scale=max(.05,min(1.0,float(os.getenv("ALLOCATION_PENDING_SCALE","0.35")))),
+        sample_building_scale=max(.01,min(.5,float(os.getenv("ALLOCATION_SAMPLE_SCALE","0.20")))),
+    )
+    sizing_policy=AISizingPolicy(
+        account_equity_krw=policy.account_equity_krw,
+        risk_per_trade_pct=policy.max_single_risk_pct,
+        max_position_pct=policy.max_position_pct,
+    )
+
+    candidates=[]
+    pre_rejected=[]
+    codes=[]
+    for packet in paper_entries:
+        code=str(packet.get("stock_code") or "")
+        if not code:continue
+        if code in open_codes:
+            pre_rejected.append({"stock_code":code,"stock_name":packet.get("stock_name"),
+                                 "reasons":["ALREADY_OPEN_SHADOW"]})
+            continue
+        st=packet.get("selected_strategy") or {}
+        sid=st.get("strategy_id")
+        if not sid:
+            pre_rejected.append({"stock_code":code,"stock_name":packet.get("stock_name"),
+                                 "reasons":["NO_SELECTED_STRATEGY"]})
+            continue
+        row=row_map.get(code) or {}
+        price=row.get("price_krw")
+        try:price=float(price) if price is not None else None
+        except Exception:price=None
+        vol=_allocation_volatility_bps(cur,code)
+        sizing=sizing_policy.size(price,vol) if price else {}
+        stop=sizing.get("stop_pct")
+        final=final_map.get(sid) or {}
+        exe=exec_map.get(sid) or {}
+        cap=cap_map.get(sid) or {}
+        point=_allocation_book_capacity(cur,code)
+        candidates.append({
+            "stock_code":code,"stock_name":packet.get("stock_name") or row.get("name"),
+            "state":packet.get("state"),"conviction":packet.get("conviction"),
+            "strategy_id":sid,"strategy_name":st.get("name"),
+            "strategy_family":st.get("family") or exe.get("strategy_family"),
+            "strategy_fit":st.get("fit_score"),"market_theme":row.get("market_theme"),
+            "price_krw":price,"stop_pct":stop,"volatility_bps":vol,
+            "final_action":final.get("action"),"capacity_state":cap.get("state"),
+            "evidence_capacity_krw":cap.get("evidence_capacity_krw"),
+            "point_in_time_capacity_krw":(point or {}).get("capacity_notional_krw"),
+            "point_in_time_capacity_is_bps":(point or {}).get("capacity_is_bps"),
+            "median_net_return_pct":exe.get("median_net_return_pct"),
+            "profit_factor":exe.get("profit_factor"),"positive_pct":exe.get("positive_pct"),
+            "median_round_trip_is_bps":exe.get("median_round_trip_is_bps"),
+            "median_return_drag_pct":exe.get("median_return_drag_pct"),
+            "book_coverage_pct":exe.get("book_coverage_pct"),
+        })
+        codes.append(code)
+
+    series=_allocation_price_series(cur,codes)
+    correlations=ai_correlation_matrix(series,min_obs=max(10,min(60,int(os.getenv("ALLOCATION_CORRELATION_MIN_OBS","20"))))) if ai_correlation_matrix else {}
+    out=ai_optimize_allocations(candidates,correlations,open_positions,policy)
+    out["rejected"]=pre_rejected+(out.get("rejected") or [])
+    out["correlations"]=correlations
+    out["as_of"]=datetime.now(KST).isoformat()
+    out["note"]="Shadow capital allocation only · no broker orders · edge/capacity/correlation/risk constraints are inspectable"
+    return out
+
+
+def _truthy_env(name,default="0"):
+    return os.getenv(name,default).strip().lower() in ("1","true","yes","on")
+
+
+def _age_from_iso(value):
+    if not value:return None
+    try:
+        dt=datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:dt=dt.replace(tzinfo=timezone.utc)
+        return max(0.0,(datetime.now(timezone.utc)-dt.astimezone(timezone.utc)).total_seconds())
+    except Exception:
+        return None
+
+
+def build_ai_risk_control(
+    cur, rows, ai_brokerage, ai_capacity, ai_allocation, shadow_execution,
+    kiwoom, orderbook, regime, chartfeed
+):
+    empty={
+        "status":"WAITING",
+        "kill_switch_raw":{"state":"DEGRADED","allow_new_shadow_entries":True,
+        "hard_triggers":[],"warnings":[{"code":"RISK_CONTROL_NOT_READY"}]},
+        "kill_switch":{"state":"HALT","allow_new_shadow_entries":False,
+        "hard_triggers":[{"code":"RISK_CONTROL_STATUS_MISSING"}],"warnings":[]},
+        "live_readiness":{"stage":"RESEARCH_ONLY","live_enabled":False,"gates":[],"failed_gates":[]},
+        "rebalance":{"status":"WAITING","actions":[],"replacements":[],"summary":{}},
+        "metrics":{},"note":"운영 통제 데이터 축적 대기"
+    }
+    if not AIRiskControlPolicy or not ai_evaluate_kill_switch or not ai_evaluate_live_readiness or not ai_rebalance_portfolio:
+        return empty
+
+    policy=AIRiskControlPolicy(
+        max_daily_loss_pct=max(.1,min(20.0,float(os.getenv("RISK_MAX_DAILY_LOSS_PCT","2.0")))),
+        hard_risk_utilization_pct=max(100.0,min(200.0,float(os.getenv("RISK_HARD_UTILIZATION_PCT","105")))),
+        warn_risk_utilization_pct=max(50.0,min(100.0,float(os.getenv("RISK_WARN_UTILIZATION_PCT","90")))),
+        max_critical_feed_age_sec=max(30,min(900,int(os.getenv("RISK_CRITICAL_FEED_MAX_AGE_SECONDS","180")))),
+        max_orderbook_age_sec=max(15,min(600,int(os.getenv("RISK_ORDERBOOK_MAX_AGE_SECONDS","90")))),
+        max_median_round_trip_is_bps=max(5.0,min(300.0,float(os.getenv("RISK_MAX_MEDIAN_IS_BPS","60")))),
+        warn_median_round_trip_is_bps=max(5.0,min(200.0,float(os.getenv("RISK_WARN_MEDIAN_IS_BPS","40")))),
+        max_execution_reject_pct=max(5.0,min(100.0,float(os.getenv("RISK_MAX_EXECUTION_REJECT_PCT","50")))),
+        warn_execution_reject_pct=max(1.0,min(100.0,float(os.getenv("RISK_WARN_EXECUTION_REJECT_PCT","30")))),
+        min_book_coverage_pct=max(0.0,min(100.0,float(os.getenv("RISK_MIN_BOOK_COVERAGE_PCT","50")))),
+        max_portfolio_corr=max(.5,min(.999,float(os.getenv("RISK_MAX_PORTFOLIO_CORR","0.92")))),
+        warn_portfolio_corr=max(.3,min(.99,float(os.getenv("RISK_WARN_PORTFOLIO_CORR","0.80")))),
+        max_unknown_corr_pairs=max(0,min(50,int(os.getenv("RISK_MAX_UNKNOWN_CORR_PAIRS","3")))),
+        min_live_paper_closed=max(20,int(os.getenv("LIVE_READINESS_MIN_PAPER_CLOSED","100"))),
+        min_live_shadow_closed=max(20,int(os.getenv("LIVE_READINESS_MIN_SHADOW_CLOSED","60"))),
+        min_live_book_closed=max(10,int(os.getenv("LIVE_READINESS_MIN_BOOK_CLOSED","40"))),
+        min_live_operating_days=max(3,int(os.getenv("LIVE_READINESS_MIN_OPERATING_DAYS","10"))),
+        min_live_book_coverage_pct=max(50.0,min(100.0,float(os.getenv("LIVE_READINESS_MIN_BOOK_COVERAGE_PCT","80")))),
+        min_live_supported_strategies=max(1,int(os.getenv("LIVE_READINESS_MIN_SUPPORTED_STRATEGIES","1"))),
+    )
+    equity=max(1_000_000,float(os.getenv("SHADOW_ACCOUNT_EQUITY_KRW","100000000")))
+
+    paper_closed=0
+    if table_exists(cur,"radar_paper_trades"):
+        cur.execute("SELECT COUNT(*) FROM radar_paper_trades WHERE status='CLOSED' AND return_pct IS NOT NULL")
+        paper_closed=int(cur.fetchone()[0] or 0)
+
+    shadow_closed=book_closed=operating_days=0
+    daily_shadow_return=None
+    execution_reject_pct=None
+    if table_exists(cur,"ai_shadow_trades"):
+        cur.execute("""SELECT COUNT(*) FILTER(WHERE status='CLOSED'),
+                              COUNT(*) FILTER(WHERE status='CLOSED' AND entry_model_mode='BOOK_V2'),
+                              COUNT(DISTINCT (entry_at AT TIME ZONE 'Asia/Seoul')::date)
+                       FROM ai_shadow_trades""")
+        r=cur.fetchone()
+        shadow_closed=int(r[0] or 0);book_closed=int(r[1] or 0);operating_days=int(r[2] or 0)
+        cur.execute("""SELECT SUM(net_pnl_krw)
+                       FROM ai_shadow_trades
+                       WHERE status='CLOSED'
+                         AND (exit_at AT TIME ZONE 'Asia/Seoul')::date
+                             =(now() AT TIME ZONE 'Asia/Seoul')::date""")
+        pnl=cur.fetchone()[0]
+        if pnl is not None:
+            daily_shadow_return=float(pnl)/equity*100.0
+        cur.execute("""SELECT COUNT(*) AS n,
+                              COUNT(*) FILTER(WHERE status='REJECTED') AS rejected
+                       FROM (
+                         SELECT status FROM ai_shadow_trades
+                         ORDER BY created_at DESC LIMIT 50
+                       ) x""")
+        rr=cur.fetchone()
+        if rr and int(rr[0] or 0)>0:
+            execution_reject_pct=int(rr[1] or 0)/int(rr[0])*100.0
+
+    allocation_days=0
+    if table_exists(cur,"ai_allocation_snapshots"):
+        cur.execute("""SELECT COUNT(DISTINCT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date)
+                       FROM ai_allocation_snapshots""")
+        allocation_days=int(cur.fetchone()[0] or 0)
+
+    allocations=(ai_allocation or {}).get("allocations") or []
+    max_corr=max([float(x.get("max_positive_corr") or 0) for x in allocations] or [0.0])
+    unknown_corr=sum(int(x.get("unknown_correlation_peers") or 0) for x in allocations)
+    risk_util=((ai_allocation or {}).get("summary") or {}).get("risk_utilization_pct")
+    shadow_summary=(shadow_execution or {}).get("summary") or {}
+    book_cov=shadow_summary.get("book_coverage_pct")
+    median_is=shadow_summary.get("median_round_trip_is_bps")
+
+    critical_feeds={
+        "kiwoom":{
+            "status":(kiwoom or {}).get("status"),
+            "age_sec":_age_from_iso((kiwoom or {}).get("last_success")),
+        },
+        "regime":{
+            "status":(regime or {}).get("status"),
+            "age_sec":_age_from_iso((regime or {}).get("last_market_data_at") or (regime or {}).get("updated_at")),
+        },
+        "chart":{
+            "status":(chartfeed or {}).get("status"),
+            "age_sec":_age_from_iso((chartfeed or {}).get("last_success")),
+        },
+    }
+    orderbook_feed={
+        "status":(orderbook or {}).get("status"),
+        "age_sec":_age_from_iso((orderbook or {}).get("updated_at")),
+    }
+    metrics={
+        "daily_shadow_return_pct":daily_shadow_return,
+        "risk_utilization_pct":risk_util,
+        "median_round_trip_is_bps":median_is,
+        "execution_reject_pct":execution_reject_pct,
+        "book_coverage_pct":book_cov,
+        "max_portfolio_corr":max_corr,
+        "unknown_corr_pairs":unknown_corr,
+        "critical_feeds":critical_feeds,
+        "orderbook_feed":orderbook_feed,
+        "manual_halt":_truthy_env("RISK_MANUAL_HALT","0"),
+    }
+    raw_kill=ai_evaluate_kill_switch(metrics,policy)
+
+    # Effective operational state includes the persisted recovery latch.
+    kill=dict(raw_kill)
+    recovery={
+        "state":"UNPERSISTED","incident_id":None,"recovery_state":"STARTING",
+        "healthy_streak":0,"healthy_streak_required":max(1,min(20,int(os.getenv("RISK_RECOVERY_HEALTHY_STREAK","3")))),
+        "ack_required":os.getenv("RISK_RECOVERY_REQUIRE_ACK","1").strip().lower() in ("1","true","yes","on"),
+        "acknowledged_at":None,"halted_at":None,"recovered_at":None,"status_age_sec":None,
+    }
+    status_required=os.getenv("RISK_CONTROL_REQUIRED","1").strip().lower() in ("1","true","yes","on")
+    status_max_age=max(30,min(600,int(os.getenv("RISK_CONTROL_STATUS_MAX_AGE_SECONDS","120"))))
+    if table_exists(cur,"ai_risk_control_status") and column_exists(cur,"ai_risk_control_status","incident_id"):
+        cur.execute("""SELECT updated_at,state,raw_state,allow_new_shadow_entries,incident_id,
+                              recovery_state,healthy_streak,healthy_streak_required,ack_required,
+                              acknowledged_at,halted_at,recovered_at
+                       FROM ai_risk_control_status WHERE id=1""")
+        rr=cur.fetchone()
+        if rr:
+            age=max(0.0,(datetime.now(timezone.utc)-rr[0].astimezone(timezone.utc)).total_seconds()) if rr[0] else None
+            recovery={
+                "state":rr[1],"raw_state":rr[2],"allow_new_shadow_entries":bool(rr[3]),
+                "incident_id":rr[4],"recovery_state":rr[5],
+                "healthy_streak":int(rr[6] or 0),"healthy_streak_required":int(rr[7] or 0),
+                "ack_required":bool(rr[8]),"acknowledged_at":iso(rr[9]),
+                "halted_at":iso(rr[10]),"recovered_at":iso(rr[11]),"status_age_sec":age,
+            }
+            if age is not None and age>status_max_age and status_required:
+                kill={**raw_kill,"state":"HALT","allow_new_shadow_entries":False}
+                kill["hard_triggers"]=list(raw_kill.get("hard_triggers") or [])+[{
+                    "code":"RISK_CONTROL_STATUS_STALE","age_sec":age,"limit":status_max_age
+                }]
+                kill["incident_id"]=rr[4]
+                kill["recovery_state"]="STATUS_STALE"
+            elif str(rr[1] or "").upper()=="HALT":
+                kill={**raw_kill,"state":"HALT","allow_new_shadow_entries":False}
+                hard=list(raw_kill.get("hard_triggers") or [])
+                if not any(x.get("code")=="RECOVERY_LATCH" for x in hard):
+                    hard.append({"code":"RECOVERY_LATCH","incident_id":rr[4],
+                                 "recovery_state":rr[5],"healthy_streak":int(rr[6] or 0),
+                                 "required":int(rr[7] or 0),"acknowledged":bool(rr[9])})
+                kill["hard_triggers"]=hard
+                kill["incident_id"]=rr[4]
+                kill["recovery_state"]=rr[5]
+                kill["healthy_streak"]=int(rr[6] or 0)
+                kill["healthy_streak_required"]=int(rr[7] or 0)
+                kill["ack_required"]=bool(rr[8])
+                kill["acknowledged_at"]=iso(rr[9])
+            else:
+                kill={**raw_kill,"state":str(rr[1] or raw_kill.get("state")),
+                      "allow_new_shadow_entries":bool(rr[3]) and raw_kill.get("state")!="HALT"}
+                kill["incident_id"]=rr[4]
+                kill["recovery_state"]=rr[5]
+    elif status_required:
+        kill={**raw_kill,"state":"HALT","allow_new_shadow_entries":False}
+        kill["hard_triggers"]=list(raw_kill.get("hard_triggers") or [])+[{
+            "code":"RISK_CONTROL_STATUS_MISSING"
+        }]
+        kill["recovery_state"]="STARTING"
+
+    final_rows=(ai_capacity or {}).get("final_lifecycle") or []
+    supported=sum(1 for x in final_rows if x.get("action")=="PROMOTE_CANDIDATE_EXECUTION_ADJUSTED")
+    def _live_feed_ready(feed):
+        st=str((feed or {}).get("status") or "").upper()
+        age=(feed or {}).get("age_sec")
+        if not st or st in ("ERROR","FAILED","DOWN","NOT_CONFIGURED","WAITING_FOR_CREDENTIALS"):
+            return False
+        if st.startswith("WAITING") or st.startswith("NOT_") or st.startswith("ERROR"):
+            return False
+        return age is None or float(age)<=policy.max_critical_feed_age_sec
+
+    critical_feeds_ok=all(_live_feed_ready(v) for v in critical_feeds.values())
+    orderbook_ok=(
+        str(orderbook_feed.get("status") or "")=="OK"
+        and (orderbook_feed.get("age_sec") is None or float(orderbook_feed.get("age_sec"))<=policy.max_orderbook_age_sec)
+    )
+    readiness_metrics={
+        "broker_mode":(kiwoom or {}).get("mode"),
+        "paper_closed":paper_closed,
+        "shadow_closed":shadow_closed,
+        "book_closed":book_closed,
+        "operating_days":operating_days,
+        "book_coverage_pct":book_cov,
+        "supported_strategies":supported,
+        "costs_configured":_truthy_env("LIVE_READINESS_COSTS_CONFIRMED","0"),
+        "orderbook_ok":orderbook_ok,
+        "critical_feeds_ok":critical_feeds_ok,
+        "allocation_snapshots":allocation_days,
+        "live_order_path_present":False,
+    }
+    readiness=ai_evaluate_live_readiness(readiness_metrics,kill,policy)
+
+    row_map={str(x.get("code") or ""):x for x in (rows or [])}
+    packet_map={str(x.get("stock_code") or ""):x for x in ((ai_brokerage or {}).get("candidates") or [])}
+    final_map={x.get("strategy_id"):x for x in final_rows}
+    open_positions=[]
+    if table_exists(cur,"ai_shadow_trades"):
+        cur.execute("""SELECT stock_code,stock_name,market_theme,strategy_id,strategy_family,
+                              risk_at_entry_krw,stop_pct,entry_fill_price_krw,entry_at
+                       FROM ai_shadow_trades WHERE status='OPEN'""")
+        raw_open=cur.fetchall()
+        codes=[str(x[0]) for x in raw_open if x and x[0]]
+        latest_prices={}
+        if codes and table_exists(cur,"radar_flow_quotes"):
+            cur.execute("""SELECT DISTINCT ON(stock_code) stock_code,payload
+                           FROM radar_flow_quotes
+                           WHERE stock_code=ANY(%s)
+                           ORDER BY stock_code,batch_time DESC""",(codes,))
+            for code,payload in cur.fetchall():
+                try:
+                    px=float((payload or {}).get("price_krw"))
+                    if px>0:latest_prices[str(code)]=px
+                except Exception:
+                    pass
+        series=_allocation_price_series(cur,codes+[str(x.get("stock_code")) for x in allocations if x.get("stock_code")])
+        corr=ai_correlation_matrix(series,min_obs=max(10,min(60,int(os.getenv("ALLOCATION_CORRELATION_MIN_OBS","20"))))) if ai_correlation_matrix else {}
+        for code,name,theme,sid,family,risk,stop,entry_px,entry_at in raw_open:
+            code=str(code)
+            packet=packet_map.get(code) or {}
+            final=final_map.get(sid) or {}
+            px=latest_prices.get(code) or (row_map.get(code) or {}).get("price_krw")
+            try:px=float(px) if px is not None else None
+            except Exception:px=None
+            try:entry=float(entry_px) if entry_px is not None else None
+            except Exception:entry=None
+            current_ret=(px/entry-1.0)*100.0 if px and entry and entry>0 else None
+            peers=[]
+            for other in codes:
+                if other==code:continue
+                v=(corr.get(code) or {}).get(other)
+                if v is not None:peers.append(float(v))
+            max_pos_corr=max([v for v in peers if v>0] or [0.0])
+            conviction=float(packet.get("conviction") or 50)
+            action=final.get("action")
+            scale=1.0 if action=="PROMOTE_CANDIDATE_EXECUTION_ADJUSTED" else .35 if action=="EXECUTION_GATE_PENDING" else .2
+            if action in ("EXECUTION_BLOCKED","DEMOTE_OR_REWORK"):scale=0.0
+            open_positions.append({
+                "stock_code":code,"stock_name":name,"market_theme":theme,
+                "strategy_id":sid,"strategy_family":family,
+                "risk_krw":float(risk or 0),"stop_pct":float(stop or 0) if stop is not None else None,
+                "current_return_pct":current_ret,"ai_state":packet.get("state") or "UNKNOWN",
+                "final_action":action,"priority_score":(conviction/100.0)*scale,
+                "max_positive_corr":max_pos_corr,"entry_at":iso(entry_at),
+            })
+    rebalance=ai_rebalance_portfolio(open_positions,allocations,kill,{
+        "watch_reduce_fraction":max(.1,min(.9,float(os.getenv("REBALANCE_WATCH_REDUCE_FRACTION","0.5")))),
+        "high_corr_reduce_fraction":max(.1,min(.9,float(os.getenv("REBALANCE_HIGH_CORR_REDUCE_FRACTION","0.25")))),
+        "high_corr_threshold":max(.5,min(.99,float(os.getenv("REBALANCE_HIGH_CORR_THRESHOLD","0.90")))),
+        "replacement_priority_gap":max(.05,min(.8,float(os.getenv("REBALANCE_REPLACEMENT_PRIORITY_GAP","0.15")))),
+    })
+
+    return {
+        "status":"OK",
+        "kill_switch_raw":raw_kill,
+        "kill_switch":kill,
+        "recovery":recovery,
+        "live_readiness":readiness,
+        "rebalance":rebalance,
+        "metrics":{
+            **metrics,
+            **readiness_metrics,
+            "critical_feeds_ok":critical_feeds_ok,
+            "orderbook_ok":orderbook_ok,
+        },
+        "note":"운영 통제·rebalance·live-readiness 모두 shadow/read-only 제안; live execution은 비활성",
+    }
+
+
+def build_ai_resilience_lab(cur):
+    out={
+        "status":"WAITING","updated_at":None,
+        "scenario_count":0,"passed_count":0,"failed_count":0,
+        "replay_status":"NO_HISTORY","latest_run":None,"incidents":[],
+        "note":"Resilience Audit 표본 대기"
+    }
+    try:
+        if table_exists(cur,"ai_resilience_status"):
+            cur.execute("""SELECT updated_at,status,scenario_count,passed_count,
+                                  failed_count,replay_status,note
+                           FROM ai_resilience_status WHERE id=1""")
+            r=cur.fetchone()
+            if r:
+                out.update({
+                    "updated_at":iso(r[0]),"status":r[1],
+                    "scenario_count":int(r[2] or 0),"passed_count":int(r[3] or 0),
+                    "failed_count":int(r[4] or 0),"replay_status":r[5],
+                    "note":r[6] or out["note"],
+                })
+        if table_exists(cur,"ai_resilience_audit_runs"):
+            cur.execute("""SELECT run_time,status,scenario_count,passed_count,failed_count,
+                                  replay_rows,replay_status,payload
+                           FROM ai_resilience_audit_runs
+                           ORDER BY run_time DESC LIMIT 1""")
+            r=cur.fetchone()
+            if r:
+                out["latest_run"]={
+                    "run_time":iso(r[0]),"status":r[1],
+                    "scenario_count":int(r[2] or 0),"passed_count":int(r[3] or 0),
+                    "failed_count":int(r[4] or 0),"replay_rows":int(r[5] or 0),
+                    "replay_status":r[6],"payload":r[7] or {},
+                }
+        if table_exists(cur,"ai_incident_events"):
+            cur.execute("""SELECT incident_id,opened_at,last_seen_at,closed_at,state,raw_state,
+                                  recovery_state,healthy_streak,ack_required,acknowledged_at,
+                                  hard_triggers,warnings
+                           FROM ai_incident_events
+                           ORDER BY opened_at DESC LIMIT 8""")
+            out["incidents"]=[{
+                "incident_id":r[0],"opened_at":iso(r[1]),"last_seen_at":iso(r[2]),
+                "closed_at":iso(r[3]),"state":r[4],"raw_state":r[5],
+                "recovery_state":r[6],"healthy_streak":int(r[7] or 0),
+                "ack_required":bool(r[8]),"acknowledged_at":iso(r[9]),
+                "hard_triggers":r[10] or [],"warnings":r[11] or [],
+            } for r in cur.fetchall()]
+        return out
+    except Exception as e:
+        return {**out,"status":"ERROR","note":f"Resilience Lab 집계 실패: {type(e).__name__}"}
+
+
+def build_ai_soak_gate(cur):
+    out={
+        "status":"WAITING","updated_at":None,"stage":"SOAK_IN_PROGRESS",
+        "rc_candidate":False,"sample_count":0,"duration_hours":0.0,
+        "failed_gates":["DURATION","SAMPLES"],"payload":{},
+        "note":"persistent staging soak evidence not started"
+    }
+    if not table_exists(cur,"ai_soak_status"):
+        return out
+    try:
+        cur.execute("""SELECT updated_at,stage,rc_candidate,sample_count,duration_hours,
+                              failed_gates,payload,note
+                       FROM ai_soak_status WHERE id=1""")
+        r=cur.fetchone()
+        if not r:return out
+        return {
+            "status":"OK",
+            "updated_at":iso(r[0]),
+            "stage":r[1],
+            "rc_candidate":bool(r[2]),
+            "sample_count":int(r[3] or 0),
+            "duration_hours":float(r[4] or 0),
+            "failed_gates":r[5] or [],
+            "payload":r[6] or {},
+            "note":r[7] or out["note"],
+        }
+    except Exception as e:
+        return {**out,"status":"ERROR","note":f"Soak Gate 집계 실패: {type(e).__name__}"}
+
+
+def build_ai_release_gate(cur, ai_risk_control, ai_resilience, ai_soak):
+    if not ai_evaluate_release_candidate:
+        return {"stage":"RC_BLOCKED","rc_ready":False,"gates":[],"failed_gates":["RELEASE_EVALUATOR_MISSING"],"live_enabled":False}
+    version=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.2")
+    schema_ok=False
+    if table_exists(cur,"market_radar_schema_migrations"):
+        cur.execute("SELECT 1 FROM market_radar_schema_migrations WHERE version=%s",(version,))
+        schema_ok=cur.fetchone() is not None
+    risk=ai_risk_control or {}
+    ready=risk.get("live_readiness") or {}
+    resilience=ai_resilience or {}
+    soak=ai_soak or {}
+    evidence={
+        "soak_stage":soak.get("stage"),
+        "soak_rc_candidate":soak.get("rc_candidate") is True,
+        "risk_state":(risk.get("kill_switch") or {}).get("state"),
+        "resilience_status":resilience.get("status"),
+        "schema_ok":schema_ok,
+        "schema_version":version if schema_ok else None,
+        "required_schema_version":version,
+        "live_enabled":ready.get("live_enabled"),
+        "live_order_path_present":False,
+        "ci_green_confirmed":_truthy_env("RC_CI_GREEN_CONFIRMED","0"),
+        "backup_restore_confirmed":_truthy_env("RC_BACKUP_RESTORE_CONFIRMED","0"),
+        "preflight_confirmed":_truthy_env("RC_PREFLIGHT_CONFIRMED","0"),
+        "persistent_staging_confirmed":_truthy_env("RC_PERSISTENT_STAGING","0"),
+        "branch_sync_confirmed":_truthy_env("RC_BRANCH_SYNC_CONFIRMED","0"),
+    }
+    return ai_evaluate_release_candidate(evidence)
+
+
+def build_shadow_execution_lab(cur):
+    empty={
+        "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
+        "partial_exit_count":0,"risk_reject_count":0,
+        "summary":{
+            "closed":0,"median_gross_return_pct":None,"median_net_return_pct":None,
+            "median_fill_ratio_pct":None,"median_notional_krw":None,
+            "book_coverage_pct":None,"median_entry_is_bps":None,"median_exit_is_bps":None,
+            "median_round_trip_is_bps":None,"median_return_drag_pct":None
+        },
+        "recent":[],
+        "note":"Shadow Simulator 표본 대기 · 실계좌 주문 없음"
+    }
+    if not table_exists(cur,"ai_shadow_trades"):
+        return empty
+    if not column_exists(cur,"ai_shadow_trades","entry_model_mode"):
+        return {**empty,"status":"WAITING_FOR_V2_SCHEMA","note":"Shadow v2 스키마 마이그레이션 대기"}
+    try:
+        status=dict(empty)
+        if table_exists(cur,"ai_shadow_status"):
+            cur.execute("""SELECT status,updated_at,open_count,closed_count,rejected_count,note
+                           FROM ai_shadow_status WHERE id=1""")
+            r=cur.fetchone()
+            if r:
+                status.update({"status":r[0],"updated_at":iso(r[1]),"open_count":int(r[2] or 0),
+                               "closed_count":int(r[3] or 0),"rejected_count":int(r[4] or 0),
+                               "note":r[5] or empty["note"]})
+        cur.execute("""SELECT COUNT(*),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY gross_return_pct),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY net_return_pct),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY entry_fill_ratio*100),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY requested_notional_krw),
+                              AVG(CASE WHEN entry_model_mode='BOOK_V2' THEN 1.0 ELSE 0.0 END),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY entry_implementation_shortfall_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY exit_implementation_shortfall_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY round_trip_is_bps),
+                              percentile_cont(0.5) WITHIN GROUP(ORDER BY return_drag_pct)
+                       FROM ai_shadow_trades
+                       WHERE status='CLOSED' AND entry_at>now()-interval '90 days'""")
+        r=cur.fetchone()
+        status["summary"]={
+            "closed":int(r[0] or 0),
+            "median_gross_return_pct":float(r[1]) if r[1] is not None else None,
+            "median_net_return_pct":float(r[2]) if r[2] is not None else None,
+            "median_fill_ratio_pct":float(r[3]) if r[3] is not None else None,
+            "median_notional_krw":float(r[4]) if r[4] is not None else None,
+            "book_coverage_pct":float(r[5])*100 if r[5] is not None else None,
+            "median_entry_is_bps":float(r[6]) if r[6] is not None else None,
+            "median_exit_is_bps":float(r[7]) if r[7] is not None else None,
+            "median_round_trip_is_bps":float(r[8]) if r[8] is not None else None,
+            "median_return_drag_pct":float(r[9]) if r[9] is not None else None,
+        }
+        cur.execute("""SELECT COUNT(*) FROM ai_shadow_trades
+                       WHERE status='CLOSED_PARTIAL_LIQUIDITY'""")
+        status["partial_exit_count"]=int(cur.fetchone()[0] or 0)
+        cur.execute("""SELECT COUNT(*) FROM ai_shadow_trades
+                       WHERE status='REJECTED'
+                         AND entry_model_quality='PORTFOLIO_RISK_GATE'""")
+        status["risk_reject_count"]=int(cur.fetchone()[0] or 0)
+
+        cur.execute("""SELECT stock_code,stock_name,market_theme,strategy_id,strategy_family,status,
+                              requested_shares,filled_shares,requested_notional_krw,stop_pct,
+                              risk_at_entry_krw,entry_at,entry_ref_price_krw,entry_arrival_mid_krw,
+                              entry_fill_price_krw,entry_slippage_bps,entry_implementation_shortfall_bps,
+                              entry_fill_ratio,entry_model_quality,entry_model_mode,
+                              exit_at,exit_ref_price_krw,exit_arrival_mid_krw,exit_fill_price_krw,
+                              exit_slippage_bps,exit_implementation_shortfall_bps,
+                              exit_filled_shares,exit_fill_ratio,remaining_shares,round_trip_is_bps,
+                              paper_return_pct,gross_return_pct,net_return_pct,return_drag_pct,
+                              net_pnl_krw,costs_krw,risk_gate,entry_model,exit_model
+                       FROM ai_shadow_trades
+                       ORDER BY COALESCE(exit_at,entry_at) DESC LIMIT 12""")
+        names=[d.name for d in cur.description]
+        recent=[]
+        for raw in cur.fetchall():
+            row=dict(zip(names,raw))
+            for k in ("requested_notional_krw","risk_at_entry_krw","entry_ref_price_krw",
+                      "entry_arrival_mid_krw","entry_fill_price_krw","exit_ref_price_krw",
+                      "exit_arrival_mid_krw","exit_fill_price_krw","net_pnl_krw","costs_krw"):
+                row[k]=float(row[k]) if row.get(k) is not None else None
+            row["entry_at"]=iso(row.get("entry_at"))
+            row["exit_at"]=iso(row.get("exit_at"))
+            row["risk_gate"]=row.get("risk_gate") or {}
+            row["entry_model"]=row.get("entry_model") or {}
+            row["exit_model"]=row.get("exit_model") or {}
+            recent.append(row)
+        status["recent"]=recent
+        status["model_note"]="BOOK_V2 우선: Kiwoom ka10004 10호가를 haircut 후 VWAP 체결. 신선한 book이 없을 때만 명시적 PROXY_V1 fallback."
+        return status
+    except Exception as e:
+        return {**empty,"status":"ERROR","note":f"Shadow v2 집계 실패: {type(e).__name__}"}
+
 def build_home_candidates(cur, rows):
     """Read the current local candidate tracker for a compact Home Top5."""
     if not table_exists(cur,"radar_candidate_episodes"):
@@ -1067,6 +2011,10 @@ def ensure_feedback_table(cur):
     CREATE INDEX IF NOT EXISTS idx_radar_feedback_cat_time ON radar_feedback(category,created_at DESC);
     """)
 
+@app.get("/health/live")
+def health_live():
+    return {"status":"ok","service":"market-radar"}
+
 @app.get("/health")
 def health():
     try:
@@ -1074,9 +2022,41 @@ def health():
             with c.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()
-        return {"status": "ok", "db": "ok"}
-    except Exception as e:
-        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+        return {"status":"ok","db":"ok"}
+    except Exception:
+        return JSONResponse({"status":"error","db":"unavailable"},status_code=500)
+
+@app.get("/health/ready")
+def health_ready():
+    checks={"db":False,"schema":False,"risk_control":False}
+    version=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.2")
+    try:
+        with get_db() as c:
+            with c.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                checks["db"]=True
+                cur.execute("SELECT to_regclass('public.market_radar_schema_migrations')")
+                reg=cur.fetchone()[0]
+                if reg:
+                    cur.execute("""SELECT 1 FROM market_radar_schema_migrations
+                                   WHERE version=%s""",(version,))
+                    checks["schema"]=cur.fetchone() is not None
+                required=os.getenv("RISK_CONTROL_REQUIRED","1").strip().lower() in ("1","true","yes","on")
+                if not required:
+                    checks["risk_control"]=True
+                elif table_exists(cur,"ai_risk_control_status"):
+                    cur.execute("""SELECT updated_at FROM ai_risk_control_status WHERE id=1""")
+                    r=cur.fetchone()
+                    if r and r[0]:
+                        age=(datetime.now(timezone.utc)-r[0].astimezone(timezone.utc)).total_seconds()
+                        max_age=max(30,min(600,int(os.getenv("RISK_CONTROL_STATUS_MAX_AGE_SECONDS","120"))))
+                        checks["risk_control"]=age<=max_age
+        ready=all(checks.values())
+        payload={"status":"ready" if ready else "not_ready","checks":checks,"schema_version":version}
+        return payload if ready else JSONResponse(payload,status_code=503)
+    except Exception:
+        return JSONResponse({"status":"not_ready","checks":checks,"schema_version":version},status_code=503)
 
 
 @app.post("/api/feedback")
@@ -1117,12 +2097,23 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 r = cur.fetchone()
                 telegram = {"latest": iso(r[0]), "count_24h": int(r[1] or 0)}
 
-            kiwoom = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
+            kiwoom = {"status": "NOT_CONFIGURED", "mode": None, "last_success": None, "note": None}
             if table_exists(cur, "kiwoom_feed_status"):
-                cur.execute("SELECT status,last_success_at,note FROM kiwoom_feed_status WHERE id=1")
+                cur.execute("SELECT status,mode,last_success_at,note FROM kiwoom_feed_status WHERE id=1")
                 r = cur.fetchone()
                 if r:
-                    kiwoom = {"status": r[0], "last_success": iso(r[1]), "note": r[2]}
+                    kiwoom = {"status": r[0], "mode": r[1], "last_success": iso(r[2]), "note": r[3]}
+
+            orderbook = {"status":"NOT_CONFIGURED","updated_at":None,"mode":None,
+                         "target_count":0,"saved_count":0,"note":None}
+            if table_exists(cur,"orderbook_feed_status"):
+                cur.execute("""SELECT status,updated_at,mode,target_count,saved_count,note
+                               FROM orderbook_feed_status WHERE id=1""")
+                r=cur.fetchone()
+                if r:
+                    orderbook={"status":r[0],"updated_at":iso(r[1]),"mode":r[2],
+                               "target_count":int(r[3] or 0),"saved_count":int(r[4] or 0),
+                               "note":r[5]}
 
             newsfeed = {"status": "NOT_CONFIGURED", "last_success": None, "note": None}
             if table_exists(cur, "news_feed_status"):
@@ -1173,18 +2164,20 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     }
             regime_metrics = None
             if table_exists(cur, "market_regime_snapshots"):
-                cur.execute("""SELECT snapshot_time,confidence,data_freshness_sec,rank_turnover_5m,top5_trade_share,
+                cur.execute("""SELECT snapshot_time,candidate_trend_state,candidate_flow_state,candidate_sentiment_state,
+                                      confidence,data_freshness_sec,rank_turnover_5m,top5_trade_share,
                                       top10_trade_share,top_sector_share,top3_sector_share,largecap_trade_share,
                                       positive_rank_share,avg_rank_change_rate,sector_count_top20,explanation
                                FROM market_regime_snapshots ORDER BY snapshot_time DESC LIMIT 1""")
                 r = cur.fetchone()
                 if r:
                     regime_metrics = {
-                        "snapshot_time": iso(r[0]), "confidence": r[1], "freshness_sec": r[2],
-                        "rank_turnover_5m": r[3], "top5_trade_share": r[4], "top10_trade_share": r[5],
-                        "top_sector_share": r[6], "top3_sector_share": r[7], "largecap_trade_share": r[8],
-                        "positive_rank_share": r[9], "avg_rank_change_rate": r[10],
-                        "sector_count_top20": r[11], "explanation": r[12] or {}
+                        "snapshot_time": iso(r[0]), "trend": r[1], "flow": r[2], "sentiment": r[3],
+                        "confidence": r[4], "freshness_sec": r[5],
+                        "rank_turnover_5m": r[6], "top5_trade_share": r[7], "top10_trade_share": r[8],
+                        "top_sector_share": r[9], "top3_sector_share": r[10], "largecap_trade_share": r[11],
+                        "positive_rank_share": r[12], "avg_rank_change_rate": r[13],
+                        "sector_count_top20": r[14], "explanation": r[15] or {}
                     }
 
             # latest telegram sample for catalyst matching
@@ -1341,6 +2334,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                             "recent_turnover_seconds":seconds,
                             "recent_turnover_state":state,
                             "sor_turnover_krw":current.get("turnover_krw") if current else None,
+                            "price_krw":current.get("price_krw") if current else None,
                             "exchange_at":current.get("exchange_at") if current else None
                         }
                 except Exception:
@@ -1398,6 +2392,8 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                     "recent_turnover_seconds":(flow_map.get(code) or {}).get("recent_turnover_seconds"),
                     "recent_turnover_state":(flow_map.get(code) or {}).get("recent_turnover_state"),
                     "sor_turnover_krw":(flow_map.get(code) or {}).get("sor_turnover_krw"),
+                    "price_krw":(flow_map.get(code) or {}).get("price_krw"),
+                    "quote_exchange_at":(flow_map.get(code) or {}).get("exchange_at"),
                     "catalyst": cat, "flow_state": flow,
                     "chart_state": (chart_map.get(code) or {}).get("state_ko","대기"),
                     "reversal_signal":(reversal_map.get(code) or {}).get("latest"),
@@ -1422,6 +2418,70 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
             home_candidates=build_home_candidates(cur,rows)
             paper_lab=build_paper_lab(cur)
             paper_feedback=build_paper_feedback(cur)
+
+            # AI Brokerage v1: explainable PAPER-only decisions for current Top candidates.
+            ai_brokerage={
+                "status":"NOT_CONFIGURED","paper_only":True,
+                "registry":{},"candidates":[],
+                "note":"6-Desk 판단 모듈 미로딩"
+            }
+            if AI_BROKERAGE_ENGINE and ai_context_from_dashboard_row:
+                try:
+                    candidate_map={x.get("code"):x for x in home_candidates if x.get("code")}
+                    theme_strength_map={
+                        g.get("name"):g.get("theme_strength")
+                        for g in sector_groups if g.get("name") and g.get("theme_strength") is not None
+                    }
+                    max_open=max(1,min(20,int(os.getenv("PAPER_MAX_OPEN","5"))))
+                    packets=[]
+                    for row in rows:
+                        candidate=candidate_map.get(row.get("code"))
+                        if not candidate:
+                            continue
+                        row["candidate"]={
+                            "score":candidate.get("attention_score"),
+                            "last_score":candidate.get("attention_score"),
+                            "entry_score":candidate.get("entry_score"),
+                            "peak_score":candidate.get("peak_score"),
+                            "primary_type":candidate.get("primary_type"),
+                            "event_type":candidate.get("event_type"),
+                        }
+                        ctx=ai_context_from_dashboard_row(
+                            row,regime,regime_metrics,theme_strength_map,paper_lab,max_open=max_open
+                        )
+                        packet=AI_BROKERAGE_ENGINE.evaluate(ctx).to_dict()
+                        row["ai_brokerage"]=packet
+                        packets.append(packet)
+                    state_order={"PAPER_ENTRY":0,"READY":1,"WATCH":2,"BLOCKED":3,"IGNORE":4}
+                    packets.sort(key=lambda x:(state_order.get(x.get("state"),9),-(x.get("conviction") or 0)))
+                    ai_brokerage={
+                        "status":"OK","paper_only":True,
+                        "registry":AI_BROKERAGE_ENGINE.registry.lifecycle_counts(),
+                        "candidates":packets,
+                        "note":"실거래 주문 없음 · candidate tracker Top 후보를 6개 Desk가 평가"
+                    }
+                except Exception as e:
+                    ai_brokerage={
+                        "status":"ERROR","paper_only":True,
+                        "registry":AI_BROKERAGE_ENGINE.registry.lifecycle_counts(),
+                        "candidates":[],
+                        "note":f"AI Brokerage 평가 실패: {type(e).__name__}: {e}"
+                    }
+
+            ai_morning_brief=build_ai_morning_brief(regime,sector_groups,ai_brokerage,paper_lab)
+            ai_strategy_performance=build_ai_strategy_performance(cur)
+            ai_capacity=build_ai_capacity_analysis(cur,ai_strategy_performance)
+            ai_allocation=build_ai_allocation(cur,rows,ai_brokerage,ai_capacity)
+            shadow_execution=build_shadow_execution_lab(cur)
+            shadow_execution["orderbook_feed"]=orderbook
+            ai_risk_control=build_ai_risk_control(
+                cur,rows,ai_brokerage,ai_capacity,ai_allocation,shadow_execution,
+                kiwoom,orderbook,regime,chartfeed
+            )
+            ai_resilience=build_ai_resilience_lab(cur)
+            ai_soak=build_ai_soak_gate(cur)
+            ai_release=build_ai_release_gate(cur,ai_risk_control,ai_resilience,ai_soak)
+            ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
             query_by_code={x["code"]:x for x in rows}
@@ -1639,7 +2699,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
 
     payload={
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "system": {"telegram": telegram, "kiwoom": kiwoom, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research, "deepresearch": deepresearch},
+        "system": {"telegram": telegram, "kiwoom": kiwoom, "orderbook": orderbook, "newsfeed": newsfeed, "dartfeed": dartfeed, "chartfeed": chartfeed, "mimosa": mimosa, "research": research, "deepresearch": deepresearch},
         "regime": regime,
         "regime_metrics": regime_metrics,
         "rank_time": iso(rank_time),
@@ -1669,6 +2729,17 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "home_candidates": home_candidates,
         "paper_lab": paper_lab,
         "paper_feedback": paper_feedback,
+        "ai_brokerage": ai_brokerage,
+        "ai_morning_brief": ai_morning_brief,
+        "ai_strategy_performance": ai_strategy_performance,
+        "ai_capacity": ai_capacity,
+        "ai_allocation": ai_allocation,
+        "ai_risk_control": ai_risk_control,
+        "ai_resilience": ai_resilience,
+        "ai_soak": ai_soak,
+        "ai_release": ai_release,
+        "ai_daily_review": ai_daily_review,
+        "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
     }
     with _DASH_CACHE_LOCK:
