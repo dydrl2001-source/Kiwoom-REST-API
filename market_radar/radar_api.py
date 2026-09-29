@@ -1204,11 +1204,16 @@ def build_ai_risk_control(
 
     final_rows=(ai_capacity or {}).get("final_lifecycle") or []
     supported=sum(1 for x in final_rows if x.get("action")=="PROMOTE_CANDIDATE_EXECUTION_ADJUSTED")
-    critical_feeds_ok=all(
-        str((v or {}).get("status") or "") not in ("ERROR","FAILED","DOWN","NOT_CONFIGURED","WAITING_FOR_CREDENTIALS")
-        and ((v or {}).get("age_sec") is None or float((v or {}).get("age_sec"))<=policy.max_critical_feed_age_sec)
-        for v in critical_feeds.values()
-    )
+    def _live_feed_ready(feed):
+        st=str((feed or {}).get("status") or "").upper()
+        age=(feed or {}).get("age_sec")
+        if not st or st in ("ERROR","FAILED","DOWN","NOT_CONFIGURED","WAITING_FOR_CREDENTIALS"):
+            return False
+        if st.startswith("WAITING") or st.startswith("NOT_") or st.startswith("ERROR"):
+            return False
+        return age is None or float(age)<=policy.max_critical_feed_age_sec
+
+    critical_feeds_ok=all(_live_feed_ready(v) for v in critical_feeds.values())
     orderbook_ok=(
         str(orderbook_feed.get("status") or "")=="OK"
         and (orderbook_feed.get("age_sec") is None or float(orderbook_feed.get("age_sec"))<=policy.max_orderbook_age_sec)
