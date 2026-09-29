@@ -1371,6 +1371,57 @@ def build_ai_risk_control(
     }
 
 
+def build_ai_resilience_lab(cur):
+    out={
+        "status":"WAITING","updated_at":None,
+        "scenario_count":0,"passed_count":0,"failed_count":0,
+        "replay_status":"NO_HISTORY","latest_run":None,"incidents":[],
+        "note":"Resilience Audit 표본 대기"
+    }
+    try:
+        if table_exists(cur,"ai_resilience_status"):
+            cur.execute("""SELECT updated_at,status,scenario_count,passed_count,
+                                  failed_count,replay_status,note
+                           FROM ai_resilience_status WHERE id=1""")
+            r=cur.fetchone()
+            if r:
+                out.update({
+                    "updated_at":iso(r[0]),"status":r[1],
+                    "scenario_count":int(r[2] or 0),"passed_count":int(r[3] or 0),
+                    "failed_count":int(r[4] or 0),"replay_status":r[5],
+                    "note":r[6] or out["note"],
+                })
+        if table_exists(cur,"ai_resilience_audit_runs"):
+            cur.execute("""SELECT run_time,status,scenario_count,passed_count,failed_count,
+                                  replay_rows,replay_status,payload
+                           FROM ai_resilience_audit_runs
+                           ORDER BY run_time DESC LIMIT 1""")
+            r=cur.fetchone()
+            if r:
+                out["latest_run"]={
+                    "run_time":iso(r[0]),"status":r[1],
+                    "scenario_count":int(r[2] or 0),"passed_count":int(r[3] or 0),
+                    "failed_count":int(r[4] or 0),"replay_rows":int(r[5] or 0),
+                    "replay_status":r[6],"payload":r[7] or {},
+                }
+        if table_exists(cur,"ai_incident_events"):
+            cur.execute("""SELECT incident_id,opened_at,last_seen_at,closed_at,state,raw_state,
+                                  recovery_state,healthy_streak,ack_required,acknowledged_at,
+                                  hard_triggers,warnings
+                           FROM ai_incident_events
+                           ORDER BY opened_at DESC LIMIT 8""")
+            out["incidents"]=[{
+                "incident_id":r[0],"opened_at":iso(r[1]),"last_seen_at":iso(r[2]),
+                "closed_at":iso(r[3]),"state":r[4],"raw_state":r[5],
+                "recovery_state":r[6],"healthy_streak":int(r[7] or 0),
+                "ack_required":bool(r[8]),"acknowledged_at":iso(r[9]),
+                "hard_triggers":r[10] or [],"warnings":r[11] or [],
+            } for r in cur.fetchall()]
+        return out
+    except Exception as e:
+        return {**out,"status":"ERROR","note":f"Resilience Lab 집계 실패: {type(e).__name__}"}
+
+
 def build_shadow_execution_lab(cur):
     empty={
         "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
@@ -2327,6 +2378,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 cur,rows,ai_brokerage,ai_capacity,ai_allocation,shadow_execution,
                 kiwoom,orderbook,regime,chartfeed
             )
+            ai_resilience=build_ai_resilience_lab(cur)
             ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
@@ -2581,6 +2633,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "ai_capacity": ai_capacity,
         "ai_allocation": ai_allocation,
         "ai_risk_control": ai_risk_control,
+        "ai_resilience": ai_resilience,
         "ai_daily_review": ai_daily_review,
         "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
