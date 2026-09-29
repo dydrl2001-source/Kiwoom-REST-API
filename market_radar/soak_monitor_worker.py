@@ -14,7 +14,7 @@ from radar_api import DASHBOARD_TOKEN, dashboard
 
 DB=os.getenv("DATABASE_URL","")
 POLL=max(60,min(3600,int(os.getenv("SOAK_SAMPLE_SECONDS","600"))))
-SCHEMA_VERSION=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.1")
+SCHEMA_VERSION=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.2")
 
 POLICY=SoakPolicy(
     min_duration_hours=max(1.0,float(os.getenv("SOAK_MIN_DURATION_HOURS","72"))),
