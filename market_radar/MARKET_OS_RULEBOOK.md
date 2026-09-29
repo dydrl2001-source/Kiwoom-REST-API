@@ -1143,3 +1143,212 @@ CONTROL Market OS에는 영향을 주지 않는다.
 
 v2.0의 목적은 **차기 ruleset을 제한된 deterministic preview cohort에서 안전하게 검증하고, 악화 시 자동으로 Canary만 중단하는 release engineering 단계**다.
 
+## Full Release Review Gate v2.1 — RELEASE_READY Without Deployment
+
+`CANARY_PROMOTION_CANDIDATE`는 full release 승인을 자동 생성하지 않는다. v2.1은 Canary를 전체 Versioned Dry Run과 다시 대조하고, Canary 표본 대표성·CONTROL rollback identity·release package 안전성을 모두 통과한 경우에만 사람이 `RELEASE_READY`를 승인할 수 있게 한다.
+
+### 자동 Gate 상태
+
+- `FULL_RELEASE_MORE_DATA`
+- `FULL_RELEASE_REVIEW_READY`
+
+현재 Canary Decision이 `CANARY_PROMOTION_CANDIDATE`이고 `review_eligible=true`이더라도 아래 검증 중 하나라도 실패하면 `FULL_RELEASE_MORE_DATA`다.
+
+### Canary vs Full Dry Run 효과 정합성
+
+primary cohort의 30m와 close를 각각 비교한다.
+
+```text
+effect ratio = Canary Δ평균 / Full Dry Run Δ평균
+```
+
+필수조건:
+
+- Canary Δ평균 > 0
+- Full Dry Run Δ평균 > 0
+- effect ratio 50% 이상
+- effect ratio 200% 이하
+- Canary vs Dry Run Δ양(+) 비율 차이 ≤ 8.0%p
+- Canary ΔMAE ≥ 0
+- Dry Run ΔMAE ≥ 0
+
+효과가 절반 이하로 붕괴하거나 2배를 초과해 급격히 커진 경우도 자동으로 좋은 것으로 보지 않는다.
+
+### Canary 표본 편향 Gate
+
+Canary는 deterministic hash sample이지만 실제 표본이 충분히 대표적인지 별도 확인한다.
+
+비교 단위는 `stock_code × KST trade day`.
+
+Canary scanner가 실제로 처리한 `canary_last_scanned_at`까지만 universe와 Canary 표본을 동일하게 자른다.
+
+최소조건:
+
+- eligible stock-days ≥ 20
+- selected Canary stock-days ≥ 6
+- 실제 Canary 배정률이 목표 배정률 ±10%p 이내
+- market stance 분포 Total Variation Distance ≤ 0.20
+- CONTROL watch tier 분포 Total Variation Distance ≤ 0.20
+
+Total Variation Distance는 0이면 동일한 분포, 1이면 완전히 분리된 분포다.
+
+### CONTROL / Rollback Readiness
+
+Full Release Gate는 현재 CONTROL identity가 release package의 base와 정확히 일치하는지 다시 확인한다.
+
+필수조건:
+
+- candidate base rule version = 현재 `RULE_VERSION`
+- release source ruleset ID 일치
+- source ruleset hash 일치
+- release package `live_activation=false`
+- `order_execution=false`
+- `position_sizing=false`
+- `blocked_override=false`
+- `auto_full_promotion=false`
+- candidate spec `live_activation=false`
+- candidate spec `blocked_override=false`
+
+CONTROL snapshot을 canonical JSON으로 hash하여 rollback target ID를 만든다.
+
+Rollback manifest에는:
+
+- CONTROL rule version
+- CONTROL snapshot hash
+- rollback target ID
+- primary view = CONTROL
+- order execution = unchanged CONTROL
+
+을 저장한다.
+
+`one_click_target_defined=true`는 rollback 대상 identity가 하나로 고정됐다는 의미다.
+
+v2.1에는 실제 one-click live rollback 명령이 없으므로:
+
+`one_click_live_command_available=false`
+
+로 명시한다.
+
+### Immutable Full Release Review
+
+Gate가 `FULL_RELEASE_REVIEW_READY`로 **진입한 transition event당 1개**의 immutable review package만 생성한다.
+
+단순 metric 변화만으로 revision을 계속 만들지 않는다.
+
+Package에는:
+
+- Release Candidate ID / version / package hash
+- source gate event
+- Full Release Gate evidence
+- Canary summary
+- Full Dry Run summary
+- Canary composition
+- candidate ruleset ID / hash
+- CONTROL rule version
+- deployment manifest
+- rollback manifest
+- review questions
+- release constraints
+
+를 동결한다.
+
+### 사람의 심사
+
+조회:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh full-release <review_id>
+```
+
+승인:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh full-release-review <review_id> approve --confirm
+```
+
+기각:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh full-release-review <review_id> reject --confirm
+```
+
+사람이 승인하는 순간에도 다음을 다시 검사한다.
+
+- current gate = `FULL_RELEASE_REVIEW_READY`
+- Release Candidate = `CANARY_ACTIVE`
+- Canary Decision = `CANARY_PROMOTION_CANDIDATE`
+- Canary `review_eligible=true`
+- source ruleset = `DRY_RUN_ACTIVE`
+- source succession = `SUCCESSION_CANDIDATE`
+- succession `review_eligible=true`
+
+모두 통과해야 review state가 `RELEASE_READY`가 된다.
+
+### Review state
+
+- `PENDING`
+- `RELEASE_READY`
+- `REJECTED`
+- `STALE_CANARY`
+- `SUPERSEDED`
+
+### 승인 취소 가능성
+
+v2.1에는 아직 live switch가 없기 때문에 `RELEASE_READY`도 계속 현재 근거에 종속된다.
+
+Canary/Full Release Gate가 다시 `FULL_RELEASE_REVIEW_READY`에서 이탈하면:
+
+```text
+PENDING or RELEASE_READY
+→ STALE_CANARY
+```
+
+로 자동 전환한다.
+
+즉 사람의 과거 승인이 현재의 약화된 evidence를 덮어쓰지 못한다.
+
+이후 다시 Gate가 REVIEW_READY로 진입하면 새로운 transition event와 새로운 review revision을 만든다.
+
+### Deployment Manifest의 의미
+
+v2.1 deployment manifest는 향후 live switch가 무엇을 바꿔야 하는지 명확히 동결하기 위한 문서다.
+
+항상:
+
+- `deployment_mode=NOT_AUTHORIZED`
+- `primary_view_switch=false`
+- `order_execution_change=false`
+- `position_sizing_change=false`
+- `next_allowed_step=HUMAN_RELEASE_APPROVAL`
+
+이다.
+
+### RELEASE_READY의 의미
+
+`RELEASE_READY`는 **사람이 현재 evidence package를 검토해 향후 live-switch 설계를 진행해도 된다고 승인했다는 메타데이터**다.
+
+v2.1은 다음을 하지 않는다.
+
+- live ruleset switch 안 함
+- primary Market OS tier 변경 안 함
+- 주문/포지션/비중 변경 안 함
+- rollback command 실행 안 함
+- Canary allocation 확대 안 함
+- deployment 자동 실행 안 함
+
+다음 단계에서 별도의 switch transaction / rollback transaction을 설계하기 전까지 CONTROL은 계속 유일한 live source다.
+
+### 저장 구조
+
+현재 Full Release Gate:
+- `market_os_full_release_gates`
+
+Gate transition:
+- `market_os_full_release_gate_events`
+
+Immutable human review:
+- `market_os_full_release_reviews`
+
+Review audit log:
+- `market_os_full_release_review_events`
+
