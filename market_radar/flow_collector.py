@@ -39,7 +39,7 @@ def detail_map(_requested):
             code=code_of(r)
             raw_quotes[code]={'response':r,'received_at':received.isoformat()}
             price=num(r.get('cur_prc'));change=num(r.get('flu_rt'))
-            checked=quote(r,received,code) or {}
+            checked=quote(r,received,code,(base.stock_meta.get(code) or {}).get('listed_shares')) or {}
             out[code]={'name':r.get('stk_nm'),'price':float(abs(price)) if price is not None else None,
                        'change':float(change) if change is not None else None,
                        'trade_value':checked.get('turnover_krw'),

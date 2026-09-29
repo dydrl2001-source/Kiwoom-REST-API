@@ -6,6 +6,13 @@ import json
 import os
 import re
 from flow_core import quote, metrics, group_rows, rotation_series, candidate_watchlist, reversal_signals, segment, dt, event_from_report, report_sections, SPEC, VERSION, KST
+from market_os_rule_engine import market_os_watchlist, VERSION as MARKET_OS_VERSION
+from market_os_control import (
+    base_control as market_os_base_control,
+    apply_watchlist as apply_market_os_control,
+    requires_micro as market_os_control_requires_micro,
+    control_hash as market_os_control_hash,
+)
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS radar_flow_quotes (
@@ -44,7 +51,7 @@ def save_batch(batch_time,raw_records,rank_map,trade_rank_map,stock_meta):
     batch_time=dt(batch_time)
     rows=[]
     for code,raw in raw_records.items():
-        data=quote(raw['response'],raw['received_at'],code)
+        data=quote(raw['response'],raw['received_at'],code,(stock_meta.get(code) or {}).get('listed_shares'))
         if not data:continue
         data.update({'batch_time':batch_time.isoformat(),'query_rank':rank_map.get(code),
                      'trade_rank':trade_rank_map.get(code),
@@ -160,6 +167,131 @@ def theme_memberships(cur,codes):
         })
     return out
 
+
+
+def active_market_os_control(cur):
+    base=market_os_base_control(MARKET_OS_VERSION)
+    if not exists(cur,'market_os_control_state'):
+        return base
+    cur.execute("""SELECT control_id,mode,active_version_label,base_rule_version,
+                          ruleset_id,ruleset_hash,ruleset_spec,source_review_id,
+                          switch_transaction_id,control_hash,activated_at,updated_at
+                   FROM market_os_control_state WHERE id=1""")
+    r=cur.fetchone()
+    if not r:
+        return base
+    out={
+        'control_id':r['control_id'],'mode':r['mode'],
+        'active_version_label':r['active_version_label'],
+        'base_rule_version':r['base_rule_version'],
+        'ruleset_id':r['ruleset_id'],'ruleset_hash':r['ruleset_hash'],
+        'ruleset_spec':r['ruleset_spec'],
+        'source_review_id':r['source_review_id'],
+        'switch_transaction_id':r['switch_transaction_id'],
+        'control_hash':r['control_hash'],
+        'activated_at':r['activated_at'].isoformat() if r['activated_at'] else None,
+        'updated_at':r['updated_at'].isoformat() if r['updated_at'] else None,
+    }
+    if out['mode']=='BASE':
+        return out
+    reason=None
+    if market_os_control_hash(out)!=out.get('control_hash'):
+        reason='CONTROL_HASH_INVALID'
+    elif not out.get('switch_transaction_id') or not exists(cur,'market_os_switch_transactions'):
+        reason='SWITCH_TRANSACTION_MISSING'
+    else:
+        cur.execute("""SELECT state,candidate_hash FROM market_os_switch_transactions
+                       WHERE switch_transaction_id=%s""",(out['switch_transaction_id'],))
+        tx=cur.fetchone()
+        if not tx or tx['state'] not in ('COMMITTED','HEALTHY'):
+            reason='SWITCH_TRANSACTION_NOT_ACTIVE'
+        elif tx['candidate_hash']!=out.get('control_hash'):
+            reason='SWITCH_CANDIDATE_HASH_MISMATCH'
+    if reason:
+        return {
+            **base,
+            'selector_status':'FALLBACK_BASE',
+            'selector_fallback_reason':reason,
+            '_requested_control_id':out.get('control_id'),
+            '_requested_switch_transaction_id':out.get('switch_transaction_id'),
+        }
+    out['selector_status']='VALID'
+    return out
+
+
+def runtime_market_os_microstructure(cur,codes):
+    codes=[x for x in codes if x]
+    if not codes or not exists(cur,'market_realtime_5s_bars'):
+        return {}
+    cur.execute("""SELECT stock_code,SUM(buy_volume) AS buy,SUM(sell_volume) AS sell,
+                          SUM(tick_count) AS ticks,SUM(gap_count) AS gaps
+                   FROM market_realtime_5s_bars
+                   WHERE stock_code=ANY(%s) AND bucket_time>=now()-interval '20 seconds'
+                   GROUP BY stock_code""",(codes,))
+    out={}
+    for r in cur.fetchall():
+        buy=float(r['buy'] or 0);sell=float(r['sell'] or 0);den=buy+sell
+        out[r['stock_code']]={
+            'micro_buy_share_15s':buy/den if den else None,
+            'micro_tick_count_15s':int(r['ticks'] or 0),
+            'micro_gap_count_15s':int(r['gaps'] or 0),
+            'micro_strength':None,
+        }
+    cur.execute("""SELECT DISTINCT ON(stock_code) stock_code,last_strength,bucket_time
+                   FROM market_realtime_5s_bars
+                   WHERE stock_code=ANY(%s) AND bucket_time<=now()
+                   ORDER BY stock_code,bucket_time DESC""",(codes,))
+    for r in cur.fetchall():
+        x=out.setdefault(r['stock_code'],{
+            'micro_buy_share_15s':None,'micro_tick_count_15s':0,
+            'micro_gap_count_15s':0,'micro_strength':None
+        })
+        x['micro_strength']=float(r['last_strength']) if r['last_strength'] is not None else None
+    return out
+
+
+def _market_os_session(now):
+    from datetime import time as dtime
+    t=now.astimezone(KST).time()
+    if t<dtime(9,0):return 'PRE'
+    if t<dtime(9,20):return 'OPEN_20'
+    if t<dtime(11,30):return 'MORNING'
+    if t<dtime(13,30):return 'MIDDAY'
+    if t<dtime(14,50):return 'AFTERNOON'
+    if t<=dtime(15,30):return 'CLOSE'
+    return 'AFTER'
+
+
+def latest_market_regime(cur):
+    if not exists(cur,'market_regime_snapshots'):
+        return None
+    cur.execute("""SELECT snapshot_time,candidate_trend_state,candidate_flow_state,candidate_sentiment_state,
+                    candidate_label,stable_label,confidence,data_freshness_sec,rank_turnover_5m,
+                    top5_trade_share,top10_trade_share,top_sector_share,top3_sector_share,
+                    largecap_trade_share,positive_rank_share,avg_rank_change_rate,sector_count_top20
+                   FROM market_regime_snapshots ORDER BY snapshot_time DESC LIMIT 1""")
+    r=cur.fetchone()
+    if not r:return None
+    snap=r['snapshot_time'];now=datetime.now(timezone.utc)
+    age=max(0,int((now-snap).total_seconds())) if snap else None
+    freshness=r['data_freshness_sec']
+    stale=bool((freshness is not None and freshness>120) or (age is not None and age>150))
+    return {
+        'snapshot_time':snap.isoformat() if snap else None,
+        'candidate_trend_state':r['candidate_trend_state'],
+        'candidate_flow_state':r['candidate_flow_state'],
+        'candidate_sentiment_state':r['candidate_sentiment_state'],
+        'candidate_label':r['candidate_label'],'stable_label':r['stable_label'],
+        'confidence':r['confidence'],'data_freshness_sec':freshness,
+        'snapshot_age_sec':age,'stale':stale,
+        'rank_turnover_5m':r['rank_turnover_5m'],
+        'top5_trade_share':r['top5_trade_share'],'top10_trade_share':r['top10_trade_share'],
+        'top_sector_share':r['top_sector_share'],'top3_sector_share':r['top3_sector_share'],
+        'largecap_trade_share':r['largecap_trade_share'],
+        'positive_rank_share':r['positive_rank_share'],
+        'avg_rank_change_rate':r['avg_rank_change_rate'],
+        'sector_count_top20':r['sector_count_top20']
+    }
 
 
 def candidate_tracking_payload(current_candidates, now, sample_time):
@@ -436,6 +568,11 @@ def desk_payload(include_tracking=True):
         themes=theme_memberships(cur,history)
         charts=latest_chart_states(cur,history)
         strategies=latest_strategy_signals(cur,history)
+        market_regime=latest_market_regime(cur)
+        market_os_control=active_market_os_control(cur)
+        control_micro=(runtime_market_os_microstructure(cur,list(history))
+                       if market_os_control_requires_micro(market_os_control.get('ruleset_spec') or {})
+                       else {})
         automation={'enabled':False,'notice':'설정 미확인'}
         try:
             from web_research_engine import Config, usage_count
@@ -470,6 +607,31 @@ def desk_payload(include_tracking=True):
     by_sector,_=group_rows(rows,history,'sector')
     rotation=rotation_series(rows,history,10)
     candidates=candidate_watchlist(rows,rotation,12)
+    market_os_base=market_os_watchlist(rows,rotation,market_regime,12)
+    for x in market_os_base:
+        x['session_bucket']=_market_os_session(now)
+    try:
+        market_os,control_meta=apply_market_os_control(
+            market_os_base,market_os_control,control_micro
+        )
+        control_meta={
+            **market_os_control,**control_meta,
+            'requested_control_id':market_os_control.get('_requested_control_id') or market_os_control.get('control_id'),
+            'requested_switch_transaction_id':market_os_control.get('_requested_switch_transaction_id') or market_os_control.get('switch_transaction_id'),
+        }
+        if market_os_control.get('selector_status')=='FALLBACK_BASE':
+            control_meta['apply_status']='FALLBACK_BASE'
+            control_meta['error']=market_os_control.get('selector_fallback_reason')
+    except Exception as exc:
+        fallback=market_os_base_control(MARKET_OS_VERSION)
+        market_os,base_meta=apply_market_os_control(market_os_base,fallback,{})
+        control_meta={
+            **fallback,**base_meta,
+            'apply_status':'FALLBACK_BASE',
+            'requested_control_id':market_os_control.get('control_id'),
+            'requested_switch_transaction_id':market_os_control.get('switch_transaction_id'),
+            'error':type(exc).__name__,
+        }
     tracking=candidate_tracking_payload(candidates,now,newest) if include_tracking else {
         'status':'SKIPPED_FOR_SNAPSHOT','current_count':len(candidates),
         'recent_dropouts':[],'theme_persistence':[],'state_counts':{}
@@ -485,6 +647,9 @@ def desk_payload(include_tracking=True):
             'rows':rows,'catalyst_groups':by_catalyst,'theme_groups':by_theme,'sector_groups':by_sector,
             'theme_rotation':rotation,'watch_candidates':candidates,'candidate_tracking':tracking,
             'candidate_journal':journal,
+            'market_os_watchlist':market_os,'market_regime':market_regime,
+            'market_os_version':control_meta.get('active_version_label') or MARKET_OS_VERSION,
+            'market_os_control':control_meta,
             'automation':automation,'coverage':{**coverage,'theme_mapped_stocks':theme_mapped,'observed_stocks':len(rows)},
             'recent_trade_count':recent,'unit_version':VERSION,'unit_source':SPEC,
             'notice':'누적대금 차이와 거래비중 변화입니다. 순매수·자금 유입/유출을 의미하지 않습니다. '

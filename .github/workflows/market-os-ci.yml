@@ -1,0 +1,86 @@
+name: Market OS CI
+
+on:
+  pull_request:
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-os-ci.yml"
+  push:
+    branches:
+      - "feature/market-os-live-v2"
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-os-ci.yml"
+
+jobs:
+  market-os:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check fastapi uvicorn "psycopg[binary]" requests telethon websockets
+
+      - name: Compile integrated radar Python
+        run: |
+          python -m py_compile \
+            market_radar/flow_core.py \
+            market_radar/flow_store.py \
+            market_radar/flow_collector.py \
+            market_radar/kiwoom_feed.py \
+            market_radar/radar_api.py \
+            market_radar/radar_ui_v2.py \
+            market_radar/radar_web_app.py \
+            market_radar/mobile_ui.py \
+            market_radar/evidence_identity.py \
+            market_radar/paper_trade_engine.py \
+            market_radar/paper_feedback_engine.py \
+            market_radar/market_os_rule_engine.py \
+            market_radar/market_os_learning.py \
+            market_radar/market_os_store.py \
+            market_radar/market_os_routes.py \
+            market_radar/market_os_live_validation.py \
+            market_radar/market_os_shadow.py \
+            market_radar/market_os_dossier.py \
+            market_radar/market_os_ruleset.py \
+            market_radar/market_os_release.py \
+            market_radar/market_os_full_release.py \
+            market_radar/market_os_control.py \
+            market_radar/market_os_execution.py \
+            market_radar/kiwoom_realtime_0b.py
+
+      - name: Run Market OS unit tests
+        working-directory: market_radar
+        run: python -m unittest discover -s tests -p "test_market_os*.py" -v
+
+      - name: Run integrated compatibility tests
+        working-directory: market_radar
+        run: |
+          python -m unittest tests.test_candidate_tracker -v
+          python -m unittest tests.test_sector_board -v
+          python -m unittest tests.test_mobile_ui -v
+          python -m unittest tests.test_paper_trade -v
+          python -m unittest tests.test_paper_feedback -v
+
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check market_radar/market_os_ui.js
+          node --check market_radar/flow_ui.js
+
+      - name: Validate rulebook JSON
+        run: python -m json.tool market_radar/rulebook/market_os_rules.json >/dev/null
+
+      - name: Check rollout shell syntax
+        run: |
+          bash -n market_radar/local/update_flow_desk.sh
+          bash -n market_radar/local/check_flow_desk.sh
+          bash -n market_radar/local/check_market_os.sh
+          bash -n market_radar/local/check_market_os_live.sh
+          bash -n market_radar/local/launch_market_os_live.sh
+          bash -n market_radar/local/check_market_os_learning.sh
+          bash -n market_radar/local/shadow_rule_admin.sh
