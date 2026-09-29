@@ -11,7 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 DB=os.getenv("DATABASE_URL","")
-SCHEMA_VERSION=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.1")
+SCHEMA_VERSION=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.2")
 MODULES=(
     "ai_brokerage_worker",
     "paper_trade_engine",
