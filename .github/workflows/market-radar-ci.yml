@@ -1,0 +1,49 @@
+name: Market Radar CI
+
+on:
+  pull_request:
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-radar-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-radar-ci.yml"
+
+jobs:
+  market-radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install fastapi uvicorn "psycopg[binary]" requests telethon
+      - name: Compile Market Radar
+        working-directory: market_radar
+        run: python -m compileall -q .
+      - name: Run Market Radar tests
+        working-directory: market_radar
+        env:
+          DATABASE_URL: ""
+          DASHBOARD_TOKEN: test
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Static live-order guard
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          roots=[Path("market_radar/ai_brokerage"),Path("market_radar/risk_control_worker.py"),Path("market_radar/resilience_audit_worker.py"),Path("market_radar/capital_allocation_worker.py"),Path("market_radar/schema_migrate.py")]
+          banned=("send_order","place_order","/api/dostk/ordr")
+          for root in roots:
+              files=[root] if root.is_file() else list(root.rglob("*.py"))
+              for p in files:
+                  text=p.read_text(encoding="utf-8")
+                  for token in banned:
+                      assert token not in text, f"{token} found in {p}"
+          print("live-order guard PASS")
+          PY
+      - name: Build local image
+        run: docker build -f market_radar/local/Dockerfile -t market-radar-ci .
