@@ -923,3 +923,223 @@ retention = Ruleset Dry Run Δ평균 / Frozen Shadow Δ평균
 
 현재 v1.9는 release package, canary, live switch, 주문 로직을 생성하지 않는다.
 
+## Release Candidate / Canary v2.0 — Safe Release Before Any Live Switch
+
+`SUCCESSION_CANDIDATE`는 Release Candidate를 자동 생성하지 않는다. 사람이 먼저 immutable Release Candidate package를 만들고, 다시 별도의 명시적 명령으로 Canary를 시작해야 한다.
+
+### 수동 단계
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh release-create <ruleset_id> --confirm
+bash market_radar/local/shadow_rule_admin.sh release <release_candidate_id>
+bash market_radar/local/shadow_rule_admin.sh canary-start <release_candidate_id> --confirm
+bash market_radar/local/shadow_rule_admin.sh canary-stop <release_candidate_id> --confirm
+```
+
+`release-create` 시점에도 다음을 재검증한다.
+
+- source ruleset = `DRY_RUN_ACTIVE`
+- current succession state = `SUCCESSION_CANDIDATE`
+- `review_eligible=true`
+- 최신 `SUCCESSION_CANDIDATE` transition event 존재
+
+같은 ruleset + 같은 succession transition에 대해 Release Candidate를 다시 만들 수 없다.
+
+### Release Candidate package
+
+Release package는 다음을 고정한다.
+
+- release spec version
+- source ruleset ID / hash / version label
+- source succession event ID
+- candidate ruleset immutable spec
+- Canary allocation
+- assignment unit
+- safety flags
+
+항상:
+
+- `live_activation=false`
+- `order_execution=false`
+- `position_sizing=false`
+- `blocked_override=false`
+- `auto_full_promotion=false`
+- `primary_view_replacement=false`
+
+Release package 전체를 canonical JSON으로 hash하여 `release_candidate_id`와 release version label을 만든다.
+
+### Canary 시작은 별도 승인
+
+Release Candidate 생성만으로 Canary가 시작되지 않는다.
+
+`canary-start` 시점에 다시:
+
+- Release Candidate status = `RELEASE_CANDIDATE`
+- source ruleset = `DRY_RUN_ACTIVE`
+- source succession = `SUCCESSION_CANDIDATE`
+- source succession `review_eligible=true`
+
+를 요구한다.
+
+`canary_started_at`을 새로운 prospective boundary로 고정하며, 그 이전 assessment는 Canary에 포함하지 않는다.
+
+### Deterministic stock-day assignment
+
+Canary 표본은 성과, tier, 종목명, 재료, 향후 outcome을 보고 선택하지 않는다.
+
+```text
+SHA256(
+  release_candidate_id
+  + stock_code
+  + KST_trade_day
+)
+```
+
+를 bucket으로 변환해 고정 비율만 선택한다.
+
+v2.0 기본 비율은 20%이며 코드상 허용 최대는 25%다.
+
+assignment unit은 `STOCK_KST_DAY`이므로 같은 종목은 같은 거래일 동안 Canary/CONTROL 사이를 장중에 오가지 않는다.
+
+### Scanner cursor
+
+선택되지 않은 80% assessment를 저장하지 않으면서도 같은 구간을 반복 스캔하지 않도록 Release Candidate에 `canary_last_scanned_at` cursor를 둔다.
+
+스캔은 개별 row limit가 아니라 **complete assessment timestamp 묶음** 단위로 전진한다.
+
+따라서 같은 snapshot time의 일부 종목만 처리하고 나머지를 건너뛰는 문제를 피한다.
+
+### Canary preview
+
+선택된 stock-day에 대해서만:
+
+- CONTROL tier = 실제 당시 Market OS `watch_tier`
+- Candidate tier = immutable candidate ruleset 결과
+
+를 저장한다.
+
+Canary preview는 Learning 영역에서만 노출한다.
+
+메인 Market OS shortlist의 `watch_tier`, 실제 화면 우선순위, 주문, 포지션은 CONTROL 그대로다.
+
+### Canary Safety Gate
+
+상태:
+
+- `CANARY_COLLECTING`
+- `CANARY_HEALTHY`
+- `CANARY_PROMOTION_CANDIDATE`
+- `CANARY_ROLLBACK_REQUIRED`
+
+기본 비교 문턱:
+
+- CONTROL/CANDIDATE N ≥ 12
+- 종목 ≥ 4
+- 거래일 ≥ 2
+- membership change ≥ 3
+
+강한 promotion 검토 문턱:
+
+- N ≥ 25
+- 종목 ≥ 6
+- 거래일 ≥ 4
+- membership change ≥ 6
+
+기본 BENEFICIAL / HARMFUL 방향은 기존 Shadow/Ruleset 기준과 동일하게 사용한다.
+
+### 자동 rollback 조건
+
+비교 가능한 Canary 자료에서 다음이 확인되면:
+
+- 30m HARMFUL
+- close HARMFUL
+- D+1 HARMFUL
+- RECENT 30m HARMFUL
+- RECENT close HARMFUL
+
+`CANARY_ROLLBACK_REQUIRED`로 전환한다.
+
+Release lifecycle도:
+
+```text
+CANARY_ACTIVE
+→ CANARY_ROLLBACK_REQUIRED
+```
+
+로 자동 전환하여 신규 Canary preview 관측을 중단한다.
+
+이 rollback은 preview Canary 중단이며 live CONTROL에는 변경이 없다.
+
+### Source stale
+
+Canary 도중:
+
+- source ruleset이 더 이상 `DRY_RUN_ACTIVE`가 아니거나
+- succession state가 `SUCCESSION_CANDIDATE`에서 이탈하거나
+- succession `review_eligible=false`
+
+이면:
+
+```text
+CANARY_ACTIVE
+→ CANARY_SOURCE_STALE
+```
+
+로 자동 전환하고 새 Canary 관측을 중단한다.
+
+### CANARY_PROMOTION_CANDIDATE
+
+전체 30m / close가 강한 BENEFICIAL이어도 최근 구간 evidence 없이 promotion 후보가 되지 않는다.
+
+최소:
+
+- 전체 30m BENEFICIAL
+- 전체 close BENEFICIAL
+- 30m / close 강한 표본 문턱 통과
+- RECENT 30m BENEFICIAL
+- RECENT close BENEFICIAL
+- 비교 가능한 D+1 HARMFUL 아님
+
+을 요구한다.
+
+`CANARY_PROMOTION_CANDIDATE`는 사람이 full-release 설계를 검토할 자격일 뿐이다.
+
+v2.0에서는 full live promotion command를 제공하지 않는다.
+
+### 저장 구조
+
+Release Candidate:
+- `market_os_release_candidates`
+
+Release lifecycle:
+- `market_os_release_events`
+
+Canary selected observations:
+- `market_os_canary_observations`
+
+Canary outcome summaries:
+- `market_os_canary_summary`
+
+Canary safety decision:
+- `market_os_canary_decisions`
+
+Canary decision history:
+- `market_os_canary_decision_events`
+
+### Kill switch
+
+`MARKET_OS_CANARY_ENABLED=0`이면 신규 Canary preview 관측과 Canary summary 계산을 중단한다.
+
+CONTROL Market OS에는 영향을 주지 않는다.
+
+### v2.0이 하지 않는 것
+
+- live ruleset switch 안 함
+- primary Market OS `watch_tier` 변경 안 함
+- 주문/포지션/비중 변경 안 함
+- Canary 비율 자동 확대 안 함
+- full rollout 자동 실행 안 함
+- `CANARY_PROMOTION_CANDIDATE` 자동 promotion 안 함
+
+v2.0의 목적은 **차기 ruleset을 제한된 deterministic preview cohort에서 안전하게 검증하고, 악화 시 자동으로 Canary만 중단하는 release engineering 단계**다.
+
