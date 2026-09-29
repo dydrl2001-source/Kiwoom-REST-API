@@ -1965,7 +1965,7 @@ def health():
 @app.get("/health/ready")
 def health_ready():
     checks={"db":False,"schema":False,"risk_control":False}
-    version=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.1")
+    version=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.2")
     try:
         with get_db() as c:
             with c.cursor() as cur:
