@@ -42,6 +42,10 @@ try:
     from ai_brokerage.execution_model import SizingPolicy as AISizingPolicy
     from ai_brokerage.execution_model import BookPolicy as AIBookPolicy
     from ai_brokerage.execution_model import estimate_book_capacity as ai_estimate_book_capacity
+    from ai_brokerage.risk_control import RiskControlPolicy as AIRiskControlPolicy
+    from ai_brokerage.risk_control import evaluate_kill_switch as ai_evaluate_kill_switch
+    from ai_brokerage.risk_control import evaluate_live_readiness as ai_evaluate_live_readiness
+    from ai_brokerage.risk_control import rebalance_portfolio as ai_rebalance_portfolio
 except Exception:
     try:
         from market_radar.ai_brokerage.decision_engine import DecisionEngine as AIBrokerageDecisionEngine
@@ -60,6 +64,10 @@ except Exception:
         from market_radar.ai_brokerage.execution_model import SizingPolicy as AISizingPolicy
         from market_radar.ai_brokerage.execution_model import BookPolicy as AIBookPolicy
         from market_radar.ai_brokerage.execution_model import estimate_book_capacity as ai_estimate_book_capacity
+        from market_radar.ai_brokerage.risk_control import RiskControlPolicy as AIRiskControlPolicy
+        from market_radar.ai_brokerage.risk_control import evaluate_kill_switch as ai_evaluate_kill_switch
+        from market_radar.ai_brokerage.risk_control import evaluate_live_readiness as ai_evaluate_live_readiness
+        from market_radar.ai_brokerage.risk_control import rebalance_portfolio as ai_rebalance_portfolio
     except Exception:
         AIBrokerageDecisionEngine = None
         ai_context_from_dashboard_row = None
@@ -77,6 +85,10 @@ except Exception:
         AISizingPolicy = None
         AIBookPolicy = None
         ai_estimate_book_capacity = None
+        AIRiskControlPolicy = None
+        ai_evaluate_kill_switch = None
+        ai_evaluate_live_readiness = None
+        ai_rebalance_portfolio = None
 
 AI_BROKERAGE_ENGINE = AIBrokerageDecisionEngine() if AIBrokerageDecisionEngine else None
 
