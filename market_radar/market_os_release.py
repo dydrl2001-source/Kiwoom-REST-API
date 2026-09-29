@@ -179,10 +179,19 @@ def canary_decision(overall_summaries,slices):
     strongclose=_effect(cclose,strong=True)
     evidence["overall_30m_strong"]=strong30
     evidence["overall_close_strong"]=strongclose
+    if r30!="BENEFICIAL" or rclose!="BENEFICIAL":
+        return {
+            "state":"CANARY_HEALTHY","review_eligible":False,
+            "reason_codes":["30M_CLOSE_BENEFICIAL","RECENT_CANARY_EVIDENCE_PENDING"],
+            "evidence":evidence,
+        }
     if strong30=="BENEFICIAL" and strongclose=="BENEFICIAL":
         return {
             "state":"CANARY_PROMOTION_CANDIDATE","review_eligible":True,
-            "reason_codes":["30M_CLOSE_BENEFICIAL","STRONG_CANARY_GATE_PASSED","NO_D1_HARM"],
+            "reason_codes":[
+                "30M_CLOSE_BENEFICIAL","RECENT_30M_CLOSE_BENEFICIAL",
+                "STRONG_CANARY_GATE_PASSED","NO_D1_HARM"
+            ],
             "evidence":evidence,
         }
     return {
