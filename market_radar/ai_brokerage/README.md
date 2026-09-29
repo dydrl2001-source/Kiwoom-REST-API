@@ -316,3 +316,101 @@ The current Capacity Model measures capacity within the **observed 10-level book
 It does not claim institutional AUM capacity, hidden-liquidity availability, queue priority, market impact beyond displayed depth, or multi-day liquidation capacity.
 
 Those require additional data and models.
+
+
+## Capital Allocation Optimizer — Shadow Portfolio Construction
+
+The Capital Allocation Optimizer converts multiple simultaneous PAPER_ENTRY candidates into a constrained **Shadow risk-budget proposal**.
+
+It does not place orders and does not claim to maximize future return.
+
+### Inputs
+
+For each current candidate:
+
+- 6-Desk conviction
+- Strategy fit
+- execution-adjusted median net return
+- execution-adjusted Profit Factor
+- positive ratio
+- median round-trip Implementation Shortfall
+- Paper→Shadow return drag
+- evidence-supported strategy capacity
+- current point-in-time book capacity fallback
+- current price
+- volatility-derived stop distance
+- theme / strategy family
+- final lifecycle action
+
+Portfolio context:
+
+- existing Shadow open risk
+- total portfolio risk cap
+- theme risk cap
+- strategy-family risk cap
+- max open positions
+- recent 3-minute return correlations
+
+### Evidence scaling
+
+Allocation is deliberately asymmetric.
+
+- execution-adjusted promotion candidate + evidence-supported capacity: 100% research risk allowance
+- execution gate pending: reduced allowance
+- sample-building / context-limited: strongly reduced allowance
+- execution blocked / demotion-rework: zero allocation
+
+Default research scales:
+
+- pending: 35%
+- sample-building: 20%
+
+### Correlation handling
+
+Recent 3-minute bars are aligned by timestamp and pairwise return correlation is calculated when enough common observations exist.
+
+High positive correlation reduces marginal allocation.
+
+Missing correlation is **not assumed to be zero**. Once other positions have risk assigned, unknown pair correlations receive a separate uncertainty penalty.
+
+### Deterministic constrained allocator
+
+The optimizer allocates small risk chunks iteratively.
+
+For every marginal allocation it checks:
+
+1. candidate risk cap
+2. total portfolio risk cap
+3. theme risk cap
+4. strategy-family risk cap
+5. max-open constraint
+6. evidence scale
+7. capacity
+8. positive-correlation penalty
+9. unknown-correlation penalty
+10. current saturation of that candidate's own risk budget
+
+The reported priority score is a transparent **research priority score**, not expected return.
+
+Its components are execution-adjusted edge, Profit Factor, positive ratio, current conviction, strategy fit and execution-cost penalties.
+
+### Audit trail
+
+`capital_allocation_worker.py` persists minute-level proposals to:
+
+- `ai_allocation_snapshots`
+- `ai_allocation_status`
+
+Each snapshot stores the complete allocation payload, current risk utilization and proposed new positions.
+
+This supports later questions such as:
+
+> Why did the system allocate more risk to one candidate and less to another at that time?
+
+### Core constraint
+
+> A valid stock idea does not automatically deserve capital.
+
+Capital is allocated only after strategy evidence, execution quality, capacity, portfolio concentration and correlation are considered together.
+
+All allocation output remains PAPER/Shadow-only.
