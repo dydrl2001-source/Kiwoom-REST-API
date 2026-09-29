@@ -524,8 +524,9 @@ def latest_microstructure(cur,codes):
 
 def learning_payload():
     current=desk_payload()
+    active_rule_version=current.get("market_os_version") or RULE_VERSION
     learning={
-        "rule_version":RULE_VERSION,
+        "rule_version":active_rule_version,
         "mode":"SHADOW_LEARNING",
         "notice":"성과를 자동 측정하고 조건별 차이를 학습하지만, 충분한 표본 전에는 규칙 임계값을 자동 변경하지 않습니다.",
         "status":None,"segments":[],"interactions":[],"validation_candidates":[],
@@ -573,6 +574,14 @@ def learning_payload():
             "summary":{"more_data":0,"review_ready":0,"pending":0,
                        "release_ready":0,"rejected":0,"stale_canary":0,"superseded":0},
             "notice":"Canary promotion 후보를 전체 Dry Run, Canary 대표성, CONTROL rollback identity와 다시 대조한 immutable Full Release Review입니다. RELEASE_READY도 배포가 아닙니다."
+        },
+        "control_switch":{
+            "current":current.get("market_os_control") or {},
+            "transactions":[],"events":[],
+            "summary":{"prepared":0,"committed":0,"healthy":0,"rolled_back":0,
+                       "auto_rolled_back":0,"cancelled":0},
+            "live_switch_enabled":os.getenv("MARKET_OS_LIVE_SWITCH_ENABLED","0").strip().lower() in {"1","true","yes","on"},
+            "notice":"CONTROL switch는 RELEASE_READY review에서 prepare→commit의 별도 사람 승인으로만 진행됩니다. 주문/포지션은 변경하지 않으며 health window 실패 시 이전 CONTROL로 자동 rollback합니다."
         },
         "notes":[],"daily_assessments":[],
     }
@@ -658,7 +667,7 @@ def learning_payload():
                                WHEN 'VALIDATED' THEN 4
                                WHEN 'FORMING' THEN 5
                                ELSE 6 END,
-                               samples DESC,segment_type,segment_value""",(RULE_VERSION,))
+                               samples DESC,segment_type,segment_value""",(active_rule_version,))
             for r in cur.fetchall():
                 x=dict(r)
                 for k in ("first_seen_at","last_seen_at","stage_since","last_transition_at"):
@@ -1107,6 +1116,36 @@ def learning_payload():
                 x=dict(r)
                 x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
                 learning["full_release_review"]["review_events"].append(x)
+        if exists(cur,"market_os_switch_transactions"):
+            cur.execute("""SELECT switch_transaction_id,source_review_id,release_candidate_id,
+                                  ruleset_id,state,expected_control_hash,candidate_hash,
+                                  pre_switch_watch_count,prepared_at,committed_at,
+                                  health_deadline,completed_at,rollback_at,rollback_reason,note,
+                                  previous_control,candidate_control
+                           FROM market_os_switch_transactions
+                           ORDER BY prepared_at DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("prepared_at","committed_at","health_deadline","completed_at","rollback_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["control_switch"]["transactions"].append(x)
+            txs=learning["control_switch"]["transactions"]
+            sm=learning["control_switch"]["summary"]
+            sm["prepared"]=sum(x["state"]=="PREPARED_SWITCH" for x in txs)
+            sm["committed"]=sum(x["state"]=="COMMITTED" for x in txs)
+            sm["healthy"]=sum(x["state"]=="HEALTHY" for x in txs)
+            sm["rolled_back"]=sum(x["state"]=="ROLLED_BACK" for x in txs)
+            sm["auto_rolled_back"]=sum(x["state"]=="AUTO_ROLLED_BACK" for x in txs)
+            sm["cancelled"]=sum(x["state"]=="CANCELLED" for x in txs)
+        if exists(cur,"market_os_switch_events"):
+            cur.execute("""SELECT event_id,switch_transaction_id,event_time,event_type,
+                                  from_state,to_state,evidence
+                           FROM market_os_switch_events
+                           ORDER BY event_time DESC LIMIT 40""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["control_switch"]["events"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
