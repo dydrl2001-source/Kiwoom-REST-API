@@ -1947,6 +1947,10 @@ def ensure_feedback_table(cur):
     CREATE INDEX IF NOT EXISTS idx_radar_feedback_cat_time ON radar_feedback(category,created_at DESC);
     """)
 
+@app.get("/health/live")
+def health_live():
+    return {"status":"ok","service":"market-radar"}
+
 @app.get("/health")
 def health():
     try:
@@ -1954,9 +1958,41 @@ def health():
             with c.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()
-        return {"status": "ok", "db": "ok"}
-    except Exception as e:
-        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+        return {"status":"ok","db":"ok"}
+    except Exception:
+        return JSONResponse({"status":"error","db":"unavailable"},status_code=500)
+
+@app.get("/health/ready")
+def health_ready():
+    checks={"db":False,"schema":False,"risk_control":False}
+    version=os.getenv("MARKET_RADAR_SCHEMA_VERSION","2026.09.29.1")
+    try:
+        with get_db() as c:
+            with c.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                checks["db"]=True
+                cur.execute("SELECT to_regclass('public.market_radar_schema_migrations')")
+                reg=cur.fetchone()[0]
+                if reg:
+                    cur.execute("""SELECT 1 FROM market_radar_schema_migrations
+                                   WHERE version=%s""",(version,))
+                    checks["schema"]=cur.fetchone() is not None
+                required=os.getenv("RISK_CONTROL_REQUIRED","1").strip().lower() in ("1","true","yes","on")
+                if not required:
+                    checks["risk_control"]=True
+                elif table_exists(cur,"ai_risk_control_status"):
+                    cur.execute("""SELECT updated_at FROM ai_risk_control_status WHERE id=1""")
+                    r=cur.fetchone()
+                    if r and r[0]:
+                        age=(datetime.now(timezone.utc)-r[0].astimezone(timezone.utc)).total_seconds()
+                        max_age=max(30,min(600,int(os.getenv("RISK_CONTROL_STATUS_MAX_AGE_SECONDS","120"))))
+                        checks["risk_control"]=age<=max_age
+        ready=all(checks.values())
+        payload={"status":"ready" if ready else "not_ready","checks":checks,"schema_version":version}
+        return payload if ready else JSONResponse(payload,status_code=503)
+    except Exception:
+        return JSONResponse({"status":"not_ready","checks":checks,"schema_version":version},status_code=503)
 
 
 @app.post("/api/feedback")
