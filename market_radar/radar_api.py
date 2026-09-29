@@ -1091,8 +1091,11 @@ def build_ai_risk_control(
     kiwoom, orderbook, regime, chartfeed
 ):
     empty={
-        "status":"WAITING","kill_switch":{"state":"DEGRADED","allow_new_shadow_entries":True,
+        "status":"WAITING",
+        "kill_switch_raw":{"state":"DEGRADED","allow_new_shadow_entries":True,
         "hard_triggers":[],"warnings":[{"code":"RISK_CONTROL_NOT_READY"}]},
+        "kill_switch":{"state":"HALT","allow_new_shadow_entries":False,
+        "hard_triggers":[{"code":"RISK_CONTROL_STATUS_MISSING"}],"warnings":[]},
         "live_readiness":{"stage":"RESEARCH_ONLY","live_enabled":False,"gates":[],"failed_gates":[]},
         "rebalance":{"status":"WAITING","actions":[],"replacements":[],"summary":{}},
         "metrics":{},"note":"운영 통제 데이터 축적 대기"
@@ -1200,7 +1203,65 @@ def build_ai_risk_control(
         "orderbook_feed":orderbook_feed,
         "manual_halt":_truthy_env("RISK_MANUAL_HALT","0"),
     }
-    kill=ai_evaluate_kill_switch(metrics,policy)
+    raw_kill=ai_evaluate_kill_switch(metrics,policy)
+
+    # Effective operational state includes the persisted recovery latch.
+    kill=dict(raw_kill)
+    recovery={
+        "state":"UNPERSISTED","incident_id":None,"recovery_state":"STARTING",
+        "healthy_streak":0,"healthy_streak_required":max(1,min(20,int(os.getenv("RISK_RECOVERY_HEALTHY_STREAK","3")))),
+        "ack_required":os.getenv("RISK_RECOVERY_REQUIRE_ACK","1").strip().lower() in ("1","true","yes","on"),
+        "acknowledged_at":None,"halted_at":None,"recovered_at":None,"status_age_sec":None,
+    }
+    status_required=os.getenv("RISK_CONTROL_REQUIRED","1").strip().lower() in ("1","true","yes","on")
+    status_max_age=max(30,min(600,int(os.getenv("RISK_CONTROL_STATUS_MAX_AGE_SECONDS","120"))))
+    if table_exists(cur,"ai_risk_control_status") and column_exists(cur,"ai_risk_control_status","incident_id"):
+        cur.execute("""SELECT updated_at,state,raw_state,allow_new_shadow_entries,incident_id,
+                              recovery_state,healthy_streak,healthy_streak_required,ack_required,
+                              acknowledged_at,halted_at,recovered_at
+                       FROM ai_risk_control_status WHERE id=1""")
+        rr=cur.fetchone()
+        if rr:
+            age=max(0.0,(datetime.now(timezone.utc)-rr[0].astimezone(timezone.utc)).total_seconds()) if rr[0] else None
+            recovery={
+                "state":rr[1],"raw_state":rr[2],"allow_new_shadow_entries":bool(rr[3]),
+                "incident_id":rr[4],"recovery_state":rr[5],
+                "healthy_streak":int(rr[6] or 0),"healthy_streak_required":int(rr[7] or 0),
+                "ack_required":bool(rr[8]),"acknowledged_at":iso(rr[9]),
+                "halted_at":iso(rr[10]),"recovered_at":iso(rr[11]),"status_age_sec":age,
+            }
+            if age is not None and age>status_max_age and status_required:
+                kill={**raw_kill,"state":"HALT","allow_new_shadow_entries":False}
+                kill["hard_triggers"]=list(raw_kill.get("hard_triggers") or [])+[{
+                    "code":"RISK_CONTROL_STATUS_STALE","age_sec":age,"limit":status_max_age
+                }]
+                kill["incident_id"]=rr[4]
+                kill["recovery_state"]="STATUS_STALE"
+            elif str(rr[1] or "").upper()=="HALT":
+                kill={**raw_kill,"state":"HALT","allow_new_shadow_entries":False}
+                hard=list(raw_kill.get("hard_triggers") or [])
+                if not any(x.get("code")=="RECOVERY_LATCH" for x in hard):
+                    hard.append({"code":"RECOVERY_LATCH","incident_id":rr[4],
+                                 "recovery_state":rr[5],"healthy_streak":int(rr[6] or 0),
+                                 "required":int(rr[7] or 0),"acknowledged":bool(rr[9])})
+                kill["hard_triggers"]=hard
+                kill["incident_id"]=rr[4]
+                kill["recovery_state"]=rr[5]
+                kill["healthy_streak"]=int(rr[6] or 0)
+                kill["healthy_streak_required"]=int(rr[7] or 0)
+                kill["ack_required"]=bool(rr[8])
+                kill["acknowledged_at"]=iso(rr[9])
+            else:
+                kill={**raw_kill,"state":str(rr[1] or raw_kill.get("state")),
+                      "allow_new_shadow_entries":bool(rr[3]) and raw_kill.get("state")!="HALT"}
+                kill["incident_id"]=rr[4]
+                kill["recovery_state"]=rr[5]
+    elif status_required:
+        kill={**raw_kill,"state":"HALT","allow_new_shadow_entries":False}
+        kill["hard_triggers"]=list(raw_kill.get("hard_triggers") or [])+[{
+            "code":"RISK_CONTROL_STATUS_MISSING"
+        }]
+        kill["recovery_state"]="STARTING"
 
     final_rows=(ai_capacity or {}).get("final_lifecycle") or []
     supported=sum(1 for x in final_rows if x.get("action")=="PROMOTE_CANDIDATE_EXECUTION_ADJUSTED")
@@ -1295,7 +1356,9 @@ def build_ai_risk_control(
 
     return {
         "status":"OK",
+        "kill_switch_raw":raw_kill,
         "kill_switch":kill,
+        "recovery":recovery,
         "live_readiness":readiness,
         "rebalance":rebalance,
         "metrics":{
