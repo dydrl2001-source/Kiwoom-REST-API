@@ -649,6 +649,56 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c, c.cursor()
                 print(f"{r['event_time']} {r['switch_transaction_id']} {r['event_type']} "
                       f"{r['from_state'] or '—'}->{r['to_state']} evidence={r['evidence'] or {}}")
 
+        print('\n[EXECUTION FIREWALL v2.3]')
+        if not exists('market_os_execution_intents'):
+            print('execution firewall tables missing')
+        else:
+            cur.execute("""SELECT status,COUNT(*) AS n
+                           FROM market_os_execution_intents
+                           GROUP BY status ORDER BY status""")
+            rows=cur.fetchall()
+            if not rows:
+                print('execution intent 없음')
+            for r in rows:
+                print(f"{r['status']}: {r['n']}")
+            cur.execute("""SELECT intent_id,status,stock_code,stock_name,snapshot_time,expires_at,
+                                  active_version_label,switch_transaction_id,reference_price_krw,
+                                  watch_tier,base_watch_tier,trigger_state,market_stance,
+                                  catalyst_grade,reviewed_at,review_note
+                           FROM market_os_execution_intents
+                           ORDER BY CASE status WHEN 'REVIEW_PENDING' THEN 1
+                                    WHEN 'HUMAN_APPROVED_INTENT' THEN 2 ELSE 3 END,
+                                    created_at DESC LIMIT 30""")
+            for r in cur.fetchall():
+                print(f"{r['status']} {r['intent_id']} {r['stock_code']} {r['stock_name'] or ''} "
+                      f"{r['base_watch_tier'] or '—'}->{r['watch_tier']} "
+                      f"trigger={r['trigger_state']} stance={r['market_stance']} "
+                      f"catalyst={r['catalyst_grade']} ref={r['reference_price_krw']} "
+                      f"expires={r['expires_at']} switch={r['switch_transaction_id']} "
+                      f"reviewed={r['reviewed_at']} note={r['review_note'] or '—'}")
+        if exists('market_os_execution_firewall_runs'):
+            print('\n[EXECUTION FIREWALL RUNS]')
+            cur.execute("""SELECT run_time,enabled,control_id,switch_transaction_id,switch_state,
+                                  assessed,review_eligible,created_intents,blocked,block_reasons,note
+                           FROM market_os_execution_firewall_runs
+                           ORDER BY run_time DESC LIMIT 12""")
+            for r in cur.fetchall():
+                print(f"{r['run_time']} enabled={r['enabled']} control={r['control_id'] or '—'} "
+                      f"switch={r['switch_transaction_id'] or '—'} state={r['switch_state'] or '—'} "
+                      f"assessed={r['assessed']} eligible={r['review_eligible']} "
+                      f"created={r['created_intents']} blocked={r['blocked']} "
+                      f"reasons={r['block_reasons'] or {}}")
+        if exists('market_os_execution_intent_events'):
+            print('\n[EXECUTION INTENT EVENTS]')
+            cur.execute("""SELECT event_time,intent_id,event_type,from_status,to_status,
+                                  reason_codes
+                           FROM market_os_execution_intent_events
+                           ORDER BY event_time DESC LIMIT 20""")
+            for r in cur.fetchall():
+                print(f"{r['event_time']} {r['intent_id']} {r['event_type']} "
+                      f"{r['from_status'] or '—'}->{r['to_status']} "
+                      f"reasons={','.join(r['reason_codes'] or [])}")
+
         print('\n[INTERACTION REVIEW READY]')
         ready=[s for s in interactions if s.get("edge_ready") and s["horizon"] in ("30m","close")]
         if not ready:
@@ -688,5 +738,6 @@ print('Ruleset Succession Gate v1.9: 30m+close, time splits, stance replication,
 print('Release Candidate / Canary v2.0: SUCCESSION_CANDIDATE requires human release-create and canary-start; deterministic <=20% stock-day preview never replaces primary CONTROL tier, and comparable harm auto-stops as CANARY_ROLLBACK_REQUIRED.')
 print('Full Release Review v2.1: CANARY_PROMOTION_CANDIDATE is rechecked against full Dry Run effect alignment, Canary sample bias and CONTROL rollback identity; RELEASE_READY is human metadata only and no live switch exists.')
 print('Reversible CONTROL Switch v2.2: prepare never changes CONTROL; commit requires MARKET_OS_LIVE_SWITCH_ENABLED=1, expected CONTROL hash match and fresh RELEASE_READY evidence; hard health failures restore the previous CONTROL atomically. Orders/positions remain separate.')
+print('Execution Firewall v2.3: only a HEALTHY RULESET CONTROL can create short-lived human review intents; engine is default OFF, approvals never create broker orders, quantities, limit prices or positions.')
 print('Notice: raw snapshots remain stored; segment N is episode-anchor N, not repeated screen snapshots. No threshold or live score was changed.')
 PY
