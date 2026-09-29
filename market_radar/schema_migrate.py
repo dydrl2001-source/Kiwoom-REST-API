@@ -21,6 +21,7 @@ MODULES=(
     "capital_allocation_worker",
     "risk_control_worker",
     "resilience_audit_worker",
+    "soak_monitor_worker",
 )
 
 REGISTRY_SCHEMA="""
