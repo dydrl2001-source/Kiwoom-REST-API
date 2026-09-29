@@ -12,7 +12,7 @@ RUN python -m pip check \
         flow_news_feed.py flow_research_worker.py market_theme_feed.py candidate_tracker.py mobile_ui.py \
         evidence_identity.py news_feed.py paper_trade_engine.py paper_feedback_engine.py \
         market_os_rule_engine.py market_os_learning.py market_os_store.py market_os_routes.py \
-        market_os_live_validation.py market_os_shadow.py market_os_dossier.py market_os_ruleset.py market_os_release.py market_os_full_release.py kiwoom_realtime_0b.py \
+        market_os_live_validation.py market_os_shadow.py market_os_dossier.py market_os_ruleset.py market_os_release.py market_os_full_release.py market_os_control.py kiwoom_realtime_0b.py \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_sector_board.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_mobile_ui.py' -v \
     && DATABASE_URL="" DASHBOARD_TOKEN="test" python -m unittest discover -s tests -p 'test_paper_trade.py' -v \
