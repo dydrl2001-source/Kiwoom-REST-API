@@ -90,14 +90,15 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
 .strategy-perf{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}.strategy-perf table{width:100%;border-collapse:collapse;min-width:850px}.strategy-perf th,.strategy-perf td{padding:8px;border-bottom:1px solid #edf1f6;text-align:right;font-size:9px}.strategy-perf th{background:#f8fafc;color:var(--muted);position:sticky;top:0}.strategy-perf th:first-child,.strategy-perf td:first-child{text-align:left}.sp-state{display:inline-flex;padding:2px 6px;border-radius:999px;background:#eef1f5;font-size:8px;font-weight:900}
 .lifecycle-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px;border-top:1px solid #edf1f6}.lifecycle-card{border:1px solid #e2e8f0;border-radius:9px;padding:9px;background:#fbfcfe}.lifecycle-card.promote{border-color:#9ed8c6;background:#f0faf6}.lifecycle-card.demote,.lifecycle-card.rework{border-color:#f0c6ca;background:#fff6f7}.lifecycle-card .lc-top{display:flex;justify-content:space-between;gap:6px}.lifecycle-card .lc-name{font-size:10px;font-weight:900}.lifecycle-card .lc-label{font-size:8px;font-weight:900}.lifecycle-card .lc-meta{font-size:8px;color:var(--muted);margin-top:4px}.context-wrap{border-top:1px solid #edf1f6}.context-head{padding:8px 10px;font-size:10px;font-weight:900;background:#f8fafc}.context-table{width:100%;border-collapse:collapse;min-width:860px}.context-table th,.context-table td{padding:7px 8px;border-top:1px solid #edf1f6;font-size:8px;text-align:right}.context-table th:first-child,.context-table td:first-child{text-align:left}.context-table th{color:var(--muted);background:#fbfcfe}
 .capacity-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px}.capacity-card{border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#fbfcfe}.capacity-card.supported{border-color:#9ed8c6;background:#f0faf6}.capacity-card.blocked{border-color:#f0c6ca;background:#fff6f7}.capacity-card .cap-top{display:flex;justify-content:space-between;gap:8px}.capacity-card .cap-name{font-size:10px;font-weight:900}.capacity-card .cap-val{font-size:18px;font-weight:900;margin-top:4px}.capacity-card .cap-meta{font-size:8px;color:var(--muted);margin-top:4px}.capacity-gate{padding:9px 10px;border-bottom:1px solid #edf1f6;background:#f8fafc;font-size:9px}
+.allocation-lab{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}.allocation-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #edf1f6}.allocation-kpi{padding:10px;border-right:1px solid #edf1f6}.allocation-kpi:last-child{border-right:0}.allocation-kpi .ak{font-size:8px;color:var(--muted)}.allocation-kpi .av{font-size:17px;font-weight:900;margin-top:2px}.allocation-table{width:100%;border-collapse:collapse;min-width:1180px}.allocation-table th,.allocation-table td{padding:7px 8px;border-top:1px solid #edf1f6;font-size:8px;text-align:right;white-space:nowrap}.allocation-table th{background:#f8fafc;color:var(--muted)}.allocation-table th:first-child,.allocation-table td:first-child{text-align:left}.allocation-note{padding:8px 10px;border-top:1px solid #edf1f6;font-size:9px;color:#6d7a8e}.allocation-rejected{padding:8px 10px;border-top:1px solid #edf1f6;background:#fbfcfe}.allocation-rejected summary{font-size:9px;font-weight:900}.allocation-reason{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid #eef2f7;font-size:8px}.allocation-reason:first-of-type{border-top:0}
 .shadow-lab{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}.shadow-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #edf1f6}.shadow-kpi{padding:10px;border-right:1px solid #edf1f6}.shadow-kpi:last-child{border-right:0}.shadow-kpi .sk{font-size:8px;color:var(--muted)}.shadow-kpi .sv{font-size:17px;font-weight:900;margin-top:2px}.shadow-table{width:100%;border-collapse:collapse;min-width:1150px}.shadow-table th,.shadow-table td{padding:7px 8px;border-top:1px solid #edf1f6;font-size:8px;text-align:right;white-space:nowrap}.shadow-table th{background:#f8fafc;color:var(--muted)}.shadow-table th:first-child,.shadow-table td:first-child{text-align:left}.shadow-note{padding:8px 10px;border-top:1px solid #edf1f6;font-size:9px;color:#6d7a8e}.shadow-status{display:inline-flex;padding:2px 6px;border-radius:999px;background:#eef1f5;font-size:8px;font-weight:900}.shadow-status.closed{background:#e7f5ef;color:#176f55}.shadow-status.partial{background:#fff0df;color:#965d18}.shadow-status.rejected{background:#fff0f1;color:#a5404d}
 .daily-review{display:grid;grid-template-columns:1.1fr .9fr;gap:8px}.review-box{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px}.review-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:8px}.review-kpi{background:#f8fafc;border-radius:8px;padding:8px}.review-kpi .rk{font-size:8px;color:var(--muted)}.review-kpi .rv{font-size:16px;font-weight:900}.review-lines{margin-top:7px}.review-line{display:flex;justify-content:space-between;gap:8px;border-top:1px solid #eef2f7;padding:6px 0;font-size:9px}.review-line:first-child{border-top:0}
 .bottom{display:none}
-@media(max-width:1100px){.broker-brief{grid-template-columns:1fr 1fr}.daily-review{grid-template-columns:1fr}.shadow-summary{grid-template-columns:repeat(3,1fr)}.lifecycle-grid,.capacity-grid{grid-template-columns:1fr 1fr}.broker-cycle{grid-template-columns:repeat(3,1fr)}.broker-desks{grid-template-columns:repeat(2,1fr)}.leader-desk{grid-template-columns:1fr 1fr}.leader-desk .leader-panel:last-child{grid-column:1/-1}.home-candidates{grid-template-columns:repeat(3,minmax(0,1fr))}.paper-open-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.pf-grid{grid-template-columns:1fr}.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid,.deep-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
+@media(max-width:1100px){.broker-brief{grid-template-columns:1fr 1fr}.daily-review{grid-template-columns:1fr}.shadow-summary,.allocation-summary{grid-template-columns:repeat(3,1fr)}.lifecycle-grid,.capacity-grid{grid-template-columns:1fr 1fr}.broker-cycle{grid-template-columns:repeat(3,1fr)}.broker-desks{grid-template-columns:repeat(2,1fr)}.leader-desk{grid-template-columns:1fr 1fr}.leader-desk .leader-panel:last-child{grid-column:1/-1}.home-candidates{grid-template-columns:repeat(3,minmax(0,1fr))}.paper-open-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.pf-grid{grid-template-columns:1fr}.sector-grid{grid-template-columns:repeat(2,1fr)}.material-grid,.research-grid,.deep-grid{grid-template-columns:repeat(2,1fr)}.mimosa-grid{grid-template-columns:repeat(2,1fr)}.strategy-grid{grid-template-columns:repeat(2,1fr)}.index-grid{grid-template-columns:1fr}.statusbar{grid-template-columns:1fr 1fr 1fr}.analysis{grid-template-columns:1fr}}
 @media(max-width:700px){
  .app{padding:10px 8px 82px}.head{margin-bottom:6px}.brand{font-size:20px}.statusbar{grid-template-columns:1fr 1fr;gap:6px}.stat{min-height:61px;padding:8px}
  .statusbar .stat:first-child{grid-column:1/-1}.tabs{display:none}.leader-desk{grid-template-columns:1fr}.leader-desk .leader-panel:last-child{grid-column:auto}.home-market-tools{display:block}.market-detail{margin-top:6px}.home-candidates{grid-template-columns:1fr}.paper-summary{grid-template-columns:1fr 1fr}.paper-open-grid{grid-template-columns:1fr}.pf-overall{grid-template-columns:1fr 1fr}.pf-grid{grid-template-columns:1fr}.sector-grid{grid-template-columns:1fr;gap:7px}.stock-list{grid-template-columns:1fr 1fr}.stock-mini{border-right:1px solid #f0f3f7}
- .broker-hero{grid-template-columns:1fr}.broker-mode{align-items:flex-start;text-align:left}.broker-cycle,.broker-desks,.broker-registry,.broker-candidates,.broker-principle,.broker-brief,.daily-review,.review-grid,.lifecycle-grid,.capacity-grid,.shadow-summary{grid-template-columns:1fr}.material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.sector-pulse{grid-template-columns:1fr 1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
+ .broker-hero{grid-template-columns:1fr}.broker-mode{align-items:flex-start;text-align:left}.broker-cycle,.broker-desks,.broker-registry,.broker-candidates,.broker-principle,.broker-brief,.daily-review,.review-grid,.lifecycle-grid,.capacity-grid,.shadow-summary,.allocation-summary{grid-template-columns:1fr}.material-grid,.research-grid,.deep-grid,.mimosa-grid,.strategy-grid{grid-template-columns:1fr}.sector-pulse{grid-template-columns:1fr 1fr}.section-title{margin-top:10px}.bottom{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);padding:5px 4px calc(5px + env(safe-area-inset-bottom));justify-content:space-around}
  .bottom button{border:0;background:transparent;color:#78869b;font-size:9px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px}.bottom button.active{color:#1c2b45;font-weight:900}.bottom b{font-size:16px;line-height:1}
 }
 </style></head>
@@ -185,6 +186,8 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div id="brokerPerformance" class="strategy-perf"></div>
  <div class="section-title"><h2>Capacity & Final Lifecycle Gate</h2><span>Paper edge가 실제 체결과 규모를 버티는지 검증</span></div>
  <div id="brokerCapacity" class="strategy-perf"></div>
+ <div class="section-title"><h2>Capital Allocation Optimizer</h2><span>edge × capacity × correlation × portfolio risk</span></div>
+ <div id="brokerAllocation" class="allocation-lab"></div>
  <div class="section-title"><h2>Shadow Execution Simulator</h2><span>신호와 체결을 분리 · 슬리피지·부분체결·포지션 크기 추정</span></div>
  <div id="brokerShadow" class="shadow-lab"></div>
  <div class="section-title"><h2>오늘의 6-Desk 회의 결과</h2><span>WATCH · READY · PAPER_ENTRY · BLOCKED를 이유와 함께 공개</span></div>
@@ -532,6 +535,47 @@ function renderAICapacity(x){
  el.innerHTML=gate+capHtml+matrixHtml+'<div class="sub" style="padding:8px 10px">'+esc(p.note||"")+'</div>';
 }
 
+function renderAIAllocation(x){
+ const el=document.getElementById("brokerAllocation");if(!el)return;
+ const r=x||{},sum=r.summary||{},rows=r.allocations||[],rej=r.rejected||[],cons=r.constraints||{};
+ const kpis=[
+   ["가정자산",sum.account_equity_krw==null?"—":money(sum.account_equity_krw)],
+   ["전체 Risk Cap",sum.total_risk_cap_krw==null?"—":money(sum.total_risk_cap_krw)],
+   ["기존 Risk",sum.existing_risk_krw==null?"—":money(sum.existing_risk_krw)],
+   ["신규 배정 Risk",sum.new_allocated_risk_krw==null?"—":money(sum.new_allocated_risk_krw)],
+   ["Risk 사용률",sum.risk_utilization_pct==null?"—":fmt(sum.risk_utilization_pct,0)+"%"]
+ ];
+ const summary='<div class="allocation-summary">'+kpis.map(v=>'<div class="allocation-kpi"><div class="ak">'+esc(v[0])+'</div><div class="av">'+esc(v[1])+'</div></div>').join("")+'</div>';
+ const pills='<div class="brief-list" style="padding:9px 10px">'+
+   '<span class="pill">Single '+esc(cons.single_risk_cap_krw==null?"—":money(cons.single_risk_cap_krw))+'</span>'+
+   '<span class="pill">Theme '+esc(cons.theme_risk_cap_krw==null?"—":money(cons.theme_risk_cap_krw))+'</span>'+
+   '<span class="pill">Family '+esc(cons.family_risk_cap_krw==null?"—":money(cons.family_risk_cap_krw))+'</span>'+
+   '<span class="pill">Position '+esc(cons.position_notional_cap_krw==null?"—":money(cons.position_notional_cap_krw))+'</span>'+
+   '<span class="pill">Risk chunk '+esc(cons.risk_chunk_krw==null?"—":money(cons.risk_chunk_krw))+'</span>'+
+   '</div>';
+ let table='<div class="tblwrap"><table class="allocation-table"><thead><tr><th>종목</th><th>전략 / 테마</th><th>Evidence</th><th>Priority</th><th>Risk</th><th>Notional</th><th>수량</th><th>Stop</th><th>Capacity</th><th>사용률</th><th>최대 Corr</th><th>Corr 미확인</th></tr></thead><tbody>';
+ table+=rows.length?rows.map(a=>{
+   const evidence=a.evidence_scale>=.99?"VERIFIED":a.evidence_scale>=.3?"PENDING":"RESEARCH";
+   return '<tr><td><b>'+esc(a.stock_name||a.stock_code)+'</b><div class="sub">'+esc(a.stock_code||"")+'</div></td>'+
+    '<td>'+esc(a.strategy_id||"—")+'<div class="sub">'+esc(a.market_theme||"미분류")+' · '+esc(a.strategy_family||"")+'</div></td>'+
+    '<td><span class="sp-state">'+esc(evidence)+'</span><div class="sub">'+esc(a.final_action||"")+'</div></td>'+
+    '<td>'+esc(fmt((a.priority_score||0)*100,1))+'<div class="sub">연구 우선도</div></td>'+
+    '<td><b>'+esc(money(a.allocated_risk_krw||0))+'</b></td><td>'+esc(money(a.allocated_notional_krw||0))+'</td>'+
+    '<td>'+esc(a.shares??0)+'</td><td>'+esc(a.stop_pct==null?"—":fmt(a.stop_pct,2)+"%")+'</td>'+
+    '<td>'+esc(a.capacity_krw==null?"—":money(a.capacity_krw))+'</td>'+
+    '<td>'+esc(a.capacity_utilization_pct==null?"—":fmt(a.capacity_utilization_pct,0)+"%")+'</td>'+
+    '<td>'+esc(a.max_positive_corr==null?"—":fmt(a.max_positive_corr,2))+'</td>'+
+    '<td>'+esc(a.unknown_correlation_peers??0)+'</td></tr>';
+ }).join(""):'<tr><td colspan="12" class="muted">현재 제약을 통과한 신규 Shadow 배분 없음</td></tr>';
+ table+='</tbody></table></div>';
+ let rejected='';
+ if(rej.length){
+   rejected='<details class="allocation-rejected"><summary>배분 제외 / 축소 사유 '+rej.length+'건</summary>'+
+    rej.slice(0,15).map(v=>'<div class="allocation-reason"><span>'+esc(v.stock_name||v.stock_code||"후보")+'</span><b>'+esc((v.reasons||[]).join(", ")||"제약")+'</b></div>').join("")+'</details>';
+ }
+ el.innerHTML=summary+pills+table+rejected+'<div class="allocation-note">'+esc(r.note||"")+' · Priority는 기대수익률이 아니라 검증·신호·실행비용을 합친 연구 우선도입니다.</div>';
+}
+
 function renderShadowExecution(x){
  const el=document.getElementById("brokerShadow");if(!el)return;
  const r=x||{},sum=r.summary||{},rows=r.recent||[];
@@ -830,6 +874,7 @@ function render(d){
  renderAIMorningBrief(d.ai_morning_brief);
  renderAIStrategyPerformance(d.ai_strategy_performance);
  renderAICapacity(d.ai_capacity);
+ renderAIAllocation(d.ai_allocation);
  renderShadowExecution(d.shadow_execution);
  renderAIDailyReview(d.ai_daily_review);
  document.getElementById("queryRows").innerHTML=(d.query_ranking||[]).map(x=>stockRow(x,"query")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
