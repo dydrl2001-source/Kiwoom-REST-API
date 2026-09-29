@@ -776,6 +776,31 @@ def session_bucket(ts):
     return "AFTER"
 
 
+def active_control_version(cur):
+    if not table_exists(cur,"market_os_control_state"):
+        return RULE_VERSION
+    cur.execute("SELECT active_version_label FROM market_os_control_state WHERE id=1")
+    r=cur.fetchone()
+    return (r["active_version_label"] if r and r["active_version_label"] else RULE_VERSION)
+
+
+def active_control_snapshot(cur):
+    base=runtime_base_control(RULE_VERSION)
+    if not table_exists(cur,"market_os_control_state"):
+        return base
+    cur.execute("""SELECT control_id,mode,active_version_label,base_rule_version,
+                          ruleset_id,ruleset_hash,ruleset_spec,source_review_id,
+                          switch_transaction_id,control_hash,activated_at
+                   FROM market_os_control_state WHERE id=1""")
+    r=cur.fetchone()
+    if not r:
+        return base
+    out=dict(r)
+    if out.get("activated_at"):
+        out["activated_at"]=out["activated_at"].isoformat()
+    return out
+
+
 def safe_num(v):
     try:
         x=float(v)
@@ -828,14 +853,15 @@ def current_microstructure(codes,sample):
 
 def capture_assessments():
     payload=desk_payload(include_tracking=False)
+    control_meta=payload.get("market_os_control") or {}
     if not payload.get("recent_trade_count"):
-        return 0,None
+        return 0,None,control_meta
     sample=parse_dt(payload.get("sample_time"))
     if not sample:
-        return 0,None
+        return 0,None,control_meta
     age=(datetime.now(timezone.utc)-sample).total_seconds()
     if age < -60 or age > 180:
-        return 0,None
+        return 0,None,control_meta
     snap=sample.replace(microsecond=0)
     micro=current_microstructure([x.get("code") for x in payload.get("market_os_watchlist",[])],sample)
     rows={r.get("code"):r for r in payload.get("rows",[])}
@@ -855,8 +881,9 @@ def capture_assessments():
             "sample_time":payload.get("sample_time"),
             "source":"flow_desk"
         }
+        assessment_version=payload.get("market_os_version") or RULE_VERSION
         items.append((
-            snap,code,x.get("name"),RULE_VERSION,x.get("watch_tier"),
+            snap,code,x.get("name"),assessment_version,x.get("watch_tier"),
             x.get("radar_score"),x.get("theme_score"),x.get("setup_score"),
             x.get("catalyst_grade"),x.get("trigger_state"),x.get("market_stance"),
             session_bucket(snap),x.get("market_theme"),x.get("event_type"),px,
@@ -875,7 +902,7 @@ def capture_assessments():
             json.dumps(evidence,ensure_ascii=False)
         ))
     if not items:
-        return 0,snap
+        return 0,snap,control_meta
     with db() as c,c.cursor() as cur:
         cur.executemany("""INSERT INTO market_os_assessment_snapshots(
           snapshot_time,stock_code,stock_name,rule_version,watch_tier,
@@ -886,7 +913,8 @@ def capture_assessments():
           micro_gap_count_15s,micro_strength,micro_buy_ratio,axis_reasons,risk_flags,evidence_ref)
           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb)
           ON CONFLICT(snapshot_time,stock_code,rule_version) DO NOTHING""",items)
-        return cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(items),snap
+        n=cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(items)
+        return n,snap,control_meta
 
 
 def _realtime_target(cur,code,target,window_seconds=20):
@@ -1280,7 +1308,8 @@ def refresh_segments():
                          ON a.snapshot_time=o.assessment_time AND a.stock_code=o.stock_code
                         AND a.rule_version=o.rule_version
                        WHERE a.rule_version=%s
-                         AND a.snapshot_time>now()-interval '60 days'""",(RULE_VERSION,))
+                         AND a.snapshot_time>now()-interval '60 days'""",
+                    (active_control_version(cur),))
         raw=cur.fetchall()
         rows=_episode_anchors(raw)
         groups=defaultdict(list)
@@ -1395,14 +1424,15 @@ def refresh_segments():
 
 
 
-def _registry_key(segment_type,segment_value,horizon):
-    raw="|".join((RULE_VERSION,segment_type or "",segment_value or "",horizon or ""))
+def _registry_key(rule_version,segment_type,segment_value,horizon):
+    raw="|".join((rule_version or RULE_VERSION,segment_type or "",segment_value or "",horizon or ""))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def refresh_promotion_registry():
     """Persist current scientific lifecycle without ever enabling a shadow rule."""
     with db() as c,c.cursor() as cur:
+        rule_version=active_control_version(cur)
         if not table_exists(cur,"market_os_learning_segments"):
             return {"active":0,"transitions":0,"promotion_candidates":0}
 
@@ -1450,7 +1480,7 @@ def refresh_promotion_registry():
 
         cur.execute("""UPDATE market_os_promotion_registry
                        SET active=FALSE
-                       WHERE rule_version=%s""",(RULE_VERSION,))
+                       WHERE rule_version=%s""",(rule_version,))
 
         transitions=0
         promotion_candidates=0
@@ -1460,7 +1490,7 @@ def refresh_promotion_registry():
             lifecycle=_promotion_stage(s,validation)
             if not lifecycle:
                 continue
-            candidate_key=_registry_key(*key_tuple)
+            candidate_key=_registry_key(rule_version,*key_tuple)
             cur.execute("""SELECT current_stage,direction,review_action,manual_review_state
                            FROM market_os_promotion_registry
                            WHERE candidate_key=%s""",(candidate_key,))
@@ -1546,7 +1576,7 @@ def refresh_promotion_registry():
                     early_avg_return_pct=excluded.early_avg_return_pct,
                     recent_avg_return_pct=excluded.recent_avg_return_pct,
                     reason_codes=excluded.reason_codes,evidence=excluded.evidence""",
-                (candidate_key,RULE_VERSION,s["segment_type"],s["segment_value"],s["horizon"],
+                (candidate_key,rule_version,s["segment_type"],s["segment_value"],s["horizon"],
                  s.get("interaction_depth",store_segment_depth(s["segment_type"])),
                  effective_stage,lifecycle["direction"],lifecycle["review_action"],
                  s["samples"],s["distinct_stocks"],s["distinct_days"],s["quality"],
@@ -1566,7 +1596,7 @@ def refresh_promotion_registry():
                 transitions+=1
 
         cur.execute("""SELECT COUNT(*) AS n FROM market_os_promotion_registry
-                       WHERE rule_version=%s AND active=TRUE""",(RULE_VERSION,))
+                       WHERE rule_version=%s AND active=TRUE""",(rule_version,))
         active=int(cur.fetchone()["n"])
         return {
             "active":active,
@@ -2555,9 +2585,10 @@ def refresh_full_release_reviews():
 
 def update_status(status,note,last_snapshot=None,last_outcome=False):
     with db() as c,c.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(RULE_VERSION,))
+        rule_version=active_control_version(cur)
+        cur.execute("SELECT COUNT(*) AS n FROM market_os_assessment_snapshots WHERE rule_version=%s",(rule_version,))
         assessments=int(cur.fetchone()["n"])
-        cur.execute("SELECT COUNT(*) AS n,MAX(calculated_at) AS t FROM market_os_assessment_outcomes WHERE rule_version=%s",(RULE_VERSION,))
+        cur.execute("SELECT COUNT(*) AS n,MAX(calculated_at) AS t FROM market_os_assessment_outcomes WHERE rule_version=%s",(rule_version,))
         r=cur.fetchone();outcomes=int(r["n"]);out_t=r["t"]
         cur.execute("""INSERT INTO market_os_learning_status(
           id,updated_at,status,last_snapshot_at,last_outcome_at,assessments_total,outcomes_total,note)
