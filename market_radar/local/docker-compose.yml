@@ -38,6 +38,11 @@ services:
     command: python /app/radar_web_app.py
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD","python","-c","import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/live',timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
