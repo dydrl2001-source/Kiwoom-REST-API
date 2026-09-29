@@ -197,6 +197,8 @@ details{margin-top:7px}summary{cursor:pointer;color:#526785;font-size:11px}.evid
  <div id="brokerResilience" class="resilience-lab"></div>
  <div class="section-title"><h2>72h Soak Gate</h2><span>시간을 건너뛰지 않는 Release Candidate 증거</span></div>
  <div id="brokerSoak" class="soak-lab"></div>
+ <div class="section-title"><h2>Release Candidate Gate</h2><span>모든 증거가 모이기 전에는 RC_READY 불가</span></div>
+ <div id="brokerRelease" class="soak-lab"></div>
  <div class="section-title"><h2>Shadow Execution Simulator</h2><span>신호와 체결을 분리 · 슬리피지·부분체결·포지션 크기 추정</span></div>
  <div id="brokerShadow" class="shadow-lab"></div>
  <div class="section-title"><h2>오늘의 6-Desk 회의 결과</h2><span>WATCH · READY · PAPER_ENTRY · BLOCKED를 이유와 함께 공개</span></div>
@@ -656,6 +658,18 @@ function renderAISoak(x){
  el.innerHTML=head+cards+'<div class="risk-note">'+esc(r.note||"")+' · RC_CANDIDATE도 live_enabled를 바꾸지 않습니다.</div>';
 }
 
+function renderAIRelease(x){
+ const el=document.getElementById("brokerRelease");if(!el)return;
+ const r=x||{},gates=r.gates||[],stage=r.stage||"RC_BLOCKED";
+ const cls=stage==="RC_READY"?"rc":"fail";
+ const head='<div class="soak-head"><div class="soak-stage"><div class="brief-k">RELEASE STAGE</div><div class="sv '+cls+'">'+esc(stage)+'</div>'+
+   '<div class="soak-meta">rc_ready='+esc(String(r.rc_ready===true))+' · live_enabled='+esc(String(r.live_enabled===true))+'</div></div>'+
+   '<div class="risk-alerts"><div class="risk-alert"><b>최종 원칙</b> · RC_READY는 배포 검토 상태일 뿐 실거래를 활성화하지 않습니다.</div>'+
+   ((r.failed_gates||[]).length?'<div class="risk-alert warn"><b>미통과</b> · '+esc((r.failed_gates||[]).join(", "))+'</div>':'<div class="risk-alert"><b>Release Candidate evidence complete</b></div>')+'</div></div>';
+ const cards='<div class="soak-gates">'+(gates.length?gates.map(g=>'<div class="soak-gate '+(g.pass?"pass":"fail")+'"><div class="sg">'+esc(g.id)+'</div><div class="sv">'+(g.pass?"PASS":"FAIL")+'</div><div class="sub">'+esc(String(g.value??"—"))+' / req '+esc(String(g.required??"—"))+'</div></div>').join(""):'<div class="muted">Release evidence 평가 대기</div>')+'</div>';
+ el.innerHTML=head+cards+'<div class="risk-note">'+esc(r.note||"")+'</div>';
+}
+
 function renderShadowExecution(x){
  const el=document.getElementById("brokerShadow");if(!el)return;
  const r=x||{},sum=r.summary||{},rows=r.recent||[];
@@ -958,6 +972,7 @@ function render(d){
  renderAIRiskControl(d.ai_risk_control);
  renderAIResilience(d.ai_resilience);
  renderAISoak(d.ai_soak);
+ renderAIRelease(d.ai_release);
  renderShadowExecution(d.shadow_execution);
  renderAIDailyReview(d.ai_daily_review);
  document.getElementById("queryRows").innerHTML=(d.query_ranking||[]).map(x=>stockRow(x,"query")).join("")||'<tr><td colspan="10">데이터 대기</td></tr>';
