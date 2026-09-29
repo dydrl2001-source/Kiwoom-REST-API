@@ -184,6 +184,25 @@ services:
       risk-control-worker:
         condition: service_started
 
+  soak-monitor-worker:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/soak_monitor_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      risk-control-worker:
+        condition: service_started
+      resilience-audit-worker:
+        condition: service_started
+
   shadow-execution-engine:
     build:
       context: ../..
