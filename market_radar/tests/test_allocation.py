@@ -142,6 +142,14 @@ class AllocationTests(unittest.TestCase):
         )
         self.assertEqual(out["allocations"],[])
 
+    def test_allocation_worker_never_places_orders(self):
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        text=(root/"capital_allocation_worker.py").read_text(encoding="utf-8")
+        for banned in ("send_order","place_order","/api/dostk/ordr"):
+            self.assertNotIn(banned,text)
+        self.assertIn("shadow allocation snapshots only",text)
+
     def test_correlation_matrix_uses_aligned_returns(self):
         returns=[0.01 if i%2==0 else -0.006 for i in range(30)]
         a={0:100.0};b={0:200.0};c={0:200.0}
