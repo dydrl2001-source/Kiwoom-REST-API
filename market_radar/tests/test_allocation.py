@@ -80,7 +80,7 @@ class AllocationTests(unittest.TestCase):
         c=candidate("A",action="EXECUTION_BLOCKED")
         out=optimize_allocations([c],{},[],AllocationPolicy())
         self.assertEqual(out["allocations"],[])
-        reasons=sum((x.get("reasons") or []) for x in out["rejected"],[])
+        reasons=sum(((x.get("reasons") or []) for x in out["rejected"]),[])
         self.assertIn("EVIDENCE_BLOCKED",reasons)
 
     def test_capacity_caps_position_risk(self):
