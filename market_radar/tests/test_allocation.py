@@ -143,12 +143,15 @@ class AllocationTests(unittest.TestCase):
         self.assertEqual(out["allocations"],[])
 
     def test_correlation_matrix_uses_aligned_returns(self):
-        a={i:100+i for i in range(30)}
-        b={i:200+2*i for i in range(30)}
-        c={i:200-2*i for i in range(30)}
+        returns=[0.01 if i%2==0 else -0.006 for i in range(30)]
+        a={0:100.0};b={0:200.0};c={0:200.0}
+        for i,r in enumerate(returns,1):
+            a[i]=a[i-1]*(1+r)
+            b[i]=b[i-1]*(1+r)
+            c[i]=c[i-1]*(1-r)
         m=correlation_matrix({"A":a,"B":b,"C":c},min_obs=20)
-        self.assertGreater(m["A"]["B"],0.9)
-        self.assertLess(m["A"]["C"],-0.9)
+        self.assertGreater(m["A"]["B"],0.99)
+        self.assertLess(m["A"]["C"],-0.99)
 
 
 if __name__=="__main__":
