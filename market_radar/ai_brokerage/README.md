@@ -414,3 +414,130 @@ This supports later questions such as:
 Capital is allocated only after strategy evidence, execution quality, capacity, portfolio concentration and correlation are considered together.
 
 All allocation output remains PAPER/Shadow-only.
+
+
+## Portfolio Control & Live Readiness
+
+Phase 8 adds an operational control layer above Allocation and Shadow Execution.
+
+It has three jobs:
+
+1. decide whether the system is safe enough to open new Shadow positions,
+2. propose portfolio rebalance actions for existing Shadow positions,
+3. report Live Readiness evidence without enabling live execution.
+
+### Kill Switch
+
+Possible states:
+
+- `RUN` — no operational safety trigger is active
+- `DEGRADED` — warnings exist, but new Shadow entries may continue
+- `HALT` — new Shadow entries are blocked
+
+Hard HALT triggers can include:
+
+- daily Shadow loss limit breach
+- critical Kiwoom / regime / chart feed stale or error
+- portfolio risk utilization breach
+- median round-trip Implementation Shortfall degradation
+- execution rejection spike
+- portfolio correlation spike
+- manual halt
+
+Warnings can include:
+
+- order-book feed stale/error
+- low BOOK_V2 coverage
+- elevated but not hard-stop IS
+- elevated execution rejection rate
+- high portfolio correlation
+- correlation evidence gaps
+- critical feed not ready
+
+Manual kill switch:
+
+`RISK_MANUAL_HALT=1`
+
+The persisted Risk Control state is stored in:
+
+- `ai_risk_control_snapshots`
+- `ai_risk_control_status`
+
+### Fail-safe Shadow entry gate
+
+Shadow Execution checks `ai_risk_control_status` before opening a new position.
+
+Default behavior:
+
+- fresh RUN / DEGRADED status: new Shadow entry may continue
+- HALT: no new Shadow entry
+- stale Risk Control status: no new Shadow entry
+- missing Risk Control status: no new Shadow entry
+
+This behavior is controlled by:
+
+- `RISK_CONTROL_REQUIRED=1`
+- `RISK_CONTROL_STATUS_MAX_AGE_SECONDS=120`
+
+Existing Shadow positions are not silently mutated by the Kill Switch. The system instead produces explicit rebalance proposals.
+
+### Rebalance proposals
+
+Possible actions:
+
+- `HOLD`
+- `REDUCE`
+- `EXIT_SHADOW`
+- `ADD_SHADOW_REVIEW`
+- `REPLACE_REVIEW`
+
+Examples:
+
+- Kill Switch HALT → propose EXIT_SHADOW for existing positions
+- execution-blocked strategy → EXIT_SHADOW
+- BLOCKED / IGNORE AI state → EXIT_SHADOW
+- current loss beyond configured stop distance → EXIT_SHADOW
+- WATCH / execution gate pending → REDUCE
+- high correlation concentration → REDUCE
+- new approved allocation → ADD_SHADOW_REVIEW
+- materially stronger new candidate vs weaker open position → REPLACE_REVIEW
+
+All rebalance output is advisory. No Shadow position and no broker position is automatically changed.
+
+### Live Readiness Gate
+
+Live Readiness is a checklist, not an enable switch.
+
+Current default evidence gates include:
+
+- Kill Switch must be RUN
+- broker mode must be real
+- critical feeds healthy
+- order-book feed healthy
+- account cost assumptions explicitly confirmed
+- Paper closed sample ≥ 100
+- Shadow closed sample ≥ 60
+- BOOK_V2 closed sample ≥ 40
+- operating days ≥ 10
+- BOOK_V2 coverage ≥ 80%
+- at least one execution-adjusted supported strategy
+- Allocation history across enough operating days
+- live-order path remains disabled in this branch
+
+Possible stages:
+
+- `RESEARCH_ONLY`
+- `SHADOW_VALIDATED`
+- `LIVE_READINESS_REVIEW`
+
+Even when every readiness gate passes:
+
+`live_enabled = false`
+
+This branch intentionally contains no live-order execution path.
+
+### Principle
+
+> Readiness evidence can justify a human review of live deployment, but it cannot authorize live deployment by itself.
+
+The operating control layer therefore remains separate from broker execution.
