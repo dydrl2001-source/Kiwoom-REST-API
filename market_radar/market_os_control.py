@@ -20,7 +20,13 @@ def canonical_json(value):
 
 
 def control_hash(control):
-    payload={k:v for k,v in dict(control or {}).items() if k!="control_hash"}
+    src=dict(control or {})
+    keys=(
+        "control_id","mode","active_version_label","base_rule_version",
+        "ruleset_id","ruleset_hash","ruleset_spec","source_review_id",
+        "switch_transaction_id",
+    )
+    payload={k:src.get(k) for k in keys}
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
