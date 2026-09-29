@@ -28,6 +28,7 @@ class AllocationPolicy:
     max_positions: int = 5
     risk_chunk_pct: float = 0.05
     correlation_penalty_weight: float = 0.65
+    unknown_correlation_penalty: float = 0.15
     high_correlation_threshold: float = 0.80
     pending_evidence_scale: float = 0.35
     sample_building_scale: float = 0.20
@@ -120,16 +121,19 @@ def _positive_corr(
     code: str,
     allocated: dict[str,float],
     correlations: dict[str,dict[str,float | None]],
-) -> tuple[float,list[dict[str,Any]]]:
-    vals=[]
+) -> tuple[float,list[dict[str,Any]],int]:
+    vals=[];unknown=0
     for other,risk in allocated.items():
         if risk<=0 or other==code:continue
         corr=(correlations.get(code) or {}).get(other)
-        if corr is None:continue
+        if corr is None:
+            unknown+=1
+            continue
         vals.append({"code":other,"corr":float(corr),"risk_krw":risk})
-    if not vals:return 0.0,[]
+    if not vals:return 0.0,[],unknown
     positives=[x for x in vals if x["corr"]>0]
-    return (max((x["corr"] for x in positives),default=0.0),sorted(vals,key=lambda x:-abs(x["corr"]))[:5])
+    return (max((x["corr"] for x in positives),default=0.0),
+            sorted(vals,key=lambda x:-abs(x["corr"]))[:5],unknown)
 
 
 def optimize_allocations(
@@ -225,16 +229,18 @@ def optimize_allocations(
                 family_cap-family_now,
             )
             if room<=0:continue
-            max_corr,corr_peers=_positive_corr(code,allocations,corr)
+            max_corr,corr_peers,unknown_corr=_positive_corr(code,allocations,corr)
             corr_penalty=clamp(max_corr,0,1)*p.correlation_penalty_weight
+            if unknown_corr>0:
+                corr_penalty=max(corr_penalty,min(.50,p.unknown_correlation_penalty*unknown_corr))
             if max_corr>=p.high_correlation_threshold and current>=c["max_risk_krw"]*.5:
                 corr_penalty=max(corr_penalty,.75)
             saturation=math.sqrt(max(0.0,1.0-current/max(c["max_risk_krw"],1.0)))
             marginal=c["priority_score"]*(1.0-corr_penalty)*saturation
-            choices.append((marginal,room,max_corr,corr_peers,c))
+            choices.append((marginal,room,max_corr,corr_peers,unknown_corr,c))
         if not choices:break
-        choices.sort(key=lambda x:(-x[0],-x[1],x[4]["stock_code"]))
-        marginal,room,max_corr,corr_peers,c=choices[0]
+        choices.sort(key=lambda x:(-x[0],-x[1],x[5]["stock_code"]))
+        marginal,room,max_corr,corr_peers,unknown_corr,c=choices[0]
         if marginal<=0:break
         add=min(chunk,room)
         code=c["stock_code"];theme=c["market_theme"];family=c["strategy_family"]
@@ -253,7 +259,9 @@ def optimize_allocations(
         shares=max(0,int(notional//c["price_krw"]))
         notional=shares*c["price_krw"]
         actual_risk=notional*c["stop_pct"]/100.0
-        max_corr,corr_peers=_positive_corr(code,{k:v for k,v in allocations.items() if k!=code},corr)
+        max_corr,corr_peers,unknown_corr=_positive_corr(
+            code,{k:v for k,v in allocations.items() if k!=code},corr
+        )
         rows.append({
             "stock_code":code,"stock_name":c.get("stock_name") or c.get("name"),
             "strategy_id":c.get("strategy_id"),"strategy_name":c.get("strategy_name"),
@@ -265,11 +273,14 @@ def optimize_allocations(
             "shares":shares,"price_krw":c["price_krw"],"stop_pct":c["stop_pct"],
             "capacity_krw":c["capacity_krw"],"capacity_utilization_pct":notional/c["capacity_krw"]*100,
             "max_positive_corr":max_corr,"correlation_peers":corr_peers,
+            "unknown_correlation_peers":unknown_corr,
             "paper_only":True,
         })
     rows.sort(key=lambda x:(-x["allocated_risk_krw"],-x["priority_score"],x["stock_code"]))
 
     final_risk=sum(x["allocated_risk_krw"] for x in rows)
+    existing_risk=sum(max(0.0,float(x.get("risk_krw") or 0)) for x in open_positions)
+    actual_total_risk=existing_risk+final_risk
     return {
         "status":"OK" if rows else "NO_ALLOCATION",
         "paper_only":True,
@@ -277,10 +288,11 @@ def optimize_allocations(
         "rejected":rejected,
         "summary":{
             "account_equity_krw":equity,
-            "existing_risk_krw":sum(max(0.0,float(x.get("risk_krw") or 0)) for x in open_positions),
+            "existing_risk_krw":existing_risk,
             "new_allocated_risk_krw":final_risk,
             "total_risk_cap_krw":total_cap,
-            "risk_utilization_pct":(used_total/total_cap*100) if total_cap>0 else None,
+            "actual_total_risk_krw":actual_total_risk,
+            "risk_utilization_pct":(actual_total_risk/total_cap*100) if total_cap>0 else None,
             "new_positions":len(rows),
             "max_positions":p.max_positions,
             "iterations":iterations,
