@@ -41,6 +41,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   kiwoom-feed:
     build:
@@ -54,6 +56,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   candidate-tracker:
     build:
@@ -67,6 +71,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       kiwoom-feed:
         condition: service_started
       mimosa-engine:
@@ -84,6 +90,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       candidate-tracker:
         condition: service_started
       market-regime:
@@ -103,6 +111,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       candidate-tracker:
         condition: service_started
       mimosa-engine:
@@ -122,6 +132,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       kiwoom-feed:
         condition: service_started
       ai-brokerage-worker:
@@ -139,6 +151,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       ai-brokerage-worker:
         condition: service_started
       orderbook-collector:
@@ -160,6 +174,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       risk-control-worker:
         condition: service_started
 
@@ -175,6 +191,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       paper-trade-engine:
         condition: service_started
       kiwoom-feed:
@@ -198,6 +216,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       ai-brokerage-worker:
         condition: service_started
       orderbook-collector:
@@ -217,6 +237,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       paper-trade-engine:
         condition: service_started
 
@@ -232,6 +254,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   market-theme-feed:
     build:
@@ -245,6 +269,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   news-feed:
     build:
@@ -258,6 +284,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   chart-feed:
     build:
@@ -271,6 +299,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   mimosa-engine:
     build:
@@ -284,6 +314,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       chart-feed:
         condition: service_started
 
@@ -299,6 +331,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   dart-feed:
     build:
@@ -312,6 +346,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   research-engine:
     build:
@@ -325,6 +361,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   deep-research-engine:
     build:
@@ -338,6 +376,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
       research-engine:
         condition: service_started
 
@@ -353,6 +393,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   telegram-collector:
     build:
@@ -369,6 +411,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
 
   telegram-login:
     build:
