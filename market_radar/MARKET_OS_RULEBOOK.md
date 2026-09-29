@@ -1607,3 +1607,193 @@ v2.2는 primary Market OS의 **관찰 tier CONTROL**을 교체할 수 있다.
 
 v2.2 최초 switch는 `BASE → 검증된 RULESET`만 허용한다. 다음 ruleset으로의 연속 upgrade는 별도 release cycle에서 설계한다.
 
+## Execution Firewall v2.3 — Human Review Intent Before Any Broker Order
+
+v2.2에서 primary Market OS의 관찰용 CONTROL을 reversible하게 바꿀 수 있게 되었지만, **CONTROL 판단과 증권사 주문 사이에는 별도의 실행 방화벽**을 둔다.
+
+v2.3은 broker order를 만들지 않는다.
+
+### 기본 OFF
+
+```text
+MARKET_OS_EXECUTION_INTENTS_ENABLED=0
+```
+
+기본값은 비활성이다.
+
+켜더라도 생성되는 것은 짧은 수명의 `LONG_ENTRY_REVIEW` intent이며, 주문이 아니다.
+
+### Intent 생성 전제
+
+Execution Firewall은 다음을 모두 요구한다.
+
+- active CONTROL mode = `RULESET`
+- source switch transaction = `HEALTHY`
+- runtime CONTROL apply status = `APPLIED`
+- CONTROL hash / switch transaction identity 존재
+- watch tier = `FOCUS`
+- trigger = `STRUCTURE_CONFIRMED`
+- catalyst grade = A 또는 B
+- market stance ≠ DEFENSIVE / UNKNOWN
+- hard risk flag 없음
+- market sample age ≤ 90초
+
+Hard risk 예:
+- 돌파 실패
+- 추세 훼손
+- 거래속도 과열
+- 당일 급등 20%+
+- 방어적/미확인 market stance
+- 재료 종합 미완료
+
+조건을 충족하지 못한 후보는 개별 주문 의도로 만들지 않고 firewall run의 block reason 통계로 남긴다.
+
+### Intent 제한
+
+환경변수:
+
+```text
+MARKET_OS_INTENT_TTL_SECONDS=120
+MARKET_OS_INTENT_COOLDOWN_MINUTES=30
+MARKET_OS_INTENT_DAILY_LIMIT=12
+MARKET_OS_INTENT_MAX_PENDING=3
+```
+
+코드 제한:
+- TTL 30–300초
+- 종목 cooldown 1–240분
+- 일일 intent 최대 1–50
+- 동시 pending 최대 1–10
+
+기본 운영값은 위 예시값이다.
+
+### Intent identity
+
+Intent ID는:
+
+```text
+execution policy version
++ CONTROL hash
++ stock code
++ snapshot time
+```
+
+을 SHA-256으로 고정한다.
+
+같은 CONTROL의 같은 stock/snapshot에서 중복 intent가 생성되지 않는다.
+
+### Intent evidence
+
+각 intent는 생성 시점에 다음을 동결한다.
+
+- stock code / name
+- snapshot time / expiry
+- reference price
+- CONTROL ID / hash / active version
+- switch transaction ID
+- current watch tier
+- base watch tier
+- overlay 적용 여부
+- trigger
+- stance
+- catalyst
+- Radar / Theme / Setup
+- risk flags
+
+실행 필드는 항상:
+
+```text
+broker_order_created = false
+quantity = null
+limit_price = null
+market_order = false
+position_change = false
+next_allowed_step = HUMAN_INTENT_REVIEW
+```
+
+이다.
+
+### Lifecycle
+
+- `REVIEW_PENDING`
+- `HUMAN_APPROVED_INTENT`
+- `HUMAN_REJECTED`
+- `EXPIRED`
+- `STALE_CONTROL`
+
+TTL이 지나면 pending intent는 자동 `EXPIRED`.
+
+CONTROL hash 또는 switch transaction이 달라지면 자동 `STALE_CONTROL`.
+
+즉 오래된 intent를 새로운 CONTROL에서 승인할 수 없다.
+
+### 사람의 검토
+
+조회:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh intent <intent_id>
+```
+
+승인:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh intent-review <intent_id> approve --confirm
+```
+
+기각:
+
+```bash
+bash market_radar/local/shadow_rule_admin.sh intent-review <intent_id> reject --confirm
+```
+
+승인 순간에도 다시 검사한다.
+
+- intent 아직 미만료
+- current CONTROL hash 일치
+- switch transaction 일치
+- switch state = `HEALTHY`
+
+실패하면 승인 대신 `EXPIRED` 또는 `STALE_CONTROL`로 닫는다.
+
+### HUMAN_APPROVED_INTENT의 의미
+
+`HUMAN_APPROVED_INTENT`는 사람이 당시 Market OS 판단을 실행 검토 대상으로 승인했다는 감사 메타데이터다.
+
+v2.3에서는 이 상태가 되어도:
+
+- broker API 호출 안 함
+- 주문 객체 생성 안 함
+- quantity 계산 안 함
+- limit price 계산 안 함
+- market order 생성 안 함
+- 계좌 포지션 변경 안 함
+- 보유 현금/증거금 조회 안 함
+
+실제 주문 실행은 별도 후속 단계 없이는 불가능하다.
+
+### 저장 구조
+
+Intent:
+- `market_os_execution_intents`
+
+Intent event:
+- `market_os_execution_intent_events`
+
+Firewall run / block reasons:
+- `market_os_execution_firewall_runs`
+
+### 현재 역할 분리
+
+```text
+Market OS CONTROL
+    ↓
+Execution Firewall
+    ↓
+Human Review Intent
+    ↓
+[STOP in v2.3]
+```
+
+따라서 v2.3은 **판단 엔진과 실제 금융 실행 사이의 명시적 차단층**이다.
+
