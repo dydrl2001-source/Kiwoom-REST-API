@@ -2238,6 +2238,7 @@ def refresh_canary_summaries():
 def _full_release_composition(cur,rc):
     """Compare deterministic Canary stock-day sample with the eligible CONTROL universe."""
     started=rc.get("canary_started_at")
+    scanned=rc.get("canary_last_scanned_at")
     base=rc.get("base_rule_version")
     if not started or not base:
         return {
@@ -2255,8 +2256,10 @@ def _full_release_composition(cur,rc):
                               snapshot_time,market_stance,watch_tier
                        FROM market_os_assessment_snapshots
                        WHERE rule_version=%s AND snapshot_time>=%s
+                         AND (%s IS NULL OR snapshot_time<=%s)
                    ) x
-                   ORDER BY stock_code,trade_day,snapshot_time""",(base,started))
+                   ORDER BY stock_code,trade_day,snapshot_time""",
+                (base,started,scanned,scanned))
     universe=cur.fetchall()
 
     cur.execute("""SELECT DISTINCT ON(o.stock_code,o.trade_day)
@@ -2303,6 +2306,7 @@ def refresh_full_release_reviews():
         cur.execute("""SELECT rc.release_candidate_id,rc.release_version_label,
                               rc.source_ruleset_id,rc.package_hash,rc.package,rc.status,
                               rc.canary_allocation_pct,rc.canary_started_at,
+                              rc.canary_last_scanned_at,
                               cd.decision_state,cd.review_eligible,cd.primary_cohort,
                               cd.reason_codes AS canary_reason_codes,cd.evidence AS canary_evidence,
                               vr.ruleset_id,vr.version_label,vr.base_rule_version,
@@ -2338,6 +2342,7 @@ def refresh_full_release_reviews():
             composition=_full_release_composition(cur,{
                 **rc,"release_candidate_id":row["release_candidate_id"],
                 "base_rule_version":row["base_rule_version"],
+                "canary_last_scanned_at":row["canary_last_scanned_at"],
             })
             canary_decision={
                 "decision_state":row["decision_state"],
@@ -2396,26 +2401,31 @@ def refresh_full_release_reviews():
                 gate_event_id=cur.fetchone()["event_id"]
                 transitions+=1
 
-            # Pending human review immediately becomes stale if gate readiness is lost.
+            # Human readiness is revocable until a future live switch exists.
             if gate["state"]!="FULL_RELEASE_REVIEW_READY":
-                cur.execute("""SELECT review_id FROM market_os_full_release_reviews
-                               WHERE release_candidate_id=%s AND review_state='PENDING'""",
+                cur.execute("""SELECT review_id,review_state FROM market_os_full_release_reviews
+                               WHERE release_candidate_id=%s
+                                 AND review_state IN ('PENDING','RELEASE_READY')""",
                             (row["release_candidate_id"],))
                 for pending in cur.fetchall():
                     cur.execute("""UPDATE market_os_full_release_reviews
                                    SET review_state='STALE_CANARY'
-                                   WHERE review_id=%s AND review_state='PENDING'""",
+                                   WHERE review_id=%s
+                                     AND review_state IN ('PENDING','RELEASE_READY')""",
                                 (pending["review_id"],))
                     if cur.rowcount:
                         cur.execute("""INSERT INTO market_os_full_release_review_events(
                                 review_id,event_type,from_review_state,to_review_state,note,evidence)
-                            VALUES(%s,'CANARY_GATE_STALE','PENDING','STALE_CANARY',
+                            VALUES(%s,'CANARY_GATE_STALE',%s,'STALE_CANARY',
                                    'Full Release Gate no longer REVIEW_READY',%s::jsonb)""",
-                            (pending["review_id"],json.dumps({
+                            (pending["review_id"],pending["review_state"],json.dumps({
                                 "gate_state":gate["state"],
                                 "reason_codes":gate["reason_codes"],
                             },ensure_ascii=False)))
                         staled+=1
+                cur.execute("""UPDATE market_os_canary_decisions
+                               SET manual_review_state='FULL_RELEASE_STALE'
+                               WHERE release_candidate_id=%s""",(row["release_candidate_id"],))
                 continue
 
             # A review package is frozen only on entry into REVIEW_READY.
