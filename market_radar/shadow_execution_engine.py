@@ -48,6 +48,8 @@ PORT_MAX_TOTAL_RISK_PCT=max(.1,min(20.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_TO
 PORT_MAX_THEME_RISK_PCT=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_THEME_RISK_PCT","0.8"))))
 PORT_MAX_FAMILY_RISK_PCT=max(.05,min(10.0,float(os.getenv("SHADOW_PORTFOLIO_MAX_FAMILY_RISK_PCT","1.2"))))
 PORT_MAX_OPEN=max(1,min(50,int(os.getenv("SHADOW_PORTFOLIO_MAX_OPEN","5"))))
+RISK_CONTROL_REQUIRED=os.getenv("RISK_CONTROL_REQUIRED","1").strip().lower() in ("1","true","yes","on")
+RISK_CONTROL_MAX_AGE_SEC=max(30,min(600,int(os.getenv("RISK_CONTROL_STATUS_MAX_AGE_SECONDS","120"))))
 
 SIZING=SizingPolicy(
     account_equity_krw=ACCOUNT_EQUITY,
@@ -294,6 +296,27 @@ def open_portfolio(cur):
         "risk_krw":finite(r["risk_at_entry_krw"]) or 0.0,
     } for r in cur.fetchall()]
 
+def risk_control_allows_new(cur):
+    if os.getenv("RISK_MANUAL_HALT","0").strip().lower() in ("1","true","yes","on"):
+        return False,"MANUAL_HALT"
+    if not table_exists(cur,"ai_risk_control_status"):
+        return (not RISK_CONTROL_REQUIRED),"RISK_CONTROL_STATUS_MISSING"
+    cur.execute("""SELECT updated_at,state,allow_new_shadow_entries
+                   FROM ai_risk_control_status WHERE id=1""")
+    r=cur.fetchone()
+    if not r:
+        return (not RISK_CONTROL_REQUIRED),"RISK_CONTROL_STATUS_EMPTY"
+    updated=_aware(r["updated_at"])
+    age=(datetime.now(timezone.utc)-updated.astimezone(timezone.utc)).total_seconds() if updated else 9999
+    if age>RISK_CONTROL_MAX_AGE_SEC:
+        return (not RISK_CONTROL_REQUIRED),f"RISK_CONTROL_STALE_{int(age)}s"
+    state=str(r["state"] or "UNKNOWN")
+    allow=bool(r["allow_new_shadow_entries"])
+    if state=="HALT" or not allow:
+        return False,f"RISK_CONTROL_{state}"
+    return True,state
+
+
 def execution_fill(cur,side,code,at,shares):
     book=latest_book(cur,code,at)
     if book:
@@ -319,6 +342,9 @@ def _arrival_ref(fill,context):
 
 def open_new(cur):
     if not table_exists(cur,"radar_paper_trades") or not column_exists(cur,"radar_paper_trades","strategy_id"):
+        return 0
+    allowed,_risk_state=risk_control_allows_new(cur)
+    if not allowed:
         return 0
     cutoff=simulation_cutoff(cur)
     cur.execute("""SELECT p.id,p.stock_code,p.stock_name,p.opened_at,p.entry_price_krw,
@@ -478,7 +504,8 @@ def update_status(cur):
                  f"book-aware shadow; no orders; equity={ACCOUNT_EQUITY:.0f}; "
                  f"risk={RISK_PCT:.2f}%; totalRisk<={PORT_MAX_TOTAL_RISK_PCT:.2f}%; "
                  f"themeRisk<={PORT_MAX_THEME_RISK_PCT:.2f}%; familyRisk<={PORT_MAX_FAMILY_RISK_PCT:.2f}%; "
-                 f"bookHaircut={BOOK_HAIRCUT:.2f}; fallback={ALLOW_PROXY_FALLBACK}"))
+                 f"bookHaircut={BOOK_HAIRCUT:.2f}; fallback={ALLOW_PROXY_FALLBACK}; "
+                 f"riskControlRequired={RISK_CONTROL_REQUIRED}"))
 
 def cycle():
     with db() as c,c.cursor() as cur:
