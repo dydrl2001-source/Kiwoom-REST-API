@@ -15,6 +15,7 @@ usage() {
   echo "  bash shadow_rule_admin.sh ruleset <ruleset_id>"
   echo "  bash shadow_rule_admin.sh release <release_candidate_id>"
   echo "  bash shadow_rule_admin.sh full-release <review_id>"
+  echo "  bash shadow_rule_admin.sh switch <switch_transaction_id>"
   echo "  bash shadow_rule_admin.sh approve <candidate_key> --confirm"
   echo "  bash shadow_rule_admin.sh disable <shadow_rule_id> --confirm"
   echo "  bash shadow_rule_admin.sh review <dossier_id> <approve-dry-run|reject> --confirm"
@@ -24,15 +25,19 @@ usage() {
   echo "  bash shadow_rule_admin.sh canary-start <release_candidate_id> --confirm"
   echo "  bash shadow_rule_admin.sh canary-stop <release_candidate_id> --confirm"
   echo "  bash shadow_rule_admin.sh full-release-review <review_id> <approve|reject> --confirm"
+  echo "  bash shadow_rule_admin.sh switch-prepare <review_id> --confirm"
+  echo "  bash shadow_rule_admin.sh switch-commit <switch_transaction_id> --confirm"
+  echo "  bash shadow_rule_admin.sh switch-rollback <switch_transaction_id> --confirm"
+  echo "  bash shadow_rule_admin.sh switch-cancel <switch_transaction_id> --confirm"
 }
 
 case "$cmd" in
   list)
     ;;
-  dossier|ruleset|release|full-release)
+  dossier|ruleset|release|full-release|switch)
     if [ -z "$id" ]; then usage; exit 1; fi
     ;;
-  approve|disable|dry-run-start|dry-run-stop|release-create|canary-start|canary-stop)
+  approve|disable|dry-run-start|dry-run-stop|release-create|canary-start|canary-stop|switch-prepare|switch-commit|switch-rollback|switch-cancel)
     if [ -z "$id" ] || [ "$arg" != "--confirm" ]; then usage; exit 1; fi
     ;;
   review)
@@ -53,11 +58,18 @@ case "$cmd" in
 esac
 
 docker compose exec -T radar-api python - "$cmd" "$id" "$arg" <<'PY'
-import json,os,sys
+import json,os,sys,hashlib
+from datetime import datetime,timezone
 import psycopg
 from psycopg.rows import dict_row
 from market_os_ruleset import build_spec as build_versioned_ruleset
 from market_os_release import build_release_candidate
+from market_os_rule_engine import VERSION as MARKET_OS_BASE_VERSION
+from market_os_control import (
+    base_control as runtime_base_control,
+    candidate_control as runtime_candidate_control,
+    control_hash as runtime_control_hash,
+)
 
 cmd=sys.argv[1];ident=sys.argv[2] if len(sys.argv)>2 else ""
 arg=sys.argv[3] if len(sys.argv)>3 else ""
@@ -79,10 +91,88 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
               "market_os_canary_summary","market_os_canary_decisions",
               "market_os_canary_decision_events","market_os_full_release_gates",
               "market_os_full_release_gate_events","market_os_full_release_reviews",
-              "market_os_full_release_review_events"]
+              "market_os_full_release_review_events","market_os_control_state",
+              "market_os_switch_transactions","market_os_switch_events"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
+
+    def current_control(for_update=False):
+        suffix=" FOR UPDATE" if for_update else ""
+        cur.execute("""SELECT control_id,mode,active_version_label,base_rule_version,
+                              ruleset_id,ruleset_hash,ruleset_spec,source_review_id,
+                              switch_transaction_id,control_hash,activated_at
+                       FROM market_os_control_state WHERE id=1"""+suffix)
+        row=cur.fetchone()
+        if row:
+            x=dict(row)
+            if x.get("activated_at"):
+                x["activated_at"]=x["activated_at"].isoformat()
+            return x
+        return runtime_base_control(MARKET_OS_BASE_VERSION)
+
+    def write_control(x,activated_at_sql=False):
+        cur.execute("""INSERT INTO market_os_control_state(
+                id,control_id,mode,active_version_label,base_rule_version,
+                ruleset_id,ruleset_hash,ruleset_spec,source_review_id,
+                switch_transaction_id,control_hash,activated_at,updated_at)
+            VALUES(1,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,
+                   CASE WHEN %s THEN now() ELSE %s::timestamptz END,now())
+            ON CONFLICT(id) DO UPDATE SET
+                control_id=excluded.control_id,mode=excluded.mode,
+                active_version_label=excluded.active_version_label,
+                base_rule_version=excluded.base_rule_version,
+                ruleset_id=excluded.ruleset_id,ruleset_hash=excluded.ruleset_hash,
+                ruleset_spec=excluded.ruleset_spec,source_review_id=excluded.source_review_id,
+                switch_transaction_id=excluded.switch_transaction_id,
+                control_hash=excluded.control_hash,activated_at=excluded.activated_at,
+                updated_at=now()""",
+            (x.get("control_id"),x.get("mode"),x.get("active_version_label"),
+             x.get("base_rule_version"),x.get("ruleset_id"),x.get("ruleset_hash"),
+             json.dumps(x.get("ruleset_spec"),ensure_ascii=False) if x.get("ruleset_spec") is not None else None,
+             x.get("source_review_id"),x.get("switch_transaction_id"),
+             x.get("control_hash") or runtime_control_hash(x),
+             activated_at_sql,x.get("activated_at")))
+
+    def switch_sources(review_id,for_update=False):
+        suffix=" FOR UPDATE" if for_update else ""
+        cur.execute("""SELECT fr.review_id,fr.release_candidate_id,fr.content_hash,
+                              fr.review_state,g.gate_state,g.review_eligible AS gate_eligible,
+                              rc.status AS release_status,rc.source_ruleset_id,
+                              cd.decision_state AS canary_state,
+                              cd.review_eligible AS canary_eligible,
+                              vr.ruleset_id,vr.version_label,vr.base_rule_version,
+                              vr.spec_hash,vr.spec,vr.status AS ruleset_status,
+                              sd.decision_state AS succession_state,
+                              sd.review_eligible AS succession_eligible
+                       FROM market_os_full_release_reviews fr
+                       JOIN market_os_full_release_gates g
+                         ON g.release_candidate_id=fr.release_candidate_id
+                       JOIN market_os_release_candidates rc
+                         ON rc.release_candidate_id=fr.release_candidate_id
+                       JOIN market_os_canary_decisions cd
+                         ON cd.release_candidate_id=fr.release_candidate_id
+                       JOIN market_os_versioned_rulesets vr
+                         ON vr.ruleset_id=rc.source_ruleset_id
+                       JOIN market_os_ruleset_succession_decisions sd
+                         ON sd.ruleset_id=vr.ruleset_id
+                       WHERE fr.review_id=%s"""+suffix,(review_id,))
+        return cur.fetchone()
+
+    def require_switch_sources(row):
+        if not row:
+            raise SystemExit("full release review source missing")
+        checks=[
+            (row["review_state"]=="RELEASE_READY","review not RELEASE_READY"),
+            (row["gate_state"]=="FULL_RELEASE_REVIEW_READY" and row["gate_eligible"],"full release gate not ready"),
+            (row["release_status"]=="CANARY_ACTIVE","release not CANARY_ACTIVE"),
+            (row["canary_state"]=="CANARY_PROMOTION_CANDIDATE" and row["canary_eligible"],"canary not promotion eligible"),
+            (row["ruleset_status"]=="DRY_RUN_ACTIVE","ruleset not DRY_RUN_ACTIVE"),
+            (row["succession_state"]=="SUCCESSION_CANDIDATE" and row["succession_eligible"],"succession not eligible"),
+        ]
+        bad=[msg for ok,msg in checks if not ok]
+        if bad:
+            raise SystemExit("Switch source invalid: "+", ".join(bad))
 
     if cmd=="list":
         print("=== PROMOTION CANDIDATES ===")
@@ -200,7 +290,49 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"created={r['created_at']} reviewed={r['reviewed_at']} "
                   f"hash={r['content_hash'][:12]}")
 
+        print("\n=== CONTROL / SWITCH TRANSACTIONS ===")
+        ctrl=current_control()
+        print(f"CONTROL {ctrl['control_id']} mode={ctrl['mode']} "
+              f"version={ctrl['active_version_label']} hash={ctrl['control_hash'][:12]} "
+              f"switch={ctrl.get('switch_transaction_id') or '—'}")
+        cur.execute("""SELECT switch_transaction_id,source_review_id,release_candidate_id,
+                              ruleset_id,state,expected_control_hash,candidate_hash,
+                              pre_switch_watch_count,prepared_at,committed_at,
+                              health_deadline,completed_at,rollback_at,rollback_reason
+                       FROM market_os_switch_transactions
+                       ORDER BY prepared_at DESC LIMIT 20""")
+        switches=cur.fetchall()
+        if not switches:print("none")
+        for s in switches:
+            print(f"{s['switch_transaction_id']} | {s['state']} | review={s['source_review_id']} "
+                  f"ruleset={s['ruleset_id']} prepared={s['prepared_at']} "
+                  f"committed={s['committed_at']} health={s['health_deadline']} "
+                  f"rollback={s['rollback_at']} reason={s['rollback_reason'] or '—'}")
+
         print("\nRead-only list. No live scores, thresholds, rulesets or orders were changed.")
+        raise SystemExit(0)
+
+    if cmd=="switch":
+        cur.execute("""SELECT * FROM market_os_switch_transactions
+                       WHERE switch_transaction_id=%s""",(ident,))
+        s=cur.fetchone()
+        if not s:
+            raise SystemExit("switch_transaction_id not found")
+        print("SWITCH:",s["switch_transaction_id"],"State:",s["state"])
+        print("Review:",s["source_review_id"],"Release:",s["release_candidate_id"],
+              "Ruleset:",s["ruleset_id"])
+        print("Expected CONTROL:",s["expected_control_hash"])
+        print("Candidate hash:",s["candidate_hash"])
+        print("Prepared:",s["prepared_at"],"Committed:",s["committed_at"],
+              "Health deadline:",s["health_deadline"],"Completed:",s["completed_at"])
+        print("Rollback:",s["rollback_at"],"Reason:",s["rollback_reason"])
+        print("\nPrevious CONTROL:")
+        print(json.dumps(s["previous_control"],ensure_ascii=False,indent=2,default=str))
+        print("\nCandidate CONTROL:")
+        print(json.dumps(s["candidate_control"],ensure_ascii=False,indent=2,default=str))
+        print("\nCurrent CONTROL:")
+        print(json.dumps(current_control(),ensure_ascii=False,indent=2,default=str))
+        print("\nRead-only switch view. No CONTROL change was performed.")
         raise SystemExit(0)
 
     if cmd=="full-release":
@@ -641,6 +773,168 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
         print(target+":",ident)
         print(note)
         print("Live Market OS CONTROL, orders and positions were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="switch-prepare":
+        cur.execute("SELECT pg_advisory_xact_lock(72419073)")
+        src=switch_sources(ident,for_update=True)
+        require_switch_sources(src)
+        ctrl=current_control(for_update=True)
+        if ctrl["mode"]!="BASE":
+            raise SystemExit("v2.2 switch preparation requires current BASE CONTROL.")
+        if runtime_control_hash(ctrl)!=ctrl["control_hash"]:
+            raise SystemExit("Current CONTROL hash is invalid.")
+        cur.execute("""SELECT switch_transaction_id,state
+                       FROM market_os_switch_transactions
+                       WHERE state IN ('PREPARED_SWITCH','COMMITTED')
+                       ORDER BY prepared_at DESC LIMIT 1""")
+        active=cur.fetchone()
+        if active:
+            raise SystemExit("Another switch is active: "+active["switch_transaction_id"]+" "+active["state"])
+        seed="|".join((ident,ctrl["control_hash"],src["spec_hash"],src["content_hash"]))
+        switch_id="sw-"+hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+        candidate=runtime_candidate_control(
+            MARKET_OS_BASE_VERSION,
+            {"ruleset_id":src["ruleset_id"],"spec_hash":src["spec_hash"],
+             "version_label":src["version_label"],"spec":src["spec"]},
+            ident,switch_id
+        )
+        cur.execute("""SELECT COUNT(*) AS n
+                       FROM market_os_assessment_snapshots
+                       WHERE rule_version=%s
+                         AND snapshot_time=(
+                             SELECT MAX(snapshot_time) FROM market_os_assessment_snapshots
+                             WHERE rule_version=%s
+                         )""",(ctrl["active_version_label"],ctrl["active_version_label"]))
+        pre_count=int(cur.fetchone()["n"] or 0)
+        cur.execute("""INSERT INTO market_os_switch_transactions(
+                switch_transaction_id,source_review_id,release_candidate_id,ruleset_id,
+                state,expected_control_hash,previous_control,candidate_control,
+                candidate_hash,pre_switch_watch_count,note)
+            VALUES(%s,%s,%s,%s,'PREPARED_SWITCH',%s,%s::jsonb,%s::jsonb,%s,%s,
+                   'Prepared only; CONTROL unchanged')""",
+            (switch_id,ident,src["release_candidate_id"],src["ruleset_id"],
+             ctrl["control_hash"],json.dumps(ctrl,ensure_ascii=False,default=str),
+             json.dumps(candidate,ensure_ascii=False,default=str),
+             candidate["control_hash"],pre_count))
+        cur.execute("""INSERT INTO market_os_switch_events(
+                switch_transaction_id,event_type,from_state,to_state,evidence)
+            VALUES(%s,'HUMAN_SWITCH_PREPARED',NULL,'PREPARED_SWITCH',%s::jsonb)""",
+            (switch_id,json.dumps({
+                "review_id":ident,"expected_control_hash":ctrl["control_hash"],
+                "candidate_hash":candidate["control_hash"],
+                "pre_switch_watch_count":pre_count,
+                "orders_changed":False
+            },ensure_ascii=False)))
+        print("PREPARED_SWITCH:",switch_id)
+        print("Current CONTROL remains:",ctrl["active_version_label"])
+        print("Candidate:",candidate["active_version_label"])
+        print("Commit requires MARKET_OS_LIVE_SWITCH_ENABLED=1 and explicit switch-commit.")
+        print("Orders/positions were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="switch-commit":
+        enabled=os.getenv("MARKET_OS_LIVE_SWITCH_ENABLED","0").strip().lower() in ("1","true","yes","on")
+        if not enabled:
+            raise SystemExit("MARKET_OS_LIVE_SWITCH_ENABLED is OFF. Commit blocked.")
+        health=max(300,min(3600,int(os.getenv("MARKET_OS_SWITCH_HEALTH_SECONDS","900"))))
+        ttl=max(300,min(3600,int(os.getenv("MARKET_OS_SWITCH_PREPARE_TTL_SECONDS","1800"))))
+        cur.execute("SELECT pg_advisory_xact_lock(72419073)")
+        cur.execute("""SELECT * FROM market_os_switch_transactions
+                       WHERE switch_transaction_id=%s FOR UPDATE""",(ident,))
+        tx=cur.fetchone()
+        if not tx:
+            raise SystemExit("switch_transaction_id not found")
+        if tx["state"]!="PREPARED_SWITCH":
+            raise SystemExit("Commit requires PREPARED_SWITCH. Current="+str(tx["state"]))
+        age=(datetime.now(timezone.utc)-tx["prepared_at"]).total_seconds()
+        if age>ttl:
+            raise SystemExit("Prepared switch expired; cancel and prepare a fresh transaction.")
+        src=switch_sources(tx["source_review_id"],for_update=True)
+        require_switch_sources(src)
+        ctrl=current_control(for_update=True)
+        if ctrl["control_hash"]!=tx["expected_control_hash"]:
+            raise SystemExit("CONTROL changed since prepare; commit aborted.")
+        if runtime_control_hash(ctrl)!=ctrl["control_hash"]:
+            raise SystemExit("Current CONTROL identity invalid; commit aborted.")
+        candidate=dict(tx["candidate_control"] or {})
+        if runtime_control_hash(candidate)!=tx["candidate_hash"]:
+            raise SystemExit("Candidate CONTROL hash invalid; commit aborted.")
+        if candidate.get("ruleset_hash")!=src["spec_hash"] or candidate.get("ruleset_id")!=src["ruleset_id"]:
+            raise SystemExit("Candidate ruleset no longer matches release source.")
+        write_control(candidate,activated_at_sql=True)
+        cur.execute("""UPDATE market_os_switch_transactions
+                       SET state='COMMITTED',committed_at=now(),
+                           health_deadline=now()+(%s || ' seconds')::interval,
+                           note='Atomic CONTROL selector commit; orders unchanged'
+                       WHERE switch_transaction_id=%s AND state='PREPARED_SWITCH'""",
+                    (health,ident))
+        cur.execute("""INSERT INTO market_os_switch_events(
+                switch_transaction_id,event_type,from_state,to_state,evidence)
+            VALUES(%s,'HUMAN_SWITCH_COMMITTED','PREPARED_SWITCH','COMMITTED',%s::jsonb)""",
+            (ident,json.dumps({
+                "candidate_control_id":candidate.get("control_id"),
+                "candidate_hash":candidate.get("control_hash"),
+                "health_window_seconds":health,
+                "orders_changed":False,"positions_changed":False
+            },ensure_ascii=False)))
+        print("COMMITTED:",ident)
+        print("New CONTROL:",candidate["active_version_label"])
+        print("Health window:",str(health)+"s")
+        print("Orders/positions remain unchanged. Automatic rollback watches hard failures.")
+        raise SystemExit(0)
+
+    if cmd=="switch-rollback":
+        cur.execute("SELECT pg_advisory_xact_lock(72419073)")
+        cur.execute("""SELECT * FROM market_os_switch_transactions
+                       WHERE switch_transaction_id=%s FOR UPDATE""",(ident,))
+        tx=cur.fetchone()
+        if not tx:
+            raise SystemExit("switch_transaction_id not found")
+        if tx["state"] not in ("COMMITTED","HEALTHY"):
+            raise SystemExit("Rollback requires COMMITTED or HEALTHY. Current="+str(tx["state"]))
+        ctrl=current_control(for_update=True)
+        if ctrl.get("switch_transaction_id")!=ident or ctrl.get("control_hash")!=tx["candidate_hash"]:
+            raise SystemExit("Current CONTROL no longer matches this switch; refusing unsafe rollback.")
+        previous=dict(tx["previous_control"] or {})
+        write_control(previous,activated_at_sql=False)
+        cur.execute("""UPDATE market_os_switch_transactions
+                       SET state='ROLLED_BACK',rollback_at=now(),completed_at=now(),
+                           rollback_reason='MANUAL_ROLLBACK',
+                           note='Manual rollback restored previous CONTROL'
+                       WHERE switch_transaction_id=%s""",(ident,))
+        cur.execute("""INSERT INTO market_os_switch_events(
+                switch_transaction_id,event_type,from_state,to_state,evidence)
+            VALUES(%s,'HUMAN_SWITCH_ROLLBACK',%s,'ROLLED_BACK',%s::jsonb)""",
+            (ident,tx["state"],json.dumps({
+                "restored_control_id":previous.get("control_id"),
+                "restored_control_hash":previous.get("control_hash"),
+                "orders_changed":False
+            },ensure_ascii=False)))
+        print("ROLLED_BACK:",ident)
+        print("Restored CONTROL:",previous.get("active_version_label"))
+        print("Orders/positions were NOT changed.")
+        raise SystemExit(0)
+
+    if cmd=="switch-cancel":
+        cur.execute("SELECT pg_advisory_xact_lock(72419073)")
+        cur.execute("""SELECT * FROM market_os_switch_transactions
+                       WHERE switch_transaction_id=%s FOR UPDATE""",(ident,))
+        tx=cur.fetchone()
+        if not tx:
+            raise SystemExit("switch_transaction_id not found")
+        if tx["state"]!="PREPARED_SWITCH":
+            raise SystemExit("Cancel requires PREPARED_SWITCH. Current="+str(tx["state"]))
+        cur.execute("""UPDATE market_os_switch_transactions
+                       SET state='CANCELLED',completed_at=now(),
+                           note='Prepared switch cancelled; CONTROL was never changed'
+                       WHERE switch_transaction_id=%s""",(ident,))
+        cur.execute("""INSERT INTO market_os_switch_events(
+                switch_transaction_id,event_type,from_state,to_state,evidence)
+            VALUES(%s,'HUMAN_SWITCH_CANCELLED','PREPARED_SWITCH','CANCELLED','{}'::jsonb)""",
+            (ident,))
+        print("CANCELLED:",ident)
+        print("CONTROL was never changed.")
         raise SystemExit(0)
 
     if cmd=="approve":
