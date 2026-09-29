@@ -559,6 +559,15 @@ def learning_payload():
             "summary":{"active":0,"stopped":0,"stale_source":0,"observations":0,"changed":0},
             "notice":"APPROVED_DRY_RUN dossier를 사람이 다시 시작한 뒤 CONTROL market-os-v1과 immutable candidate ruleset을 prospective로 병렬 계산합니다. SUCCESSION_CANDIDATE도 release 검토 자격일 뿐 live Market OS는 변경하지 않습니다."
         },
+        "release_canary":{
+            "enabled":os.getenv("MARKET_OS_CANARY_ENABLED","1").strip().lower() in {"1","true","yes","on"},
+            "releases":[],"summaries":[],"decisions":[],"events":[],"decision_events":[],
+            "recent_observations":[],
+            "summary":{"release_candidate":0,"active":0,"stopped":0,"source_stale":0,
+                       "rollback_required":0,"promotion_candidate":0,
+                       "observations":0,"changed":0},
+            "notice":"Release Candidate는 deterministic stock-day Canary preview에서만 candidate tier를 계산합니다. 기본 Market OS watch_tier와 주문/포지션은 CONTROL 그대로입니다."
+        },
         "notes":[],"daily_assessments":[],
     }
     edge_rows=[]
@@ -915,6 +924,112 @@ def learning_payload():
                 x=dict(r)
                 x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
                 learning["ruleset_dry_run"]["succession_events"].append(x)
+        if exists(cur,"market_os_release_candidates"):
+            cur.execute("""SELECT rc.release_candidate_id,rc.release_version_label,
+                                  rc.source_ruleset_id,rc.source_succession_event_id,
+                                  rc.package_hash,rc.package,rc.status,rc.canary_allocation_pct,
+                                  rc.created_at,rc.canary_started_at,rc.stopped_at,rc.stale_at,
+                                  rc.rollback_at,rc.last_evaluated_at,rc.note,
+                                  COUNT(o.*) AS observations,
+                                  COUNT(o.*) FILTER(WHERE o.changed) AS changed
+                           FROM market_os_release_candidates rc
+                           LEFT JOIN market_os_canary_observations o
+                             ON o.release_candidate_id=rc.release_candidate_id
+                           GROUP BY rc.release_candidate_id
+                           ORDER BY CASE rc.status WHEN 'CANARY_ACTIVE' THEN 1
+                                    WHEN 'RELEASE_CANDIDATE' THEN 2
+                                    WHEN 'CANARY_ROLLBACK_REQUIRED' THEN 3
+                                    WHEN 'CANARY_SOURCE_STALE' THEN 4 ELSE 5 END,
+                                    rc.created_at DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("created_at","canary_started_at","stopped_at","stale_at",
+                          "rollback_at","last_evaluated_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                x["observations"]=int(r["observations"] or 0)
+                x["changed"]=int(r["changed"] or 0)
+                learning["release_canary"]["releases"].append(x)
+            rel=learning["release_canary"]["releases"]
+            sm=learning["release_canary"]["summary"]
+            sm["release_candidate"]=sum(x["status"]=="RELEASE_CANDIDATE" for x in rel)
+            sm["active"]=sum(x["status"]=="CANARY_ACTIVE" for x in rel)
+            sm["stopped"]=sum(x["status"]=="CANARY_STOPPED" for x in rel)
+            sm["source_stale"]=sum(x["status"]=="CANARY_SOURCE_STALE" for x in rel)
+            sm["rollback_required"]=sum(x["status"]=="CANARY_ROLLBACK_REQUIRED" for x in rel)
+            sm["observations"]=sum(x["observations"] for x in rel)
+            sm["changed"]=sum(x["changed"] for x in rel)
+        if exists(cur,"market_os_canary_summary"):
+            cur.execute("""SELECT release_candidate_id,horizon,cohort,evidence_state,
+                                  membership_changes,control_samples,control_stocks,control_days,
+                                  control_avg_return_pct,control_median_return_pct,
+                                  control_positive_rate,control_avg_mfe_pct,control_avg_mae_pct,
+                                  candidate_samples,candidate_stocks,candidate_days,
+                                  candidate_avg_return_pct,candidate_median_return_pct,
+                                  candidate_positive_rate,candidate_avg_mfe_pct,candidate_avg_mae_pct,
+                                  delta_avg_return_pct,delta_positive_rate_pp,delta_mae_pct,updated_at
+                           FROM market_os_canary_summary
+                           ORDER BY CASE horizon WHEN '30m' THEN 1 WHEN 'close' THEN 2
+                                    WHEN 'D+1' THEN 3 ELSE 4 END,cohort,release_candidate_id""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["updated_at"]=r["updated_at"].isoformat() if r["updated_at"] else None
+                learning["release_canary"]["summaries"].append(x)
+        if exists(cur,"market_os_canary_decisions"):
+            cur.execute("""SELECT d.release_candidate_id,d.decision_state,d.review_eligible,
+                                  d.primary_cohort,d.reason_codes,d.evidence,
+                                  d.manual_review_state,d.state_since,d.updated_at,
+                                  rc.release_version_label,rc.status,rc.source_ruleset_id,
+                                  rc.canary_allocation_pct
+                           FROM market_os_canary_decisions d
+                           LEFT JOIN market_os_release_candidates rc
+                             ON rc.release_candidate_id=d.release_candidate_id
+                           ORDER BY CASE d.decision_state
+                               WHEN 'CANARY_PROMOTION_CANDIDATE' THEN 1
+                               WHEN 'CANARY_HEALTHY' THEN 2
+                               WHEN 'CANARY_COLLECTING' THEN 3
+                               WHEN 'CANARY_ROLLBACK_REQUIRED' THEN 4 ELSE 5 END,
+                               d.updated_at DESC""")
+            for r in cur.fetchall():
+                x=dict(r)
+                for k in ("state_since","updated_at"):
+                    x[k]=r[k].isoformat() if r[k] else None
+                learning["release_canary"]["decisions"].append(x)
+            learning["release_canary"]["summary"]["promotion_candidate"]=sum(
+                x["decision_state"]=="CANARY_PROMOTION_CANDIDATE"
+                for x in learning["release_canary"]["decisions"]
+            )
+        if exists(cur,"market_os_release_events"):
+            cur.execute("""SELECT event_id,release_candidate_id,event_time,event_type,
+                                  from_status,to_status,evidence
+                           FROM market_os_release_events
+                           ORDER BY event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r);x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["release_canary"]["events"].append(x)
+        if exists(cur,"market_os_canary_decision_events"):
+            cur.execute("""SELECT event_id,release_candidate_id,event_time,from_state,to_state,
+                                  review_eligible,reason_codes,evidence
+                           FROM market_os_canary_decision_events
+                           ORDER BY event_time DESC LIMIT 30""")
+            for r in cur.fetchall():
+                x=dict(r);x["event_time"]=r["event_time"].isoformat() if r["event_time"] else None
+                learning["release_canary"]["decision_events"].append(x)
+        if exists(cur,"market_os_canary_observations"):
+            cur.execute("""SELECT o.assessment_time,o.stock_code,a.stock_name,o.release_candidate_id,
+                                  o.trade_day,o.assignment_bucket,o.allocation_pct,
+                                  o.control_tier,o.candidate_tier,o.changed,o.matched_overlays
+                           FROM market_os_canary_observations o
+                           LEFT JOIN market_os_assessment_snapshots a
+                             ON a.snapshot_time=o.assessment_time
+                            AND a.stock_code=o.stock_code
+                            AND a.rule_version=o.control_rule_version
+                           ORDER BY o.assessment_time DESC,o.stock_code
+                           LIMIT 40""")
+            for r in cur.fetchall():
+                x=dict(r)
+                x["assessment_time"]=r["assessment_time"].isoformat() if r["assessment_time"] else None
+                x["trade_day"]=r["trade_day"].isoformat() if hasattr(r["trade_day"],"isoformat") else str(r["trade_day"])
+                learning["release_canary"]["recent_observations"].append(x)
         if exists(cur,"market_os_assessment_snapshots"):
             cur.execute("""SELECT (snapshot_time AT TIME ZONE 'Asia/Seoul')::date AS d,COUNT(*) AS n,
                                   COUNT(*) FILTER(WHERE watch_tier='FOCUS') AS focus,
