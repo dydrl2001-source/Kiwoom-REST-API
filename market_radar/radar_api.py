@@ -1422,6 +1422,36 @@ def build_ai_resilience_lab(cur):
         return {**out,"status":"ERROR","note":f"Resilience Lab 집계 실패: {type(e).__name__}"}
 
 
+def build_ai_soak_gate(cur):
+    out={
+        "status":"WAITING","updated_at":None,"stage":"SOAK_IN_PROGRESS",
+        "rc_candidate":False,"sample_count":0,"duration_hours":0.0,
+        "failed_gates":["DURATION","SAMPLES"],"payload":{},
+        "note":"persistent staging soak evidence not started"
+    }
+    if not table_exists(cur,"ai_soak_status"):
+        return out
+    try:
+        cur.execute("""SELECT updated_at,stage,rc_candidate,sample_count,duration_hours,
+                              failed_gates,payload,note
+                       FROM ai_soak_status WHERE id=1""")
+        r=cur.fetchone()
+        if not r:return out
+        return {
+            "status":"OK",
+            "updated_at":iso(r[0]),
+            "stage":r[1],
+            "rc_candidate":bool(r[2]),
+            "sample_count":int(r[3] or 0),
+            "duration_hours":float(r[4] or 0),
+            "failed_gates":r[5] or [],
+            "payload":r[6] or {},
+            "note":r[7] or out["note"],
+        }
+    except Exception as e:
+        return {**out,"status":"ERROR","note":f"Soak Gate 집계 실패: {type(e).__name__}"}
+
+
 def build_shadow_execution_lab(cur):
     empty={
         "status":"WAITING","open_count":0,"closed_count":0,"rejected_count":0,
@@ -2415,6 +2445,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
                 kiwoom,orderbook,regime,chartfeed
             )
             ai_resilience=build_ai_resilience_lab(cur)
+            ai_soak=build_ai_soak_gate(cur)
             ai_daily_review=build_ai_daily_review(cur,paper_feedback)
             global_analysis = build_global_analysis(regime, regime_metrics, rows, sector_groups)
 
@@ -2670,6 +2701,7 @@ def dashboard(x_dashboard_token: Optional[str] = Header(None)):
         "ai_allocation": ai_allocation,
         "ai_risk_control": ai_risk_control,
         "ai_resilience": ai_resilience,
+        "ai_soak": ai_soak,
         "ai_daily_review": ai_daily_review,
         "shadow_execution": shadow_execution,
         "cache_seconds": DASHBOARD_CACHE_SECONDS,
