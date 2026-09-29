@@ -93,10 +93,12 @@ def snapshot():
 
     now=datetime.now(timezone.utc)
     with db() as c,c.cursor() as cur:
-        cur.execute("""SELECT EXISTS(
-                       SELECT 1 FROM market_radar_schema_migrations
-                       WHERE version=%s) AS ok""",(SCHEMA_VERSION,))
-        schema_ok=bool(cur.fetchone()["ok"]) if table_exists(cur,"market_radar_schema_migrations") else False
+        schema_ok=False
+        if table_exists(cur,"market_radar_schema_migrations"):
+            cur.execute("""SELECT EXISTS(
+                           SELECT 1 FROM market_radar_schema_migrations
+                           WHERE version=%s) AS ok""",(SCHEMA_VERSION,))
+            schema_ok=bool(cur.fetchone()["ok"])
 
         risk_fresh=False
         if table_exists(cur,"ai_risk_control_status"):
