@@ -33,6 +33,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "ai_risk_control":{"status":"OK","kill_switch":{"state":"RUN"},
                                    "live_readiness":{"stage":"RESEARCH_ONLY","live_enabled":False}},
                 "ai_resilience":{"status":"PASS"},
+                "ai_soak":{"status":"WAITING","stage":"SOAK_IN_PROGRESS","rc_candidate":False},
                 "shadow_execution":{"status":"OK"},
             }
         else:
@@ -58,6 +59,7 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertTrue(names["paper_only"]["pass"])
         self.assertTrue(names["live_disabled"]["pass"])
         self.assertTrue(names["no_live_entry_state"]["pass"])
+        self.assertTrue(names["soak_present"]["pass"])
 
     def test_legacy_health_only_deployment_fails(self):
         out=check(self.server("legacy"),None)
@@ -76,7 +78,7 @@ class ReleasePreflightTests(unittest.TestCase):
                     "ai_brokerage":{"status":"OK","paper_only":True,"candidates":[{"state":"LIVE_ENTRY"}]},
                     "ai_capacity":{},"ai_allocation":{},"ai_risk_control":{
                         "kill_switch":{"state":"RUN"},"live_readiness":{"live_enabled":False}},
-                    "ai_resilience":{},"shadow_execution":{}
+                    "ai_resilience":{},"ai_soak":{},"shadow_execution":{}
                 }
                 raw=json.dumps(body).encode();handler.send_response(200)
                 handler.send_header("Content-Type","application/json")
