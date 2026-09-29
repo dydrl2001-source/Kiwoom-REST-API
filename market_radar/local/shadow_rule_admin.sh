@@ -16,6 +16,7 @@ usage() {
   echo "  bash shadow_rule_admin.sh release <release_candidate_id>"
   echo "  bash shadow_rule_admin.sh full-release <review_id>"
   echo "  bash shadow_rule_admin.sh switch <switch_transaction_id>"
+  echo "  bash shadow_rule_admin.sh intent <intent_id>"
   echo "  bash shadow_rule_admin.sh approve <candidate_key> --confirm"
   echo "  bash shadow_rule_admin.sh disable <shadow_rule_id> --confirm"
   echo "  bash shadow_rule_admin.sh review <dossier_id> <approve-dry-run|reject> --confirm"
@@ -29,12 +30,13 @@ usage() {
   echo "  bash shadow_rule_admin.sh switch-commit <switch_transaction_id> --confirm"
   echo "  bash shadow_rule_admin.sh switch-rollback <switch_transaction_id> --confirm"
   echo "  bash shadow_rule_admin.sh switch-cancel <switch_transaction_id> --confirm"
+  echo "  bash shadow_rule_admin.sh intent-review <intent_id> <approve|reject> --confirm"
 }
 
 case "$cmd" in
   list)
     ;;
-  dossier|ruleset|release|full-release|switch)
+  dossier|ruleset|release|full-release|switch|intent)
     if [ -z "$id" ]; then usage; exit 1; fi
     ;;
   approve|disable|dry-run-start|dry-run-stop|release-create|canary-start|canary-stop|switch-prepare|switch-commit|switch-rollback|switch-cancel)
@@ -46,6 +48,11 @@ case "$cmd" in
     fi
     ;;
   full-release-review)
+    if [ -z "$id" ] || { [ "$arg" != "approve" ] && [ "$arg" != "reject" ]; } || [ "$confirm" != "--confirm" ]; then
+      usage; exit 1
+    fi
+    ;;
+  intent-review)
     if [ -z "$id" ] || { [ "$arg" != "approve" ] && [ "$arg" != "reject" ]; } || [ "$confirm" != "--confirm" ]; then
       usage; exit 1
     fi
@@ -70,6 +77,7 @@ from market_os_control import (
     candidate_control as runtime_candidate_control,
     control_hash as runtime_control_hash,
 )
+from market_os_execution import approval_still_valid as execution_approval_valid
 
 cmd=sys.argv[1];ident=sys.argv[2] if len(sys.argv)>2 else ""
 arg=sys.argv[3] if len(sys.argv)>3 else ""
@@ -92,7 +100,9 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
               "market_os_canary_decision_events","market_os_full_release_gates",
               "market_os_full_release_gate_events","market_os_full_release_reviews",
               "market_os_full_release_review_events","market_os_control_state",
-              "market_os_switch_transactions","market_os_switch_events"]
+              "market_os_switch_transactions","market_os_switch_events",
+              "market_os_execution_intents","market_os_execution_intent_events",
+              "market_os_execution_firewall_runs"]
     missing=[x for x in required if not exists(x)]
     if missing:
         raise SystemExit("Shadow Lab schema missing: "+", ".join(missing)+". Deploy/restart market-os-learning first.")
@@ -309,7 +319,41 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                   f"committed={s['committed_at']} health={s['health_deadline']} "
                   f"rollback={s['rollback_at']} reason={s['rollback_reason'] or '—'}")
 
+        print("\n=== EXECUTION FIREWALL INTENTS ===")
+        cur.execute("""SELECT intent_id,status,stock_code,stock_name,snapshot_time,expires_at,
+                              active_version_label,switch_transaction_id,reference_price_krw,
+                              watch_tier,trigger_state,market_stance,catalyst_grade,
+                              created_at,reviewed_at
+                       FROM market_os_execution_intents
+                       ORDER BY CASE status WHEN 'REVIEW_PENDING' THEN 1
+                                WHEN 'HUMAN_APPROVED_INTENT' THEN 2 ELSE 3 END,
+                                created_at DESC LIMIT 40""")
+        intents=cur.fetchall()
+        if not intents:print("none")
+        for x in intents:
+            print(f"{x['intent_id']} | {x['status']} | {x['stock_code']} {x['stock_name'] or ''} | "
+                  f"tier={x['watch_tier']} trigger={x['trigger_state']} stance={x['market_stance']} "
+                  f"catalyst={x['catalyst_grade']} ref={x['reference_price_krw']} "
+                  f"expires={x['expires_at']} version={x['active_version_label']} "
+                  f"switch={x['switch_transaction_id']}")
+
         print("\nRead-only list. No live scores, thresholds, rulesets or orders were changed.")
+        raise SystemExit(0)
+
+    if cmd=="intent":
+        cur.execute("""SELECT * FROM market_os_execution_intents
+                       WHERE intent_id=%s""",(ident,))
+        x=cur.fetchone()
+        if not x:
+            raise SystemExit("intent_id not found")
+        print("EXECUTION INTENT:",x["intent_id"],"Status:",x["status"])
+        print("Stock:",x["stock_code"],x["stock_name"] or "")
+        print("Snapshot:",x["snapshot_time"],"Expires:",x["expires_at"])
+        print("CONTROL:",x["active_version_label"],x["control_hash"],
+              "Switch:",x["switch_transaction_id"])
+        print("Reference price:",x["reference_price_krw"])
+        print(json.dumps(x["evidence"],ensure_ascii=False,indent=2,default=str))
+        print("\nRead-only intent. Quantity/limit price/broker order are not generated.")
         raise SystemExit(0)
 
     if cmd=="switch":
@@ -938,6 +982,61 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
             (ident,))
         print("CANCELLED:",ident)
         print("CONTROL was never changed.")
+        raise SystemExit(0)
+
+    if cmd=="intent-review":
+        cur.execute("""SELECT * FROM market_os_execution_intents
+                       WHERE intent_id=%s FOR UPDATE""",(ident,))
+        x=cur.fetchone()
+        if not x:
+            raise SystemExit("intent_id not found")
+        if x["status"]!="REVIEW_PENDING":
+            raise SystemExit("Only REVIEW_PENDING intents can be reviewed. Current="+str(x["status"]))
+
+        if arg=="approve":
+            ctrl=current_control(for_update=True)
+            cur.execute("""SELECT state FROM market_os_switch_transactions
+                           WHERE switch_transaction_id=%s""",(x["switch_transaction_id"],))
+            sr=cur.fetchone()
+            switch_state=sr["state"] if sr else None
+            check=execution_approval_valid(dict(x),ctrl,switch_state,datetime.now(timezone.utc))
+            if not check["valid"]:
+                target="EXPIRED" if "INTENT_EXPIRED" in check["reason_codes"] else "STALE_CONTROL"
+                cur.execute("""UPDATE market_os_execution_intents
+                               SET status=%s,reviewed_at=now(),reviewed_by='MANUAL_SCRIPT',
+                                   review_note=%s
+                               WHERE intent_id=%s""",
+                            (target,",".join(check["reason_codes"]),ident))
+                cur.execute("""INSERT INTO market_os_execution_intent_events(
+                        intent_id,event_type,from_status,to_status,reason_codes,evidence)
+                    VALUES(%s,'REVIEW_INVALIDATED','REVIEW_PENDING',%s,%s::jsonb,%s::jsonb)""",
+                    (ident,target,json.dumps(check["reason_codes"],ensure_ascii=False),
+                     json.dumps({"broker_order_created":False},ensure_ascii=False)))
+                raise SystemExit(target+": "+",".join(check["reason_codes"]))
+            target="HUMAN_APPROVED_INTENT"
+            event="HUMAN_INTENT_APPROVED"
+            note="Human approved review intent metadata only; no broker order, quantity or position mutation."
+        else:
+            target="HUMAN_REJECTED"
+            event="HUMAN_INTENT_REJECTED"
+            note="Human rejected execution review intent."
+
+        cur.execute("""UPDATE market_os_execution_intents
+                       SET status=%s,reviewed_at=now(),reviewed_by='MANUAL_SCRIPT',
+                           review_note=%s
+                       WHERE intent_id=%s""",(target,note,ident))
+        cur.execute("""INSERT INTO market_os_execution_intent_events(
+                intent_id,event_type,from_status,to_status,reason_codes,evidence)
+            VALUES(%s,%s,'REVIEW_PENDING',%s,'[]'::jsonb,%s::jsonb)""",
+            (ident,event,target,json.dumps({
+                "broker_order_created":False,
+                "quantity":None,
+                "limit_price":None,
+                "position_change":False,
+            },ensure_ascii=False)))
+        print(target+":",ident)
+        print(note)
+        print("No broker API was called.")
         raise SystemExit(0)
 
     if cmd=="approve":
