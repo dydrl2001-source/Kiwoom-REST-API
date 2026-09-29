@@ -508,10 +508,12 @@ CREATE TABLE IF NOT EXISTS market_os_release_candidates (
     stopped_at              TIMESTAMPTZ,
     stale_at                TIMESTAMPTZ,
     rollback_at             TIMESTAMPTZ,
+    canary_last_scanned_at  TIMESTAMPTZ,
     last_evaluated_at       TIMESTAMPTZ,
     note                    TEXT,
     UNIQUE(source_ruleset_id,source_succession_event_id)
 );
+ALTER TABLE market_os_release_candidates ADD COLUMN IF NOT EXISTS canary_last_scanned_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_market_os_release_status
     ON market_os_release_candidates(status,created_at DESC);
 
@@ -1973,6 +1975,7 @@ def capture_canary_observations(limit_per_release=800):
             return {"inserted":0,"staled":0}
         cur.execute("""SELECT rc.release_candidate_id,rc.source_ruleset_id,rc.status,
                               rc.canary_allocation_pct,rc.canary_started_at,
+                              rc.canary_last_scanned_at,
                               vr.base_rule_version,vr.status AS ruleset_status,vr.spec,
                               sd.decision_state AS succession_state,
                               sd.review_eligible AS succession_eligible
@@ -2007,23 +2010,28 @@ def capture_canary_observations(limit_per_release=800):
                     staled+=1
                 continue
 
-            cur.execute("""SELECT a.*
+            # Advance by complete assessment timestamps, including rows not assigned
+            # to Canary, so the 80% CONTROL-only population is not rescanned forever.
+            cur.execute("""WITH next_times AS (
+                               SELECT DISTINCT snapshot_time
+                               FROM market_os_assessment_snapshots
+                               WHERE rule_version=%s
+                                 AND snapshot_time>%s
+                               ORDER BY snapshot_time
+                               LIMIT %s
+                           )
+                           SELECT a.*
                            FROM market_os_assessment_snapshots a
+                           JOIN next_times t ON t.snapshot_time=a.snapshot_time
                            WHERE a.rule_version=%s
-                             AND a.snapshot_time>=%s
-                             AND NOT EXISTS(
-                                 SELECT 1 FROM market_os_canary_observations o
-                                 WHERE o.assessment_time=a.snapshot_time
-                                   AND o.stock_code=a.stock_code
-                                   AND o.control_rule_version=a.rule_version
-                                   AND o.release_candidate_id=%s
-                             )
-                           ORDER BY a.snapshot_time,a.stock_code
-                           LIMIT %s""",
-                        (rc["base_rule_version"],rc["canary_started_at"],
-                         rc["release_candidate_id"],limit_per_release))
+                           ORDER BY a.snapshot_time,a.stock_code""",
+                        (rc["base_rule_version"],
+                         rc["canary_last_scanned_at"] or rc["canary_started_at"],
+                         max(1,limit_per_release//12),
+                         rc["base_rule_version"]))
+            scanned=cur.fetchall()
             rows=[]
-            for a in cur.fetchall():
+            for a in scanned:
                 day=a["snapshot_time"].astimezone(KST).date().isoformat()
                 if not is_canary_selected(
                     rc["release_candidate_id"],a["stock_code"],day,rc["canary_allocation_pct"]
@@ -2046,9 +2054,12 @@ def capture_canary_observations(limit_per_release=800):
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                     ON CONFLICT DO NOTHING""",rows)
                 inserted+=cur.rowcount if cur.rowcount is not None and cur.rowcount>=0 else len(rows)
+            if scanned:
+                last_scan=max(a["snapshot_time"] for a in scanned)
                 cur.execute("""UPDATE market_os_release_candidates
-                               SET last_evaluated_at=now()
-                               WHERE release_candidate_id=%s""",(rc["release_candidate_id"],))
+                               SET canary_last_scanned_at=%s,last_evaluated_at=now()
+                               WHERE release_candidate_id=%s""",
+                            (last_scan,rc["release_candidate_id"]))
     return {"inserted":inserted,"staled":staled}
 
 
