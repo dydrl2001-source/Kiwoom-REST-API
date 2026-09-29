@@ -1,0 +1,3 @@
+*.dump
+*.dump.sha256
+*.sql
