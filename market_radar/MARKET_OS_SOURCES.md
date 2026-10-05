@@ -104,3 +104,15 @@ Daily Decision의 `naver_search_context`에는 자체 검색어/사람 링크/�
 신규 키는 NAVER API HUB에서 등록한다. legacy 신규 신청은 2026-07-31부터 중단됐으며,
 기존 키 서비스도 2027-07-01부터 종료된다. 인증·쿼터·선택 API와 제외 이유·이관 근거는
 [Daily Decision 운영 문서](MARKET_OS_DAILY_DECISION.md)에 정리했다.
+
+## 실제 수급·계좌 읽기 전용 연동
+
+- Kiwoom `ka10059`: 종목별 외국인/기관 순매수. 금액 모드의 백만원을 원으로 변환하고 원본 거래일을 보존한다. 조회 시각으로 거래일을 갱신하지 않는다. 장중 확정 수급 또는 매매 신호로 취급하지 않는다.
+- `kt00018`: KRX 기준 계좌 평가/잔고 요약. 누적 평가손익은 당일 손익이 아니다.
+- `ka10074`: 요청일과 일치하는 행의 실현손익만 채택한다. 전일 또는 누락 행은 미확인이다.
+- `ka10075`: 통합 시장 전체 미체결. 모든 페이지가 완료되어야 중복주문 여부를 판정한다.
+- `kt00017`: D+2 추정예수금. 즉시 주문 가능금액으로 해석하지 않는다.
+- 공식 [키움 REST API 가이드](https://openapi.kiwoom.com/m/guide/apiguide?dummyVal=0), 저장소 `kiwoom/_data/kiwoom_api_spec.json`의 필드/단위 계약 사용.
+- 읽기 전용 adapter에는 주문·정정·취소 API가 없다. 계좌 최소 관측값은 인증된 로컬 화면만 사용하며 AI와 공개 산출물에 포함하지 않는다.
+
+설정·조회·누락 처리·현재 검증 범위: [MARKET_OS_READONLY.md](MARKET_OS_READONLY.md).

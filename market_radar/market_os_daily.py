@@ -51,13 +51,15 @@ def run_once(now=None, payload=None, env=None):
     if payload is None:
         from flow_store import desk_payload
         payload = desk_payload(include_tracking=False)
+        from market_os_readonly import enrich_payload
+        payload = enrich_payload(payload)
     packet = build_packet(payload, now)
     if packet["status"] != "READY":
         return "WAITING_FOR_FRESH_RULE_CANDIDATES"
     with db() as c, c.cursor() as cur:
         cur.execute("""INSERT INTO market_os_daily_packets
             (budget_day,packet_id,created_at,packet,status)
-            VALUES(%s,%s,%s,%s::jsonb,'RULES_ONLY') ON CONFLICT(budget_day) DO NOTHING
+            VALUES(%s,%s,%s,%s::jsonb,'RULES_ONLY') ON CONFLICT DO NOTHING
             RETURNING packet_id""", (packet["budget_day_kst"], packet["packet_id"], now, compact(packet)))
         if not cur.fetchone():
             return "DAILY_PACKET_EXISTS"

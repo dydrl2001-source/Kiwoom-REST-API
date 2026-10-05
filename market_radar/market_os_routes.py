@@ -14,6 +14,33 @@ _cache_at=0
 
 
 def install(app,authorize):
+    @app.get("/assets/market-os-readonly.js",include_in_schema=False)
+    def readonly_script():
+        return FileResponse(Path(__file__).with_name("market_os_readonly.js"),
+                            media_type="application/javascript",headers={"Cache-Control":"no-cache"})
+    @app.get("/api/market-os/readonly-context")
+    def readonly_context(x_dashboard_token:str|None=Header(None)):
+        authorize(x_dashboard_token)
+        from market_os_readonly import latest
+        try:
+            return JSONResponse(latest(),headers={"Cache-Control":"no-store"})
+        except Exception:
+            raise HTTPException(503,detail="READONLY_CONTEXT_UNAVAILABLE") from None
+
+    @app.post("/api/market-os/readonly-refresh")
+    def readonly_refresh(codes:str="",x_dashboard_token:str|None=Header(None)):
+        authorize(x_dashboard_token)
+        from market_os_readonly import ReadError,refresh
+        selected=[x.strip() for x in codes.split(",") if x.strip()]
+        if len(selected)>5 or any(not re.fullmatch(r"[0-9]{6}",x) for x in selected):
+            raise HTTPException(400,detail="INVALID_CODES_MAX_FIVE")
+        try:
+            return JSONResponse(refresh(selected),headers={"Cache-Control":"no-store"})
+        except ReadError as exc:
+            raise HTTPException(503,detail=str(exc)) from None
+        except Exception:
+            raise HTTPException(503,detail="READONLY_CONTEXT_UNAVAILABLE") from None
+
     @app.get("/api/market-os/daily-decision")
     def daily_decision(x_dashboard_token:str|None=Header(None)):
         authorize(x_dashboard_token)
@@ -31,7 +58,8 @@ def install(app,authorize):
         try:
             from flow_store import desk_payload
             from market_os_packet import build_packet
-            return JSONResponse(build_packet(desk_payload(include_tracking=False)),
+            from market_os_readonly import enrich_payload
+            return JSONResponse(build_packet(enrich_payload(desk_payload(include_tracking=False))),
                                 headers={"Cache-Control":"no-store"})
         except Exception:
             raise HTTPException(503,detail="DECISION_SOURCE_NOT_READY") from None

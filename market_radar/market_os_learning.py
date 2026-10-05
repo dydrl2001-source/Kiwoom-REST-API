@@ -2763,6 +2763,8 @@ def refresh_execution_intents():
     """Create short-lived human review intents from a HEALTHY active CONTROL only."""
     now=datetime.now(timezone.utc)
     payload=desk_payload(include_tracking=False)
+    from market_os_readonly import enrich_payload
+    payload=enrich_payload(payload)
     control=payload.get("market_os_control") or {}
     sample=parse_dt(payload.get("sample_time"))
     age=(now-sample).total_seconds() if sample else None

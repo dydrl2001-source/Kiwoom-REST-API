@@ -57,6 +57,24 @@ def official_evidence(row, now):
     return out
 
 
+def investor_fact(row, kind, now):
+    """Whitelist public facts; no account values or source-generated text in AI."""
+    empty = {"net_buy_krw": None, "as_of": None, "status": "NOT_CONNECTED"}
+    context = row.get("investor_context") or {}
+    fact = context.get(kind) or {}
+    if fact.get("source") != "KIWOOM" or fact.get("api_id") != "ka10059":
+        return empty
+    try:
+        day = datetime.strptime(fact.get("as_of"), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return empty
+    if day > now.astimezone(KST).date() or number(fact.get("net_buy_krw")) is None:
+        return empty
+    return {"source": "KIWOOM", "api_id": "ka10059", "as_of": day.isoformat(),
+            "net_buy_krw": number(fact["net_buy_krw"]), "is_intraday_trigger": False,
+            "status": "CURRENT_DATE_CONTEXT" if day == now.astimezone(KST).date() else "PRIOR_SESSION_CONTEXT"}
+
+
 def build_packet(payload, now=None, top_n=5):
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -90,13 +108,17 @@ def build_packet(payload, now=None, top_n=5):
                          "five_min_krw": number(row.get("five_min_turnover_krw")),
                          "five_min_seconds": number(row.get("five_min_seconds")),
                          "rate_ratio": number(row.get("burst_multiple"))},
-            "foreign": {"net_buy_krw": None, "as_of": None, "status": "NOT_CONNECTED"},
-            "institution": {"net_buy_krw": None, "as_of": None, "status": "NOT_CONNECTED"},
+            "foreign": investor_fact(row, "foreign", now),
+            "institution": investor_fact(row, "institution", now),
             "catalyst_evidence": evidence,
             "naver_search_context": verification_context(code, c.get("name")),
             "execution_risk_gate": evaluate(c, observation_facts(row), now),
             "data_gaps": ["INVESTOR_NET_BUY_NOT_CONNECTED", "ACCOUNT_AND_SESSION_FACTS_NOT_CONNECTED"],
         }
+        if all(candidate[k].get("net_buy_krw") is not None for k in ("foreign", "institution")):
+            candidate["data_gaps"].remove("INVESTOR_NET_BUY_NOT_CONNECTED")
+            if candidate["foreign"]["as_of"] != now.astimezone(KST).date().isoformat():
+                candidate["data_gaps"].append("INVESTOR_DATA_PRIOR_SESSION_NOT_LIVE")
         if not evidence:
             candidate["data_gaps"].append("NO_DART_LIST_EVIDENCE")
         candidates.append(candidate)

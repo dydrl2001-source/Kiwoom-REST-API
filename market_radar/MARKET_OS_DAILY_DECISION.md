@@ -63,8 +63,10 @@ AI 결과는 별도 `advice`에 저장하며 원래 후보/점수/위험 규칙�
 `generated_at`, `market_data_as_of`, 종목별 `price_as_of`, `collected_at`, regime 시각을 구분한다.
 
 기존 rule/control 정렬을 그대로 사용하며 BLOCKED/중복 코드/90초 초과 또는 미래 시세 후보는 제외한다.
-거래대금 순위를 외국인/기관 순매수로 해석하지 않는다. 현재 flow payload에 투자자 수급 공급이 없으므로
-`foreign/institution.net_buy_krw=null`, `status=NOT_CONNECTED`로 표시한다.
+거래대금 순위를 외국인/기관 순매수로 해석하지 않는다. 읽기 전용 커넥터의 `ka10059` 일자별 순매수를
+패킷에 연결한다. 원본 거래일을 보존하고 이전 거래일은 `PRIOR_SESSION_CONTEXT`로 표시한다.
+미조회·실패·숫자 누락은 `null/NOT_CONNECTED`이며 장중 트리거로 사용하지 않는다.
+[실제 수급·계좌 연결](MARKET_OS_READONLY.md)을 참고한다.
 공시 목록은 `LIST_ONLY_NOT_CAUSAL_PROOF`이며 본문 검증이나 상승 원인 확정을 의미하지 않는다.
 
 주말은 제외한다. 평일 휴장일에 대해 캘린더를 추정하지 않고 현재 Kiwoom 체결·rule candidate가 없으면
@@ -151,7 +153,8 @@ API HUB 계약의 세부 조건은 등록 화면에서 별도로 확인해야 �
 
 ## 적용 및 검증 절차
 
-이미 실행 중인 Mac 서비스, 실제 DB, 계좌, API 키는 이 작업에서 변경하지 않는다.
+초기 Daily Decision 구현은 실행 중인 서비스를 교체하지 않았다. 후속 실제 연결에서는
+별도 읽기 전용 서비스가 같은 DB에 최소 계좌 관측값을 저장한다. 계좌 주문·포지션·키 값은 변경하지 않는다.
 배포할 때는 새 이미지와 기존 유료 worker를 섞지 않는다:
 
 1. `local/.env.example`의 새 설정을 기존 `.env`에 병합. 키를 Git에 커밋하지 않는다.

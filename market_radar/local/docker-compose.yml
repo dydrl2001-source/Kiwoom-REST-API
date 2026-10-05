@@ -57,6 +57,21 @@ services:
       kiwoom-feed:
         condition: service_started
 
+  market-os-readonly:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python -m uvicorn market_os_readonly_app:app --host 0.0.0.0 --port 8081
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   market-os-daily:
     build:
       context: ../..

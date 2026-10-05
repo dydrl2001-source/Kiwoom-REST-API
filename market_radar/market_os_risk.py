@@ -1,8 +1,9 @@
 """Fail-closed LONG-entry review gate. Never returns broker authorization.
 
 Account/session/duplicate facts must come from a trusted read-only adapter, not
-AI, browser input or a saved daily packet. The current feed lacks these facts;
-they remain UNKNOWN and block review until that adapter exists.
+AI, browser input or a saved daily packet. The read-only account adapter supplies
+observation and complete unfilled-order facts; unverified daily loss/session
+facts remain UNKNOWN and block review.
 """
 from __future__ import annotations
 
@@ -96,7 +97,13 @@ def evaluate(candidate, facts=None, now=None, mode="shadow"):
 
 def observation_facts(row):
     """Only source facts actually present in flow_store. Never invent account data."""
-    return {"price_krw": row.get("price_krw"), "price_as_of": row.get("exchange_at"),
+    facts = {"price_krw": row.get("price_krw"), "price_as_of": row.get("exchange_at"),
             "quality_flags": row.get("quality_flags"),
             "turnover_as_of": row.get("exchange_at"),
             "turnover_rate_ratio": row.get("burst_multiple")}
+    readonly = row.get("readonly_risk_facts") or {}
+    for key in ("account_as_of", "duplicate_as_of", "duplicate_order"):
+        facts[key] = readonly.get(key)
+    # Current account adapter cannot prove a full-day, cash-flow-adjusted loss.
+    facts["daily_loss_pct"] = None
+    return facts

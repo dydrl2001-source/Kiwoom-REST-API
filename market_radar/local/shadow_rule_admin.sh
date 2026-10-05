@@ -1018,6 +1018,8 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
             from market_os_risk import evaluate as entry_risk, observation_facts
             from flow_store import desk_payload
             current=desk_payload(include_tracking=False)
+            from market_os_readonly import enrich_payload
+            current=enrich_payload(current)
             cc=next((v for v in current.get("market_os_watchlist",[]) if v.get("code")==x["stock_code"]),{})
             rr=next((v for v in current.get("rows",[]) if v.get("code")==x["stock_code"]),{})
             gate=entry_risk(cc,observation_facts(rr),datetime.now(timezone.utc),mode="manual_confirm")
