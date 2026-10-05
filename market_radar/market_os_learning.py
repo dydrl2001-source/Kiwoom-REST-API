@@ -2838,6 +2838,11 @@ def refresh_execution_intents():
         eligible=0
         for candidate in candidates:
             decision=execution_firewall_evaluate(candidate,control,switch_state,age)
+            from market_os_risk import evaluate as evaluate_entry_risk, observation_facts
+            risk=evaluate_entry_risk(candidate,observation_facts(rows.get(candidate.get("code"),{})),now)
+            if not risk["review_eligible"]:
+                decision["eligible"]=False
+                decision["reason_codes"]+=risk["reason_codes"]
             if not decision["eligible"]:
                 for reason in decision["reason_codes"]:
                     block_counts[reason]+=1

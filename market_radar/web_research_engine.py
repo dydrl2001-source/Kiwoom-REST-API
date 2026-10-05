@@ -99,7 +99,7 @@ class Config:
         e = dict(os.environ) if env is None else env
         return cls(flag(e.get("WEB_RESEARCH_ENABLED")), flag(e.get("WEB_RESEARCH_AUTO")),
                    e.get("OPENAI_API_KEY", "").strip(), e.get("WEB_RESEARCH_MODEL", "").strip(),
-                   bounded(e, "WEB_RESEARCH_DAILY_LIMIT", 10, 1, 50),
+                   1,  # Shared hard limit; env cannot raise it
                    bounded(e, "WEB_RESEARCH_HOURLY_LIMIT", 2, 1, 10),
                    bounded(e, "WEB_RESEARCH_COOLDOWN_MINUTES", 60, 15, 1440),
                    bounded(e, "WEB_RESEARCH_MAX_OUTPUT_TOKENS", 3000, 1000, 6000),
@@ -136,6 +136,8 @@ def ensure_schema() -> None:
     with db() as c, c.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (SCHEMA_LOCK_ID,))
         cur.execute(SCHEMA)
+    from market_os_budget import ensure_schema as ensure_budget_schema
+    ensure_budget_schema()
 
 
 def exists(cur, table: str) -> bool:
@@ -310,21 +312,12 @@ def parse_response(data: dict) -> dict:
 
 
 def call_model(ctx: dict, cfg: Config) -> dict:
-    import requests
+    from market_os_budget import BudgetError, request_openai
     payload = make_request(ctx, cfg)
     try:
-        # No automatic retry: a timeout may still have incurred a charge.
-        r = requests.post(API_URL, headers={"Authorization": "Bearer " + cfg.key,
-                          "Content-Type": "application/json"}, json=payload, timeout=(10, 180))
-    except requests.Timeout:
-        raise ResearchError("TIMEOUT_UNCERTAIN") from None
-    except requests.RequestException:
-        raise ResearchError("NETWORK_UNCERTAIN") from None
-    if not r.ok:
-        raise ResearchError({401: "AUTH_FAILED", 403: "ACCESS_DENIED", 404: "MODEL_OR_ENDPOINT_UNAVAILABLE",
-                             429: "RATE_OR_CREDIT_LIMIT"}.get(r.status_code, "PROVIDER_HTTP_ERROR"))
-    try:
-        return parse_response(r.json())
+        return parse_response(request_openai(payload, cfg.key, "WEB_RESEARCH"))
+    except BudgetError as exc:
+        raise ResearchError(str(exc)) from None
     except (ValueError, TypeError, KeyError):
         raise ResearchError("INVALID_PROVIDER_RESPONSE") from None
 

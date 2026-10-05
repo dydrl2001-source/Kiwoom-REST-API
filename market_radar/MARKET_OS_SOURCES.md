@@ -20,6 +20,8 @@
 | OpenDART | 공식 기업공시 | Catalyst 근거 | **현재 사용** |
 | KIND | 거래소 공시 교차확인 | Catalyst 근거 | Phase 2 |
 | Telegram | 조기 재료 탐지 | Discovery only | **현재 사용** |
+| NAVER 공식 검색 (API HUB / 기존 키) | 보조 Discovery / Context / 사람 Verification | 구현·기본 OFF; 뉴스/웹문서/블로그, 결과 AI 입력 금지 |
+| NAVER 증권 웹 | 사람의 시세/기업 교차확인 | 링크만, 자동 크롤링 없음 |
 | 공개 뉴스/RSS | 사건 탐지 | Catalyst 후보 | 부분 사용 |
 | TradingView | 글로벌 차트·스크리너·Heatmap | 사람의 교차검증 | Human-in-the-loop |
 | Quantus | 팩터/기술조건 스크리닝·백테스트 대조군 | Rule 검증 | Human-in-the-loop |
@@ -89,3 +91,16 @@
 3. FRED + 환율/금리/유가 overnight context
 4. KRX 장마감 투자자/프로그램 데이터 검증
 5. 컨센서스 revision 데이터는 라이선스 가능한 공급자를 정한 뒤 연결
+
+## Daily Decision 연동 (2026-10-05)
+
+Kiwoom=가격·체결, DART=공시, KRX=사후검증 원칙을 유지한다. NAVER 검색은 시세·수급 공급원이 아니다.
+공식 검색 API의 결과가 사실 검증 완료를 뜻하지 않으며, 블로그를 공시 등급으로 승격하지 않는다.
+
+[NAVER 검색 약관](https://developers.naver.com/products/terms/) 검색 특약 2.3의 AI 입력 금지에 따라
+Daily Decision의 `naver_search_context`에는 자체 검색어/사람 링크/결과 제외 상태만 포함한다.
+결과 문자열·요약·파생물은 AI·학습·영구 패킷에 저장하지 않는다.
+
+신규 키는 NAVER API HUB에서 등록한다. legacy 신규 신청은 2026-07-31부터 중단됐으며,
+기존 키 서비스도 2027-07-01부터 종료된다. 인증·쿼터·선택 API와 제외 이유·이관 근거는
+[Daily Decision 운영 문서](MARKET_OS_DAILY_DECISION.md)에 정리했다.

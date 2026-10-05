@@ -158,5 +158,43 @@
       "형성·충분 등급도 자동 규칙 변경이 아니라 수동 검토 후보로만 제시한다"
     ],
     "type": "operational_heuristic_validation"
+  },
+  "daily_decision": {
+    "schema_version": "daily-decision-v1",
+    "window_kst": [
+      "14:30",
+      "14:40"
+    ],
+    "end_exclusive": true,
+    "top_n": 5,
+    "max_packet_bytes": 24000,
+    "openai_attempts_per_kst_day": 1,
+    "failed_attempts_consume_budget": true,
+    "openai_scope": "ALL_MARKET_RADAR_GENERATION",
+    "ai_order_authority": false,
+    "naver_api_kinds": [
+      "news",
+      "webkr",
+      "blog"
+    ],
+    "naver_results_to_ai": false,
+    "naver_finance_scraping": false,
+    "missing_investor_flow": "null_NOT_CONNECTED"
+  },
+  "execution_risk_gate": {
+    "version": "execution-risk-v1",
+    "mode": "shadow",
+    "max_age_seconds": 90,
+    "max_chase_pct": 1.0,
+    "max_stop_pct": 3.0,
+    "max_daily_loss_pct": 2.0,
+    "min_turnover_rate_ratio": 0.5,
+    "min_data_confidence": 0.9,
+    "entry_start_kst": "09:05",
+    "entry_end_kst": "15:20",
+    "live_auto_execution": false,
+    "missing_required_facts": "BLOCK",
+    "trusted_account_adapter": "NOT_CONNECTED",
+    "duplicate_check_adapter": "NOT_CONNECTED"
   }
 }

@@ -14,6 +14,45 @@ _cache_at=0
 
 
 def install(app,authorize):
+    @app.get("/api/market-os/daily-decision")
+    def daily_decision(x_dashboard_token:str|None=Header(None)):
+        authorize(x_dashboard_token)
+        try:
+            from market_os_daily import latest
+            from market_os_budget import status_today
+            return JSONResponse(jsonable_encoder({"daily":latest(),"api_attempts":status_today(),
+                "live_auto_execution":False}),headers={"Cache-Control":"no-store"})
+        except Exception:
+            raise HTTPException(503,detail="DAILY_DECISION_NOT_READY") from None
+
+    @app.get("/api/market-os/decision-preview")
+    def decision_preview(x_dashboard_token:str|None=Header(None)):
+        authorize(x_dashboard_token)
+        try:
+            from flow_store import desk_payload
+            from market_os_packet import build_packet
+            return JSONResponse(build_packet(desk_payload(include_tracking=False)),
+                                headers={"Cache-Control":"no-store"})
+        except Exception:
+            raise HTTPException(503,detail="DECISION_SOURCE_NOT_READY") from None
+
+    @app.post("/api/market-os/naver-search")
+    def naver_search(query:str,kind:str="news",x_dashboard_token:str|None=Header(None)):
+        authorize(x_dashboard_token)
+        from market_os_naver import search
+        # Explicit human action only; dashboard polling never calls a search API.
+        return JSONResponse(search(kind,query),headers={"Cache-Control":"no-store"})
+
+    @app.get("/market-os/decision",include_in_schema=False)
+    def decision_page():
+        return FileResponse(Path(__file__).with_name("market_os_decision.html"),
+                            media_type="text/html",headers={"Cache-Control":"no-store"})
+
+    @app.get("/assets/market-os-decision.js",include_in_schema=False)
+    def decision_script():
+        return FileResponse(Path(__file__).with_name("market_os_decision.js"),
+                            media_type="application/javascript",headers={"Cache-Control":"no-cache"})
+
     @app.get("/api/market-os")
     def market_os_dashboard(x_dashboard_token:str|None=Header(None)):
         authorize(x_dashboard_token)

@@ -1797,3 +1797,21 @@ Human Review Intent
 
 따라서 v2.3은 **판단 엔진과 실제 금융 실행 사이의 명시적 차단층**이다.
 
+
+
+## Daily Decision / Global AI Budget / Execution Risk v1
+
+- 기존 rule/control shortlist를 최대 5개, 24KB 이하로 압축해 14:30–14:40 KST에 하루 한 번 고정한다.
+- AI 예산은 Market Radar generation 전체가 공유하는 KST일당 1회 **시도**다. 실패/timeout/crash도 소진하며 재시도하지 않는다.
+- AI 응답은 별도 advisory다. 점수, CONTROL, 주문 권한을 변경하지 않는다. 실패해도 규칙 엔진은 지속한다.
+- NAVER 공식 뉴스/웹문서/블로그 검색은 사람의 Discovery/Context/Verification 전용이다.
+  현재 약관상 결과를 AI에 입력할 수 없어 packet에는 자체 검색어/사람 링크/제외 사유만 포함한다.
+- Kiwoom 가격·체결, DART 공시, KRX 사후검증의 우선순위를 바꾸지 않는다.
+- 실행 검토는 stale/future data, 추격가, 손절폭, 일일손실, 테마이탈, 거래대금 속도 급감,
+  장중/거래일, 중복주문, 데이터 신뢰도를 모두 통과해야 한다. 누락/NaN/inf는 차단한다.
+- 기본은 shadow. manual confirm도 메타데이터 확인만 하며 live auto 실행 모드/브로커 adapter는 없다.
+- 현재 미연결인 투자자 순매수는 null, 계좌/장상태/중복주문/손절 등은 UNKNOWN 차단으로 남긴다.
+- 기존 Execution Firewall intent 생성 및 사람 승인에도 최신 risk gate를 적용한다.
+
+세부 임계값·입력 계약·검증·배포는 [운영 문서](MARKET_OS_DAILY_DECISION.md), 실행 기본값은
+`market_os_risk.POLICY`에 있다. 임계값은 미검증 운영 가설이며 검증 없이 자동 최적화하지 않는다.

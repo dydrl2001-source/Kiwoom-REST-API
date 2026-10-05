@@ -34,7 +34,7 @@ class WebResearchTests(unittest.TestCase):
     def test_safe_cost_bounds(self):
         c = self.ready(WEB_RESEARCH_DAILY_LIMIT="9000", WEB_RESEARCH_HOURLY_LIMIT="0",
                        WEB_RESEARCH_MAX_TOOL_CALLS="99", WEB_RESEARCH_MAX_OUTPUT_TOKENS="broken")
-        self.assertEqual((c.daily_limit,c.hourly_limit,c.tool_calls,c.output_tokens),(50,1,5,3000))
+        self.assertEqual((c.daily_limit,c.hourly_limit,c.tool_calls,c.output_tokens),(1,1,5,3000))
 
     def test_disabled_request_fails_before_network(self):
         with self.assertRaisesRegex(w.ResearchError, "DISABLED"):

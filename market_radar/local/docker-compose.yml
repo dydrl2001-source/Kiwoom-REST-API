@@ -57,6 +57,19 @@ services:
       kiwoom-feed:
         condition: service_started
 
+  market-os-daily:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/market_os_daily.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   market-os-learning:
     build:
       context: ../..
@@ -71,7 +84,8 @@ services:
         condition: service_healthy
       kiwoom-feed:
         condition: service_started
-      paper-trade-engine:
+
+  paper-trade-engine:
     build:
       context: ../..
       dockerfile: market_radar/local/Dockerfile
@@ -101,11 +115,6 @@ services:
       postgres:
         condition: service_healthy
       paper-trade-engine:
-        condition: service_started
-
-  market-regime:
-        condition: service_started
-      mimosa-engine:
         condition: service_started
 
   candidate-tracker:

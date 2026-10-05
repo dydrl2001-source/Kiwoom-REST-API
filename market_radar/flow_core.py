@@ -85,8 +85,11 @@ def resolve_turnover(raw_value, volume, low, high, current):
     hi=max(prices)*volume
     # Cumulative trade value should live near price*volume. Wide tolerance handles
     # asynchronous response fields and auction/after-hours prints without inventing a unit.
-    lower=max(0,lo*.72-5_000_000)
-    upper=hi*1.28+5_000_000
+    # Absolute slack must not swamp small-volume observations and falsely
+    # validate a 100x/1000x unit error.
+    slack=min(5_000_000,lo*.10)
+    lower=max(0,lo*.72-slack)
+    upper=hi*1.28+slack
     midpoint=(lo+hi)/2 if hi else lo
     candidates=[]
     for scale in (1,1_000,10_000,1_000_000,100_000_000):

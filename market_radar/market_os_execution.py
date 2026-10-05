@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime,timezone
 import hashlib
 import json
+import math
 
 POLICY_VERSION="execution-firewall-v1"
 ALLOWED_TIER="FOCUS"
@@ -54,7 +55,7 @@ def evaluate(candidate,control,switch_state,sample_age_sec):
         reasons.append("TRIGGER_NOT_CONFIRMED")
     if c.get("catalyst_grade") not in ALLOWED_CATALYST:
         reasons.append("CATALYST_NOT_VERIFIED")
-    if c.get("market_stance") in BLOCKED_STANCES:
+    if c.get("market_stance") not in {"EXPANDABLE","SELECTIVE"}:
         reasons.append("MARKET_STANCE_BLOCKED")
     risks=hard_risks(c.get("risk_flags"))
     if risks:
@@ -63,7 +64,7 @@ def evaluate(candidate,control,switch_state,sample_age_sec):
         age=float(sample_age_sec)
     except (TypeError,ValueError):
         age=None
-    if age is None or age<0 or age>90:
+    if age is None or not math.isfinite(age) or age<0 or age>90:
         reasons.append("STALE_SAMPLE")
 
     return {
@@ -121,7 +122,7 @@ def approval_still_valid(intent,current_control,switch_state,now=None):
     now=now or datetime.now(timezone.utc)
     reasons=[]
     expires=intent.get("expires_at")
-    if expires is not None and now>=expires:
+    if not isinstance(expires,datetime) or expires.tzinfo is None or now>=expires:
         reasons.append("INTENT_EXPIRED")
     if intent.get("control_hash")!=current_control.get("control_hash"):
         reasons.append("CONTROL_HASH_CHANGED")

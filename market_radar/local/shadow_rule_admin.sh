@@ -1013,6 +1013,16 @@ with psycopg.connect(db,row_factory=dict_row,connect_timeout=5) as c,c.cursor() 
                     (ident,target,json.dumps(check["reason_codes"],ensure_ascii=False),
                      json.dumps({"broker_order_created":False},ensure_ascii=False)))
                 raise SystemExit(target+": "+",".join(check["reason_codes"]))
+            # Recheck current source facts; daily AI advice and the frozen intent
+            # cannot substitute for a fresh entry risk check.
+            from market_os_risk import evaluate as entry_risk, observation_facts
+            from flow_store import desk_payload
+            current=desk_payload(include_tracking=False)
+            cc=next((v for v in current.get("market_os_watchlist",[]) if v.get("code")==x["stock_code"]),{})
+            rr=next((v for v in current.get("rows",[]) if v.get("code")==x["stock_code"]),{})
+            gate=entry_risk(cc,observation_facts(rr),datetime.now(timezone.utc),mode="manual_confirm")
+            if not gate["review_eligible"]:
+                raise SystemExit("RISK_GATE_BLOCKED: "+",".join(gate["reason_codes"]))
             target="HUMAN_APPROVED_INTENT"
             event="HUMAN_INTENT_APPROVED"
             note="Human approved review intent metadata only; no broker order, quantity or position mutation."

@@ -32,7 +32,7 @@
  const head=el('div',null,'mos-head'),title=el('div',null,'mos-title');title.append(el('div','MARKET OPERATING SYSTEM','mos-kicker'),el('h2','오늘 시장 · 관심종목 · 학습'),el('div','시장→테마→종목→재료→차트→Trigger를 한 화면에서 봅니다.','mos-sub'));
  const toolbar=el('div',null,'mos-toolbar'),tabs=el('div',null,'mos-tabs');
  const tableBtn=el('button','Screener'),chartBtn=el('button','Charts'),heatBtn=el('button','Heatmap'),learnBtn=el('button','Learning'),refresh=el('button','새로고침','mos-btn');
- [tableBtn,chartBtn,heatBtn,learnBtn].forEach(b=>tabs.append(b));toolbar.append(tabs,refresh);head.append(title,toolbar);
+ [tableBtn,chartBtn,heatBtn,learnBtn].forEach(b=>tabs.append(b));toolbar.append(tabs,refresh);const decisionLink=el('a','일일 판단 · 검증','mos-btn');decisionLink.href='/market-os/decision';toolbar.append(decisionLink);head.append(title,toolbar);
  const strip=el('div',null,'mos-strip'),content=el('div');view.append(head,strip,content);
  const dialog=el('dialog',null,'mos-dialog mos');document.body.append(dialog);
 
