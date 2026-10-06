@@ -497,7 +497,7 @@ def decisions_section(cur, day):
             "trade_cards": [],
         }
     cur.execute(
-        """SELECT id,session_date,issued_at,stage,source_kind,stock_code,stock_name,
+        """SELECT id,session_date,issued_at,stage,source_kind,candidate_id,stock_code,stock_name,
                   grade,watch_tier,setup_type,side,trigger_spec,exit_spec,theoretical_entry_krw,
                   invalidation_stop_krw,expiry_at,market_stance,catalyst_grade,
                   rule_version,evidence,decision_hash
@@ -526,6 +526,99 @@ def decisions_section(cur, day):
     }
 
 
+
+def _r_stats(values):
+    vals=[float(x) for x in values if x is not None and math.isfinite(float(x))]
+    wins=[x for x in vals if x>0]
+    losses=[x for x in vals if x<0]
+    gross_win=sum(wins)
+    gross_loss=abs(sum(losses))
+    return {
+        "n": len(vals),
+        "win_rate": (len(wins)/len(vals)) if vals else None,
+        "average_win_r": (sum(wins)/len(wins)) if wins else None,
+        "average_loss_r": (sum(losses)/len(losses)) if losses else None,
+        "expectancy_r": (sum(vals)/len(vals)) if vals else None,
+        "profit_factor": (gross_win/gross_loss) if gross_loss>0 else None,
+    }
+
+
+def rolling_strategy_section(cur, day, lookback_days=90, min_overall=20, min_segment=10):
+    """R statistics from immutable native A-grade TRADE_CARD decisions only."""
+    if not table_exists(cur, "market_review_decisions"):
+        return {"status":"JOURNAL_NOT_CONNECTED","statistics_ready":False}
+    start_day=day-timedelta(days=max(1,lookback_days))
+    cur.execute(
+        """SELECT id,session_date,issued_at,stage,source_kind,candidate_id,stock_code,stock_name,
+                  grade,watch_tier,setup_type,side,trigger_spec,exit_spec,theoretical_entry_krw,
+                  invalidation_stop_krw,expiry_at,market_stance,catalyst_grade,
+                  rule_version,evidence,decision_hash
+           FROM market_review_decisions
+           WHERE session_date>=%s AND session_date<=%s
+             AND stage='TRADE_CARD' AND UPPER(COALESCE(grade,''))='A' AND side='LONG'
+           ORDER BY issued_at,id""",
+        (start_day,day),
+    )
+    rows=cur.fetchall()
+    audits=[]
+    violations=Counter()
+    for r in rows:
+        item={k:iso(v) for k,v in dict(r).items()}
+        audit=audit_long_plan(item,_bars(cur,r["stock_code"],r["issued_at"],r["session_date"]))
+        evidence=r.get("evidence") or {}
+        for v in (evidence.get("rule_violations") or [] if isinstance(evidence,dict) else []):
+            if v:
+                violations[str(v)]+=1
+        audits.append({
+            "candidate_id":r.get("candidate_id"),
+            "session_date":iso(r["session_date"]),
+            "stock_code":r["stock_code"],
+            "setup_type":r.get("setup_type"),
+            "market_stance":r.get("market_stance"),
+            "audit":audit,
+        })
+
+    fired=[x for x in audits if (x["audit"] or {}).get("trigger_fired") is True]
+    ready=[x for x in fired if num((x["audit"] or {}).get("system_r")) is not None]
+    values=[num(x["audit"].get("system_r")) for x in ready]
+    overall=_r_stats(values)
+
+    setup_perf={}
+    for setup in ("LEADER_PULLBACK","RANGE_BREAK","CATALYST"):
+        seg=[num(x["audit"].get("system_r")) for x in ready if x.get("setup_type")==setup]
+        stat=_r_stats(seg)
+        stat["sample_sufficient"]=stat["n"]>=min_segment
+        setup_perf[setup]=stat
+
+    regime_perf={}
+    for regime in sorted({str(x.get("market_stance") or "UNKNOWN") for x in ready}):
+        seg=[num(x["audit"].get("system_r")) for x in ready if str(x.get("market_stance") or "UNKNOWN")==regime]
+        stat=_r_stats(seg)
+        stat["sample_sufficient"]=stat["n"]>=min_segment
+        regime_perf[regime]=stat
+
+    rb=[x for x in fired if x.get("setup_type")=="RANGE_BREAK" and num(x["audit"].get("system_r")) is not None]
+    false_break=sum(1 for x in rb if x["audit"].get("system_exit_reason")=="STOP")
+    return {
+        "status":"OK",
+        "lookback_days":lookback_days,
+        "cards_total":len(audits),
+        "triggers_fired":len(fired),
+        "valid_setups":len(ready),
+        "statistics_ready":len(ready)>=min_overall,
+        "minimum_overall_sample":min_overall,
+        "overall":overall,
+        "setup_type_performance":setup_perf,
+        "market_regime_performance":regime_perf,
+        "false_break_definition":"RANGE_BREAK triggered cards that hit original stop / auditable triggered RANGE_BREAK cards",
+        "false_break_count":false_break,
+        "false_break_denominator":len(rb),
+        "false_break_frequency":(false_break/len(rb)) if rb else None,
+        "most_common_rule_violation":violations.most_common(1)[0][0] if violations else None,
+        "rule_violation_counts":dict(violations),
+        "note":"Metrics use only native A-grade TRADE_CARD rows with auditable original exit rules. Small segments are reported but not treated as rule-change evidence.",
+    }
+
 def assessment_outcomes_section(cur, day):
     if not table_exists(cur, "market_os_assessment_outcomes"):
         return {"status": "UNAVAILABLE", "rows": []}
@@ -553,6 +646,7 @@ def build_session_export(day):
         telegram = telegram_section(cur, day)
         market = market_section(cur, day)
         decisions = decisions_section(cur, day)
+        rolling = rolling_strategy_section(cur, day)
         outcomes = assessment_outcomes_section(cur, day)
     latest = telegram.get("latest_message_at")
     stale_minutes = None
@@ -580,6 +674,7 @@ def build_session_export(day):
         "telegram": telegram,
         "market": market,
         "decisions": decisions,
+        "rolling_strategy": rolling,
         "market_os_outcomes": outcomes,
         "review_notes": [
             "Original event-engine RADAR_SUMMARY is authoritative when status=ORIGINAL_PERSISTED.",
