@@ -98,6 +98,8 @@ def validate(p, context, *, now=None, confirm=None, env=None, preparing=False):
     if ec.get('control_hash') != i.get('control_hash') or ec.get('switch_transaction_id') != i.get('switch_transaction_id'):
         reasons.append('EVIDENCE_CONTROL_MISMATCH')
     approval, expiry = timestamp(i.get('reviewed_at')), timestamp(i.get('expires_at'))
+    if p.operation != 'CANCEL' and timestamp(evidence.get('expires_at')) != expiry:
+        reasons.append('INTENT_EVIDENCE_TTL_MISMATCH')
     if (not approval or approval.isoformat() != p.approval_at or approval > now
             or not expiry or (p.operation != 'CANCEL' and expiry.isoformat() != p.expires_at)):
         reasons.append('APPROVAL_IDENTITY_OR_TTL_CHANGED')

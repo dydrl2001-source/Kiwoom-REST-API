@@ -153,7 +153,7 @@ class Store:
                         broker_order_key=%s,remaining_quantity=%s,updated_at=now() WHERE plan_id=%s''',
                         (result.status,result.order_number,key,remaining,plan.plan_id))
             self.event(c,plan.plan_id,'response','BROKER_RESULT',result.status,
-                       {'reason':result.reason,'broker_order_created':result.status=='ACCEPTED',
+                       {'reason':result.reason,'broker_order_created':None if result.status=='UNKNOWN' else result.status=='ACCEPTED',
                         'broker_number_recorded':bool(result.order_number)})
 
     def update(self, plan, status, filled, event_key, remaining=None):

@@ -55,6 +55,11 @@ class OrderPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(self.p.OrderError, 'EVIDENCE'):
             self.build()
 
+    def test_extending_approval_ttl_cannot_override_frozen_intent_evidence(self):
+        self.intent['expires_at'] += timedelta(seconds=600)
+        with self.assertRaisesRegex(self.p.OrderError,'EVIDENCE_TTL'):
+            self.build()
+
     def test_separate_confirmation_live_off_and_wrong_account_block(self):
         a = self.build(mode='live')
         for confirm, env in ((None, {}), (a.plan_id, {}), ('wrong', {'MARKET_OS_LIVE_ORDERS_ENABLED':'1'})):
