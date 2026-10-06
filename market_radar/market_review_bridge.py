@@ -329,17 +329,103 @@ def _bars(cur, code, issued_at, day):
     ]
 
 
+def _first_exit(path, entry, stop, exit_spec):
+    """Resolve a stated LONG exit rule without inventing missing semantics."""
+    kind = str((exit_spec or {}).get("kind") or "").upper()
+    if kind not in {"STOP_OR_CLOSE", "TARGET_STOP_CLOSE"}:
+        return {
+            "status": "EXIT_RULE_NOT_AUDITABLE",
+            "system_r": None,
+            "system_exit_reason": None,
+            "system_exit_time": None,
+            "system_exit_price_krw": None,
+        }
+    risk = entry - stop
+    target_price = None
+    if kind == "TARGET_STOP_CLOSE":
+        target_price = num((exit_spec or {}).get("target_price"))
+        target_r = num((exit_spec or {}).get("target_r"))
+        if target_price is None and target_r is not None:
+            target_price = entry + target_r * risk
+        if target_price is None or target_price <= entry:
+            return {
+                "status": "EXIT_RULE_NOT_AUDITABLE",
+                "system_r": None,
+                "system_exit_reason": None,
+                "system_exit_time": None,
+                "system_exit_price_krw": None,
+            }
+
+    for i, bar in enumerate(path):
+        high, low = bar.get("high"), bar.get("low")
+        if high is None or low is None:
+            continue
+        stop_hit = low <= stop
+        target_hit = bool(target_price is not None and high >= target_price)
+        # With OHLC only, order inside one bar is unknowable. Do not guess.
+        if i == 0 and stop_hit:
+            return {
+                "status": "INTRABAR_ENTRY_STOP_AMBIGUOUS",
+                "system_r": None,
+                "system_exit_reason": None,
+                "system_exit_time": iso(bar.get("time")),
+                "system_exit_price_krw": None,
+            }
+        if stop_hit and target_hit:
+            return {
+                "status": "INTRABAR_STOP_TARGET_AMBIGUOUS",
+                "system_r": None,
+                "system_exit_reason": None,
+                "system_exit_time": iso(bar.get("time")),
+                "system_exit_price_krw": None,
+            }
+        if stop_hit:
+            return {
+                "status": "SYSTEM_RESULT_READY",
+                "system_r": -1.0,
+                "system_exit_reason": "STOP",
+                "system_exit_time": iso(bar.get("time")),
+                "system_exit_price_krw": stop,
+            }
+        if target_hit:
+            return {
+                "status": "SYSTEM_RESULT_READY",
+                "system_r": (target_price - entry) / risk,
+                "system_exit_reason": "TARGET",
+                "system_exit_time": iso(bar.get("time")),
+                "system_exit_price_krw": target_price,
+            }
+
+    closes = [x for x in path if x.get("close") is not None]
+    if not closes:
+        return {
+            "status": "EXIT_PRICE_UNAVAILABLE",
+            "system_r": None,
+            "system_exit_reason": None,
+            "system_exit_time": None,
+            "system_exit_price_krw": None,
+        }
+    last = closes[-1]
+    return {
+        "status": "SYSTEM_RESULT_READY",
+        "system_r": (last["close"] - entry) / risk,
+        "system_exit_reason": "SESSION_CLOSE",
+        "system_exit_time": iso(last.get("time")),
+        "system_exit_price_krw": last["close"],
+    }
+
+
 def audit_long_plan(decision, bars):
-    """Audit a LONG plan only when trigger/entry/stop are numerically explicit."""
+    """Audit a LONG plan only from the original numeric trigger/entry/stop/exit rule."""
     trigger = decision.get("trigger_spec") or {}
     kind = str(trigger.get("kind") or "").upper()
     trigger_price = num(trigger.get("price"))
     entry = num(decision.get("theoretical_entry_krw"))
     stop = num(decision.get("invalidation_stop_krw"))
     if kind not in {"ABOVE", "BELOW", "TOUCH"} or trigger_price is None:
-        return {"status": "TRIGGER_SPEC_NOT_AUDITABLE", "trigger_fired": None}
+        return {"status": "TRIGGER_SPEC_NOT_AUDITABLE", "trigger_fired": None, "system_r": None}
     if not bars:
-        return {"status": "INTRADAY_BARS_UNAVAILABLE", "trigger_fired": None}
+        return {"status": "INTRADAY_BARS_UNAVAILABLE", "trigger_fired": None, "system_r": None}
 
     trigger_index = None
     for i, bar in enumerate(bars):
@@ -355,7 +441,12 @@ def audit_long_plan(decision, bars):
             trigger_index = i
             break
     if trigger_index is None:
-        return {"status": "TRIGGER_NOT_FIRED", "trigger_fired": False}
+        return {
+            "status": "TRIGGER_NOT_FIRED",
+            "trigger_fired": False,
+            "system_r": None,
+            "hindsight_state": "CANCEL",
+        }
 
     actual_entry = entry if entry is not None else trigger_price
     path = bars[trigger_index:]
@@ -365,6 +456,7 @@ def audit_long_plan(decision, bars):
     result = {
         "status": "TRIGGER_FIRED",
         "trigger_fired": True,
+        "hindsight_state": "ENTER",
         "trigger_time": iso(path[0]["time"]),
         "theoretical_entry_krw": actual_entry,
         "max_high_krw": max(highs) if highs else None,
@@ -374,6 +466,10 @@ def audit_long_plan(decision, bars):
         "mfe_r": None,
         "mae_r": None,
         "close_r": None,
+        "system_r": None,
+        "system_exit_reason": None,
+        "system_exit_time": None,
+        "system_exit_price_krw": None,
     }
     if stop is None or actual_entry is None or actual_entry <= stop:
         result["status"] = "TRIGGER_FIRED_STOP_NOT_AUDITABLE"
@@ -387,8 +483,10 @@ def audit_long_plan(decision, bars):
         result["mae_r"] = (min(lows) - actual_entry) / risk
     if closes:
         result["close_r"] = (closes[-1] - actual_entry) / risk
-    return result
 
+    exit_result = _first_exit(path, actual_entry, stop, decision.get("exit_spec") or {})
+    result.update(exit_result)
+    return result
 
 def decisions_section(cur, day):
     if not table_exists(cur, "market_review_decisions"):
@@ -400,7 +498,7 @@ def decisions_section(cur, day):
         }
     cur.execute(
         """SELECT id,session_date,issued_at,stage,source_kind,stock_code,stock_name,
-                  grade,watch_tier,setup_type,side,trigger_spec,theoretical_entry_krw,
+                  grade,watch_tier,setup_type,side,trigger_spec,exit_spec,theoretical_entry_krw,
                   invalidation_stop_krw,expiry_at,market_stance,catalyst_grade,
                   rule_version,evidence,decision_hash
            FROM market_review_decisions
