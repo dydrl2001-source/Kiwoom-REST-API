@@ -90,6 +90,7 @@ append_decision({
     "setup_type": "LEADER_PULLBACK",
     "side": "LONG",
     "trigger_spec": {"kind": "ABOVE", "price": 100000},
+    "exit_spec": {"kind": "STOP_OR_CLOSE"},
     "theoretical_entry_krw": 100200,
     "invalidation_stop_krw": 98200,
     "market_stance": "SELECTIVE",
@@ -99,7 +100,10 @@ append_decision({
 })
 ```
 
-Bridge의 MFE/MAE/R 계산은 explicit LONG trigger/entry/stop이 모두 있을 때만 수행한다.
+Bridge의 MFE/MAE 계산은 explicit LONG trigger/entry/stop이 모두 있을 때만 수행한다.
+실제 system R은 여기에 원래 `exit_spec`까지 있어야 계산한다.
+지원되는 초기 exit rule은 `STOP_OR_CLOSE`와 `TARGET_STOP_CLOSE`이며,
+같은 1분봉에서 entry/stop 또는 stop/target 순서가 불명확하면 R을 추정하지 않는다.
 조건이 없으면 `TRIGGER_SPEC_NOT_AUDITABLE` 또는
 `TRIGGER_FIRED_STOP_NOT_AUDITABLE`로 남기고 추정하지 않는다.
 
