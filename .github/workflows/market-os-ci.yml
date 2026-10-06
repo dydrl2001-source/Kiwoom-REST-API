@@ -1,0 +1,86 @@
+name: Market OS CI
+
+on:
+  pull_request:
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-os-ci.yml"
+  push:
+    branches:
+      - "feature/market-os-live-v2"
+    paths:
+      - "market_radar/**"
+      - ".github/workflows/market-os-ci.yml"
+
+jobs:
+  market-os:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: market_os_test
+          POSTGRES_PASSWORD: test-only-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MARKET_OS_TEST_DATABASE_URL: postgresql://postgres:test-only-ci@localhost:5432/market_os_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check fastapi uvicorn "psycopg[binary]" requests telethon websockets httpx
+
+      - name: Run shared Python preflight
+        env:
+          PREFLIGHT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python market_radar/preflight_python.py --base "$PREFLIGHT_BASE"
+
+      - name: Run Market OS unit tests
+        working-directory: market_radar
+        run: python -m unittest discover -s tests -p "test_market_os*.py" -v
+
+      - name: Run integrated compatibility tests
+        working-directory: market_radar
+        run: |
+          python -m unittest tests.test_flow tests.test_web_research_engine -v
+          python -m unittest tests.test_candidate_tracker -v
+          python -m unittest tests.test_sector_board -v
+          python -m unittest tests.test_mobile_ui -v
+          python -m unittest tests.test_paper_trade -v
+          python -m unittest tests.test_paper_feedback -v
+          python -m unittest tests.test_market_review_bridge -v
+
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check market_radar/market_os_ui.js
+          node --check market_radar/market_os_decision.js
+          node --check market_radar/flow_ui.js
+
+      - name: Validate rulebook JSON
+        run: python -m json.tool market_radar/rulebook/market_os_rules.json >/dev/null
+
+      - name: Check rollout shell syntax
+        run: |
+          bash -n market_radar/local/update_flow_desk.sh
+          bash -n market_radar/local/check_flow_desk.sh
+          bash -n market_radar/local/check_market_os.sh
+          bash -n market_radar/local/check_market_os_live.sh
+          bash -n market_radar/local/launch_market_os_live.sh
+          bash -n market_radar/local/check_market_os_learning.sh
+          bash -n market_radar/local/shadow_rule_admin.sh
+
+      - name: Validate Compose structure with example environment
+        run: |
+          cp market_radar/local/.env.example market_radar/local/.env
+          docker compose -f market_radar/local/docker-compose.yml --env-file market_radar/local/.env config --quiet

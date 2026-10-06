@@ -131,6 +131,9 @@ def mobile_icon():
 from flow_routes import install as install_flow_routes
 install_flow_routes(app, authorize)
 
+from market_os_routes import install as install_market_os_routes
+install_market_os_routes(app, authorize)
+
 
 if __name__ == "__main__":
     import uvicorn

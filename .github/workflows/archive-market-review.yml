@@ -1,0 +1,109 @@
+name: Archive EOD Review Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_date:
+        description: "KST session date (YYYY-MM-DD); blank uses current KST date"
+        required: false
+        type: string
+  schedule:
+    # 15:50 Asia/Seoul, Monday-Friday. Scheduled workflows run only on default branch.
+    - cron: "50 6 * * 1-5"
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      REVIEW_BRIDGE_URL: ${{ secrets.REVIEW_BRIDGE_URL }}
+      REVIEW_BRIDGE_TOKEN: ${{ secrets.REVIEW_BRIDGE_TOKEN }}
+    steps:
+      - name: Resolve KST session date
+        id: session
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUESTED="${{ inputs.session_date }}"
+          if [ -n "$REQUESTED" ]; then
+            DAY="$REQUESTED"
+          else
+            DAY="$(TZ=Asia/Seoul date +%F)"
+          fi
+          case "$DAY" in
+            ????-??-??) ;;
+            *) echo "invalid session_date"; exit 2 ;;
+          esac
+          echo "day=$DAY" >> "$GITHUB_OUTPUT"
+          echo "year=${DAY%%-*}" >> "$GITHUB_OUTPUT"
+          REST="${DAY#*-}"
+          echo "month=${REST%%-*}" >> "$GITHUB_OUTPUT"
+
+      - name: Require bridge configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${REVIEW_BRIDGE_URL:-}" || { echo "REVIEW_BRIDGE_URL missing"; exit 2; }
+          test -n "${REVIEW_BRIDGE_TOKEN:-}" || { echo "REVIEW_BRIDGE_TOKEN missing"; exit 2; }
+
+      - name: Fetch read-only review snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          curl --fail --silent --show-error \
+            --connect-timeout 10 --max-time 90 \
+            -H "X-Review-Token: ${REVIEW_BRIDGE_TOKEN}" \
+            "${REVIEW_BRIDGE_URL%/}/review/session/${{ steps.session.outputs.day }}" \
+            -o staging/eod.json
+
+      - name: Validate snapshot contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("staging/eod.json")
+          data=json.loads(p.read_text())
+          expected="${{ steps.session.outputs.day }}"
+          assert data.get("schema_version")=="market-review-bridge-v1"
+          assert data.get("session_date")==expected
+          perm=data.get("permissions") or {}
+          assert perm.get("database")=="READ_ONLY"
+          assert perm.get("orders") is False
+          assert perm.get("postgres_writes") is False
+          assert perm.get("account_identifiers_exported") is False
+          p.write_text(json.dumps(data,ensure_ascii=False,indent=2,sort_keys=True)+"\n")
+          PY
+
+      - name: Checkout private review archive
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.REVIEW_ARCHIVE_REPO }}
+          token: ${{ secrets.REVIEW_ARCHIVE_TOKEN }}
+          path: review-archive
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Append immutable session snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          DAY="${{ steps.session.outputs.day }}"
+          DEST="review-archive/sessions/${{ steps.session.outputs.year }}/${{ steps.session.outputs.month }}/$DAY/eod.json"
+          if [ -e "$DEST" ]; then
+            echo "snapshot already exists; refusing overwrite: $DEST"
+            exit 0
+          fi
+          mkdir -p "$(dirname "$DEST")"
+          cp staging/eod.json "$DEST"
+          cd review-archive
+          git config user.name "market-review-bot"
+          git config user.email "market-review-bot@users.noreply.github.com"
+          git add "sessions/${{ steps.session.outputs.year }}/${{ steps.session.outputs.month }}/$DAY/eod.json"
+          git commit -m "Archive market review $DAY"
+          git push

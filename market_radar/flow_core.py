@@ -85,8 +85,11 @@ def resolve_turnover(raw_value, volume, low, high, current):
     hi=max(prices)*volume
     # Cumulative trade value should live near price*volume. Wide tolerance handles
     # asynchronous response fields and auction/after-hours prints without inventing a unit.
-    lower=max(0,lo*.72-5_000_000)
-    upper=hi*1.28+5_000_000
+    # Absolute slack must not swamp small-volume observations and falsely
+    # validate a 100x/1000x unit error.
+    slack=min(5_000_000,lo*.10)
+    lower=max(0,lo*.72-slack)
+    upper=hi*1.28+slack
     midpoint=(lo+hi)/2 if hi else lo
     candidates=[]
     for scale in (1,1_000,10_000,1_000_000,100_000_000):
@@ -100,29 +103,37 @@ def resolve_turnover(raw_value, volume, low, high, current):
     return value,scale,'OK'
 
 
-def resolve_cap(raw_value, shares, current):
-    """Resolve market-cap units by reconciling with current price × listed shares."""
+def resolve_cap(raw_value, shares, current, listed_shares=None):
+    """Resolve market-cap units against price × share-count references."""
     raw=num(raw_value)
     if raw is None or raw < 0:
         return None,None,'CAP_MISSING'
     if raw == 0:
         return 0,1,'OK'
-    if not shares or current is None or float(current)==0:
+    if current is None or float(current)==0:
         return None,None,'CAP_UNIT_UNRESOLVED'
-    expected=abs(float(current))*shares
+    refs=[]
+    master=num(listed_shares)
+    detail=num(shares)
+    if master and master>0: refs.append((0,master,'KA10099_LISTCOUNT'))
+    if detail and detail>0: refs.append((1,detail,'KA10095_STKCNT'))
+    if not refs:
+        return None,None,'CAP_UNIT_UNRESOLVED'
     candidates=[]
-    for scale in (1,1_000,10_000,1_000_000,100_000_000):
-        value=float(raw)*scale
-        rel=abs(value/expected-1) if expected else 99
-        if rel <= .20:
-            candidates.append((rel,scale,int(value)))
+    for priority,share_ref,_source in refs:
+        expected=abs(float(current))*float(share_ref)
+        for scale in (1,1_000,10_000,100_000,1_000_000,100_000_000):
+            value=float(raw)*scale
+            rel=abs(value/expected-1) if expected else 99
+            if rel <= .20:
+                candidates.append((rel,priority,scale,int(value)))
     if not candidates:
         return None,None,'CAP_REFERENCE_MISMATCH'
-    _,scale,value=min(candidates)
+    _,_,scale,value=min(candidates)
     return value,scale,'OK'
 
 
-def quote(raw, received_at, code=None):
+def quote(raw, received_at, code=None, listed_shares=None):
     """Only non-secret response fields are retained. No magnitude-based unit guesses."""
     received_at=dt(received_at)
     code=code or re.sub(r'_(AL|NX)$','',str(raw.get('stk_cd','')))
@@ -140,7 +151,7 @@ def quote(raw, received_at, code=None):
     px=num(raw.get('cur_prc')); vol=amount(raw.get('trde_qty'))
     low=num(raw.get('low_pric')); high=num(raw.get('high_pric')); shares=amount(raw.get('stkcnt'))
     tv,tv_scale,tv_state=resolve_turnover(raw.get('trde_prica'),vol,low,high,px)
-    cap,cap_scale,cap_state=resolve_cap(raw.get('mac'),shares,px)
+    cap,cap_scale,cap_state=resolve_cap(raw.get('mac'),shares,px,listed_shares)
     flags=[]
     if not trade_date: flags.append('TRADE_DATE_MISSING')
     if exchange and exchange>received_at+timedelta(seconds=60): flags.append('EXCHANGE_CLOCK_FUTURE')

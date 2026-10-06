@@ -40,3 +40,12 @@ APP_SECRET=...
 
 ## 보안
 .env, data/*.session 파일을 GitHub에 올리지 말 것.
+
+
+## 일일 판단 · 네이버 검증
+
+Market OS 상단 **일일 판단 · 검증** 또는 `http://localhost:8080/market-os/decision`에서 봅니다.
+새 `market-os-daily` 서비스는 14:30–14:40 KST에 규칙 기반 패킷을 한 번 생성합니다.
+AI 호출과 네이버 검색은 각각 기본 비활성입니다. OpenAI 하루 1회 한도는 기존 웹 리서치와 공유합니다.
+[구성·현재 미연결 필드·배포 순서](../MARKET_OS_DAILY_DECISION.md)를 먼저 확인하세요.
+실제 주문 기능은 추가되지 않았습니다.

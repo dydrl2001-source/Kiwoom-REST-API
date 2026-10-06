@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Market OS · 일일 판단과 검증</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#f3f6fb;color:#172a46;margin:0;padding:28px;line-height:1.6}
+main{max-width:1080px;margin:auto}header{border-bottom:2px solid #172a46;padding-bottom:18px}h1{font-size:29px;margin:8px 0}
+section,article{background:white;border:1px solid #dbe3ec;border-radius:12px;padding:20px;margin:16px 0}
+button,input,select{font:inherit;padding:8px 12px;border:1px solid #b8c6d8;border-radius:6px}button{cursor:pointer;background:#edf3ff;color:#193d7b}
+input{max-width:90%}a{color:#2457a7}.muted{color:#52647b;font-size:14px}.badge{padding:5px 10px;border-radius:5px;background:#fff1d4;color:#795100}
+.tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}li{margin:10px 0}
+#search-results{border-top:3px solid #03c75a}.axes{font-size:15px}.risk{color:#9c3138;font-size:14px}h2{font-size:20px}
+</style></head><body><main>
+<header><a href="/">← Market OS</a><h1>일일 판단과 사람 검증</h1>
+<span class="badge">Shadow · 자동 주문 없음</span><p class="muted">14:30–14:40 KST에 규칙 엔진의 상위 후보를 고정합니다. AI는 하루 최대 한 번의 참고 의견이며, 실행 위험 규칙을 바꾸지 못합니다.</p></header>
+<section><div class="tools"><label>대시보드 토큰 <input id="token" type="password" autocomplete="off"></label>
+<button id="load">저장된 판단 보기</button><button id="preview">현재 규칙 미리보기 · AI 호출 없음</button></div><p id="status" role="status">토큰을 입력해 조회하세요. 이 화면은 AI를 호출하지 않습니다.</p></section>
+<section id="decision"><h2>판단 패킷</h2><p class="muted">아직 조회하지 않았습니다.</p></section>
+<section><h2>실제 수급·계좌 읽기 전용 연결</h2>
+<p class="muted">수급 기준일과 조회 시각을 구분합니다. 당일 손실률은 검증된 기초자산·입출금 기준이 마련되기 전까지 미확인으로 유지합니다. 계좌 정보는 AI에 전달하지 않습니다.</p>
+<div class="tools"><input id="readonly-codes" placeholder="종목코드 최대 5개, 쉼표 구분" aria-label="수급 조회 종목코드">
+<button id="readonly-load">저장된 연결 결과</button><button id="readonly-refresh">키움 실제 API 새로 조회</button></div>
+<p id="readonly-status" role="status">버튼을 누르면 인증된 계좌 정보를 조회합니다. 주문은 전송하지 않습니다.</p>
+<div id="readonly-results"></div></section>
+<section><h2>네이버에서 사람 검증</h2><p class="muted">뉴스는 사건 확인, 웹문서는 공식 자료 탐색, 블로그는 아이디어 발견에 사용합니다. 검색 결과는 현재 화면에서만 표시되며 AI 입력·학습·판단 기록에 포함하지 않습니다.</p>
+<div class="tools"><input id="query" aria-label="검색어" placeholder="기업명과 종목코드" maxlength="100"><select id="kind" aria-label="검색 종류"><option value="news">뉴스 · Verification</option><option value="webkr">웹문서 · Context</option><option value="blog">블로그 · Discovery</option></select><button id="search">공식 API 검색</button></div>
+<div id="search-results" aria-live="polite"></div></section>
+<details><summary>오늘의 API 감사 기록</summary><pre id="audit">아직 조회하지 않았습니다.</pre></details>
+</main><script src="/assets/market-os-decision.js" defer></script><script src="/assets/market-os-readonly.js" defer></script></body></html>

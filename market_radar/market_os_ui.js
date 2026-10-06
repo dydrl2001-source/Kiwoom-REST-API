@@ -1,0 +1,413 @@
+/* Market OS — multi-axis market cockpit + shadow learning. */
+(() => {
+ 'use strict';
+ const root=document.querySelector('.app'); if(!root)return;
+ const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);if(cls)n.className=cls;return n;};
+ const svg=(tag,attrs={})=>{const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;};
+ const style=el('style');style.textContent=`
+ :root{--mos-ink:#15233a;--mos-muted:#6b7890;--mos-line:#dbe3ee;--mos-bg:#f4f7fb;--mos-card:#fff;--mos-blue:#3156d3;--mos-teal:#118b7a;--mos-amber:#b87517;--mos-red:#b94a52;--mos-purple:#6d55b8}
+ .mos{color:var(--mos-ink);background:var(--mos-bg);padding:16px;border-radius:16px;min-height:78vh}
+ .mos *{box-sizing:border-box}.mos-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:12px}.mos-title h2{margin:0;font-size:24px;letter-spacing:-.7px}.mos-kicker{font-size:10px;letter-spacing:1.2px;font-weight:800;color:var(--mos-blue);text-transform:uppercase}.mos-sub{font-size:11px;color:var(--mos-muted);line-height:1.65;margin-top:4px}
+ .mos-btn,.mos-chip,.mos input,.mos select{border:1px solid var(--mos-line);background:#fff;color:#29415f;border-radius:8px;padding:7px 10px;font:inherit}.mos-btn,.mos-chip{cursor:pointer}.mos-chip[aria-pressed=true],.mos-btn[aria-pressed=true]{background:#223a7a;color:#fff;border-color:#223a7a}.mos-btn:focus-visible,.mos-chip:focus-visible,.mos input:focus-visible{outline:3px solid #b8c9ff}
+ .mos-toolbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.mos-tabs{display:inline-flex;padding:3px;border:1px solid var(--mos-line);background:#fff;border-radius:10px;gap:2px}.mos-tabs button{border:0;background:transparent;border-radius:7px;padding:7px 11px;cursor:pointer;color:#5f6e84}.mos-tabs button[aria-pressed=true]{background:#263b71;color:white}
+ .mos-strip{display:grid;grid-template-columns:1.4fr repeat(4,minmax(0,1fr));gap:9px;margin:12px 0}.mos-metric{background:var(--mos-card);border:1px solid var(--mos-line);border-radius:12px;padding:12px 13px;min-width:0}.mos-metric.primary{border-left:4px solid var(--mos-blue)}.mos-metric strong{display:block;font-size:18px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mos-label{font-size:9px;color:#7b879b;text-transform:uppercase;letter-spacing:.7px;font-weight:700}.mos-micro{font-size:10px;color:var(--mos-muted);line-height:1.55}
+ .mos-marketline{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0 2px}.mos-pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;background:#eef2f8;padding:4px 7px;font-size:9px;color:#52627a}.mos-pill.teal{background:#dff4ee;color:#0f715f}.mos-pill.amber{background:#fff0d7;color:#86530c}.mos-pill.red{background:#fde5e7;color:#9b3640}.mos-pill.purple{background:#eee9fb;color:#5b47a0}
+ .mos-main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,.8fr);gap:12px;align-items:start}.mos-panel{background:var(--mos-card);border:1px solid var(--mos-line);border-radius:13px;overflow:hidden}.mos-panel-head{padding:12px 13px;border-bottom:1px solid #edf1f6;display:flex;justify-content:space-between;gap:8px;align-items:center}.mos-panel-head h3{margin:0;font-size:13px}.mos-filters{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid #edf1f6}.mos-filters input{min-width:180px;flex:1}
+ .mos-scroll{overflow:auto;max-height:680px}.mos-table{width:100%;border-collapse:collapse;font-size:10px;min-width:1080px}.mos-table th{position:sticky;top:0;background:#f6f8fc;color:#748196;padding:9px 7px;text-align:right;z-index:1}.mos-table th:first-child,.mos-table td:first-child{text-align:left}.mos-table td{padding:9px 7px;border-top:1px solid #edf1f6;text-align:right;white-space:nowrap}.mos-table tr{cursor:pointer}.mos-table tr:hover{background:#f8faff}.mos-table tr[data-selected=true]{background:#edf3ff}.mos-name{font-weight:800;font-size:11px}.mos-code{font-size:9px;color:#8a95a6;margin-top:2px}
+ .mos-tier{font-size:9px;font-weight:800;border-radius:6px;padding:3px 6px;display:inline-block}.mos-tier.focus{background:#dff4ee;color:#0f725f}.mos-tier.prep{background:#fff0d7;color:#8b5a13}.mos-tier.discover{background:#e8edfb;color:#41598e}.mos-tier.blocked{background:#fde5e7;color:#a43b44}
+ .mos-axisnum{font-weight:800}.mos-up{color:#c94651}.mos-down{color:#3869b7}.mos-detail{position:sticky;top:58px;padding:14px}.mos-detail h3{font-size:19px;margin:0}.mos-detail h4{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:#78869b;margin:15px 0 7px}.mos-axis{display:grid;grid-template-columns:55px 1fr 34px;gap:7px;align-items:center;margin:8px 0;font-size:10px}.mos-track{height:7px;border-radius:99px;background:#edf1f6;overflow:hidden}.mos-track span{display:block;height:100%;background:linear-gradient(90deg,#3f64db,#1ca48e);border-radius:99px}.mos-axis strong{text-align:right}
+ .mos-reasons{display:flex;gap:5px;flex-wrap:wrap}.mos-risk{background:#fff2f2;border:1px solid #f2d6d8;border-radius:9px;padding:8px 9px;font-size:10px;line-height:1.65;color:#8e4047}.mos-note{background:#eef3fa;border-radius:9px;padding:9px 10px;font-size:10px;line-height:1.65;color:#56677d}.mos-research{white-space:pre-wrap;font-size:10px;line-height:1.75;color:#34465d}
+ .mos-heat{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));grid-auto-flow:dense;gap:7px;padding:10px}.mos-tile{border:1px solid var(--mos-line);border-radius:10px;padding:10px;min-height:90px;cursor:pointer;background:#fff;overflow:hidden}.mos-tile.big{grid-column:span 2;grid-row:span 2;min-height:187px}.mos-tile.mid{grid-column:span 2}.mos-tile.focus{box-shadow:inset 0 3px 0 #15917d}.mos-tile.prep{box-shadow:inset 0 3px 0 #d18a26}.mos-tile.blocked{box-shadow:inset 0 3px 0 #c35a62}.mos-tile h4{margin:0;font-size:12px}.mos-tile .mos-tile-change{font-size:18px;font-weight:800;margin:8px 0}.mos-tile-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.mos-tile-grid div{background:#f3f6fa;border-radius:6px;padding:4px;text-align:center;font-size:9px}.mos-section-title{padding:10px 12px 0;font-size:11px;font-weight:800;color:#3a4e69}
+ .mos-learning{padding:12px}.mos-learning-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-bottom:12px}.mos-learn-card{border:1px solid var(--mos-line);background:#fff;border-radius:11px;padding:11px}.mos-learn-card strong{display:block;font-size:19px}.mos-feedback{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}.mos-feedback article{border:1px solid var(--mos-line);border-left:4px solid #7186b8;border-radius:10px;padding:10px;background:white}.mos-feedback article[data-kind=STRENGTH]{border-left-color:#16947e}.mos-feedback article[data-kind=WEAKNESS]{border-left-color:#c46167}.mos-feedback h4{margin:0 0 4px;font-size:11px}.mos-learn-table{width:100%;border-collapse:collapse;font-size:10px}.mos-learn-table th,.mos-learn-table td{padding:8px;border-top:1px solid #edf1f6;text-align:right}.mos-learn-table th:first-child,.mos-learn-table td:first-child{text-align:left}.mos-learn-table th{color:#78869a;background:#f7f9fc}
+ .mos-spark{width:100%;height:64px}.mos-empty{padding:20px;color:var(--mos-muted);font-size:11px;line-height:1.7}.mos-dialog{width:min(900px,94vw);max-height:90vh;overflow:auto;border:1px solid #cad5e5;border-radius:14px;padding:16px;background:#fff;color:var(--mos-ink)}.mos-dialog::backdrop{background:#16223c99}.mos-history{width:100%;border-collapse:collapse;font-size:10px}.mos-history th,.mos-history td{padding:7px;border-top:1px solid #edf1f6;text-align:right}.mos-history th:first-child,.mos-history td:first-child{text-align:left}
+ @media(max-width:1200px){.mos-strip{grid-template-columns:repeat(3,minmax(0,1fr))}.mos-main{grid-template-columns:1fr}.mos-detail{position:static}.mos-heat{grid-template-columns:repeat(4,minmax(0,1fr))}}
+ @media(max-width:700px){.mos{padding:9px}.mos-head{flex-direction:column}.mos-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.mos-heat{grid-template-columns:repeat(2,minmax(0,1fr))}.mos-tile.big,.mos-tile.mid{grid-column:span 1;grid-row:span 1;min-height:100px}.mos-learning-grid{grid-template-columns:repeat(2,1fr)}.mos-feedback{grid-template-columns:1fr}}
+ @media(prefers-color-scheme:dark){.mos{--mos-ink:#e9eef8;--mos-muted:#9ca9bc;--mos-line:#344055;--mos-bg:#131a26;--mos-card:#1a2331}.mos-btn,.mos-chip,.mos input,.mos select,.mos-tabs,.mos-metric,.mos-panel,.mos-tile,.mos-learn-card,.mos-feedback article,.mos-dialog{background:#1a2331;color:#e9eef8}.mos-table th,.mos-learn-table th{background:#202b3c}.mos-table tr:hover{background:#222f42}.mos-table tr[data-selected=true]{background:#26354f}.mos-axis div,.mos-tile-grid div{background:#263244}.mos-note{background:#243248;color:#bcc7d7}.mos-risk{background:#3a252a;border-color:#593138;color:#e4a6aa}.mos-track{background:#2a3547}}
+ `;document.head.append(style);
+
+ const view=el('section',null,'view mos');view.id='view-market-os';root.append(view);
+ function switchView(){if(typeof window.setView==='function')window.setView('market-os');else{document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n===view));document.querySelectorAll('[data-view]').forEach(n=>n.classList.toggle('active',n.dataset.view==='market-os'));}load(true);}
+ for(const id of ['tabs','bottom']){const nav=document.getElementById(id);if(!nav)continue;const b=el('button',id==='bottom'?'Market OS':'Market OS',id==='tabs'?'tab':'');b.dataset.view='market-os';b.addEventListener('click',switchView);nav.insertBefore(b,nav.children[1]||null);}
+
+ const head=el('div',null,'mos-head'),title=el('div',null,'mos-title');title.append(el('div','MARKET OPERATING SYSTEM','mos-kicker'),el('h2','오늘 시장 · 관심종목 · 학습'),el('div','시장→테마→종목→재료→차트→Trigger를 한 화면에서 봅니다.','mos-sub'));
+ const toolbar=el('div',null,'mos-toolbar'),tabs=el('div',null,'mos-tabs');
+ const tableBtn=el('button','Screener'),chartBtn=el('button','Charts'),heatBtn=el('button','Heatmap'),learnBtn=el('button','Learning'),refresh=el('button','새로고침','mos-btn');
+ [tableBtn,chartBtn,heatBtn,learnBtn].forEach(b=>tabs.append(b));toolbar.append(tabs,refresh);const decisionLink=el('a','일일 판단 · 검증','mos-btn');decisionLink.href='/market-os/decision';toolbar.append(decisionLink);head.append(title,toolbar);
+ const strip=el('div',null,'mos-strip'),content=el('div');view.append(head,strip,content);
+ const dialog=el('dialog',null,'mos-dialog mos');document.body.append(dialog);
+
+ let DATA=null,mode='table',selected=null,tier='ALL',query='',busy=false,lastLoaded=0,chartRenderVersion=0;
+ const fmt=(n,d=1)=>Number(n).toLocaleString('ko-KR',{maximumFractionDigits:d});
+ const pct=n=>n==null?'—':(n>0?'+':'')+fmt(n,2)+'%';
+ const money=n=>n==null?'—':Math.abs(n)>=1e12?fmt(n/1e12,2)+'조':Math.abs(n)>=1e8?fmt(n/1e8,1)+'억':fmt(n,0)+'원';
+ const stamp=t=>t?new Date(t).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'미확인';
+ const accessKey=()=>{try{return localStorage.getItem('marketRadarToken')||'';}catch(_){return '';}};
+ async function get(url){const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),18000);try{const r=await fetch(url,{headers:{'x-dashboard-token':accessKey()},cache:'no-store',signal:ctl.signal});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json();}finally{clearTimeout(timer);}}
+ function pill(text,cls=''){return el('span',text,'mos-pill '+cls);}
+ function tierClass(t){return t==='FOCUS'?'focus':t==='PREP'?'prep':t==='BLOCKED'?'blocked':'discover';}
+ function tierKo(t){return ({FOCUS:'집중검토',PREP:'준비',DISCOVER:'발견',BLOCKED:'구조제외'})[t]||t||'미확인';}
+ function axis(label,value){const wrap=el('div',null,'mos-axis'),name=el('span',label),track=el('div',null,'mos-track'),bar=el('span');bar.style.width=Math.max(0,Math.min(100,value||0))+'%';track.append(bar);wrap.append(name,track,el('strong',value==null?'—':String(value)));return wrap;}
+ function candidates(){let xs=[...(DATA?.market_os_watchlist||[])];if(tier!=='ALL')xs=xs.filter(x=>x.watch_tier===tier);if(query){const q=query.toLowerCase();xs=xs.filter(x=>(x.name+' '+x.code+' '+(x.market_theme||'')+' '+(x.event_type||'')).toLowerCase().includes(q));}return xs;}
+ function rowData(code){return (DATA?.rows||[]).find(r=>r.code===code);}
+ function selectedItem(){return (DATA?.market_os_watchlist||[]).find(x=>x.code===selected)||null;}
+
+ function renderStrip(){
+   strip.replaceChildren();
+   const rg=DATA?.market_regime||{},xs=DATA?.market_os_watchlist||[],learn=DATA?.learning||{},st=learn.status||{};
+   const focus=xs.filter(x=>x.watch_tier==='FOCUS').length,prep=xs.filter(x=>x.watch_tier==='PREP').length;
+   const themes=(DATA?.theme_rotation?.series||[]).filter(x=>x.name).slice(0,3);
+   const cards=[
+     ['오늘 장세',rg.stable_label||rg.candidate_label||'레짐 대기',rg.stale?'자료 지연':'실시간 레짐','primary'],
+     ['FOCUS / PREP',focus+' / '+prep,'상위 검토 후보',''],
+     ['주도 테마',themes[0]?.name||'테마 대기',themes[0]?.change_pp!=null?'비중 '+(themes[0].change_pp>=0?'+':'')+fmt(themes[0].change_pp,1)+'%p':'공통표본 대기',''],
+     ['학습 표본',fmt(st.assessments_total||0,0),fmt(st.outcomes_total||0,0)+' outcomes',''],
+     ['Live data',DATA?.live_health?.overall||'진단 대기',(DATA?.live_health?.blockers||[]).join(' · ')||((DATA?.live_health?.warnings||[]).join(' · ')||'freshness check'),''],
+     ['Rule',DATA?.market_os_version||learn.rule_version||'v1',learn.mode==='SHADOW_LEARNING'?'Shadow learning':'대기','']
+   ];
+   for(const [lab,val,note,cls] of cards){const c=el('div',null,'mos-metric '+cls);c.append(el('div',lab,'mos-label'),el('strong',val),el('div',note,'mos-micro'));strip.append(c);}
+ }
+
+ function filterBar(){
+   const f=el('div',null,'mos-filters'),tiers=[['ALL','전체'],['FOCUS','집중검토'],['PREP','준비'],['DISCOVER','발견'],['BLOCKED','구조제외']];
+   for(const [v,t] of tiers){const b=el('button',t,'mos-chip');b.setAttribute('aria-pressed',String(tier===v));b.onclick=()=>{tier=v;renderContent();};f.append(b);}
+   const q=el('input');q.placeholder='종목 · 코드 · 테마 · 재료 검색';q.value=query;q.oninput=()=>{query=q.value;renderBodyOnly();};f.append(q);
+   return f;
+ }
+
+ function renderTableView(){
+   const main=el('div',null,'mos-main'),left=el('section',null,'mos-panel'),right=el('aside',null,'mos-panel mos-detail');
+   const ph=el('div',null,'mos-panel-head');ph.append(el('h3','관심종목 Screener'),el('div','축별 점수는 독립 지표','mos-micro'));left.append(ph,filterBar());
+   const scroll=el('div',null,'mos-scroll'),table=el('table',null,'mos-table'),thead=el('thead'),trh=el('tr');
+   ['종목','단계','등락','Radar','Theme','Setup','Catalyst','Trigger','학습','0B Micro','최근 구간','리스크'].forEach(x=>trh.append(el('th',x)));thead.append(trh);const tbody=el('tbody');table.append(thead,tbody);scroll.append(table);left.append(scroll);
+   const xs=candidates();for(const x of xs){const r=rowData(x.code)||{},tr=el('tr');tr.dataset.selected=String(x.code===selected);tr.onclick=()=>{selected=x.code;renderContent();};
+     const n=el('td');n.append(el('div',x.name,'mos-name'),el('div',x.code+' · '+(x.market_theme||'테마 미확인'),'mos-code'));tr.append(n);
+     const tdTier=el('td');tdTier.append(el('span',tierKo(x.watch_tier),'mos-tier '+tierClass(x.watch_tier)));tr.append(tdTier);
+     const lc=(x.learning_context||[])[0],mic=x.microstructure||null;const microText=mic?((mic.strength==null?'강도—':'강도 '+fmt(mic.strength,0))+' · 15초 '+money(mic.trade_value_15s_krw??mic.trade_value_krw)):'—';tr.append(el('td',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''),el('td',x.radar_score,'mos-axisnum'),el('td',x.theme_score,'mos-axisnum'),el('td',x.setup_score,'mos-axisnum'),el('td',x.catalyst_grade||'—'),el('td',x.trigger_state||'—'),el('td',lc?('N'+lc.samples+' · '+pct(lc.avg_return_pct)):'—',lc&&lc.avg_return_pct>0?'mos-up':lc&&lc.avg_return_pct<0?'mos-down':''),el('td',microText,mic&&mic.gap_count===0?'mos-up':''),el('td',money(x.interval_turnover_krw)),el('td',(x.risk_flags||[]).length?String((x.risk_flags||[]).length):'—'));tbody.append(tr);}
+   if(!xs.length){const tr=el('tr'),td=el('td','현재 필터를 충족한 후보가 없습니다.','mos-empty');td.colSpan=12;tr.append(td);tbody.append(tr);}
+   main.append(left,right);content.replaceChildren(main);renderDetail(right);
+ }
+
+ function renderDetail(box){
+   box.replaceChildren();const x=selectedItem();if(!x){box.append(el('h3','종목을 선택하세요'),el('div','FOCUS/PREP/DISCOVER는 매수 지시가 아니라 검토 순서입니다.','mos-note'));return;}
+   const r=rowData(x.code)||{};box.append(el('div','STOCK DETAIL','mos-kicker'),el('h3',x.name+' · '+x.code),el('div',(x.market_theme||'테마 미확인')+' · '+(x.event_type||'재료분류 대기'),'mos-sub'));
+   const top=el('div',null,'mos-marketline');top.append(el('span',tierKo(x.watch_tier),'mos-tier '+tierClass(x.watch_tier)),pill('Catalyst '+x.catalyst_grade,x.catalyst_grade==='A'?'teal':x.catalyst_grade==='U'?'amber':'purple'),pill(x.trigger_note||x.trigger_state,x.trigger_state==='BLOCKED'?'red':'purple'));box.append(top);
+   box.append(el('h4','Independent axes'),axis('Radar',x.radar_score),axis('Theme',x.theme_score),axis('Setup',x.setup_score));
+   box.append(el('h4','Why now'));const why=el('div',null,'mos-reasons');for(const v of [...(x.axis_reasons?.radar||[]),...(x.axis_reasons?.theme||[]),...(x.axis_reasons?.setup||[])].slice(0,10))why.append(pill(v));box.append(why);
+   box.append(el('h4','Market context'),el('div',(x.market_stance_label||x.market_stance)+' · '+(DATA?.market_regime?.stable_label||DATA?.market_regime?.candidate_label||'레짐 대기'),'mos-note'));
+   box.append(el('h4','0B Microstructure'));
+   const mic=x.microstructure||null;
+   if(mic){
+     const mbox=el('div',null,'mos-note');
+     const bs=mic.buy_share==null?'—':fmt(mic.buy_share*100,0)+'%';
+     const bs15=mic.buy_share_15s==null?'—':fmt(mic.buy_share_15s*100,0)+'%';
+     mbox.append(el('div','최근 15초 '+money(mic.trade_value_15s_krw)+' · Tick '+(mic.tick_count_15s??'—')+' · Gap '+(mic.gap_count_15s??'—')+' · 매수체결 '+bs15,'mos-micro'),
+                 el('div','현재 1분 '+money(mic.trade_value_krw)+' · Tick '+(mic.tick_count??'—')+' · Gap '+(mic.gap_count??'—'),'mos-micro'),
+                 el('div','체결강도 '+(mic.strength==null?'—':fmt(mic.strength,1))+' · 매수비율 '+(mic.buy_ratio==null?'—':fmt(mic.buy_ratio,1))+' · 1분 매수체결 비중 '+bs,'mos-micro'),
+                 el('div','0B는 아직 Radar/Setup 점수에 자동 반영하지 않고 shadow-learning으로 검증합니다.','mos-micro'));
+     box.append(mbox);
+   }else box.append(el('div','Kiwoom 0B 실시간 관측 대기 · 기능을 켜기 전에는 기존 30초/3분 데이터만 사용합니다.','mos-note'));
+   const histctx=x.learning_context||[];
+   box.append(el('h4','Shadow learning'));
+   if(histctx.length){
+     const hc=el('div',null,'mos-note');
+     for(const s of histctx){
+       const edge=s.edge_avg_return_pct==null?'':(' · 부모대비 '+(s.edge_avg_return_pct>=0?'+':'')+fmt(s.edge_avg_return_pct,2)+'%p');
+       const line=el('div',(s.segment_type+' · '+s.horizon+' · N'+s.samples+' / '+(s.distinct_stocks??'—')+'종목 / '+(s.distinct_days??'—')+'일 · '+s.quality+' · 평균 '+pct(s.avg_return_pct)+edge),'mos-micro');
+       hc.append(line);
+     }
+     box.append(hc);
+   }else box.append(el('div','같은 조건이 여러 종목·여러 거래일에서 충분히 반복되기 전에는 역사 성과를 현재 판단에 붙이지 않습니다.','mos-note'));
+   box.append(el('h4','Invalidation / Risk'));box.append(el('div',(x.risk_flags||[]).length?(x.risk_flags||[]).join(' · '):'현재 등록된 위험 플래그 없음','mos-risk'));
+   if(r.research){box.append(el('h4','Catalyst evidence'),el('div',(x.catalyst_note||'인용 포함 보고서')+' · '+stamp(r.research.completed_at),'mos-note'));const sec=r.research.sections||{};if(sec['핵심 재료'])box.append(el('div',sec['핵심 재료'].text,'mos-research'));}
+   else box.append(el('h4','Catalyst evidence'),el('div',x.catalyst_note||'종합 검증 대기','mos-note'));
+   const actions=el('div',null,'mos-toolbar'),hist=el('button','학습 기록','mos-btn');hist.onclick=()=>openHistory(x.code,x.name);const flow=el('button','30초 흐름 보기','mos-btn');flow.onclick=()=>{const b=document.querySelector('[data-view="flow"]');if(b)b.click();else if(typeof window.setView==='function')window.setView('flow');};actions.append(hist,flow);box.append(el('h4','Review'),actions);
+ }
+
+ function tileSize(x,rank){if(rank<2)return'big';if(rank<6)return'mid';return'';}
+ function drawMiniChart(info,box){
+   box.replaceChildren();const rows=(info?.minute||[]).filter(r=>['open','high','low','close'].every(k=>Number.isFinite(Number(r[k]))&&Number(r[k])>0)).slice(-60);
+   if(rows.length<2){box.append(el('div','저장된 3분봉 대기','mos-empty'));return;}
+   const W=520,H=170,l=46,r=8,t=8,b=18,lo0=Math.min(...rows.map(x=>Number(x.low))),hi0=Math.max(...rows.map(x=>Number(x.high))),pad=(hi0-lo0||hi0*.01)*.06,lo=lo0-pad,hi=hi0+pad,span=hi-lo||1,x=i=>l+(i+.5)*(W-l-r)/rows.length,y=v=>t+(hi-v)/(span)*(H-t-b),bw=Math.max(1,(W-l-r)/rows.length*.55),s=svg('svg',{viewBox:'0 0 '+W+' '+H,role:'img','aria-label':'3분봉 차트'});
+   for(let i=0;i<4;i++){const v=lo+span*i/3,yy=y(v);s.append(svg('line',{x1:l,x2:W-r,y1:yy,y2:yy,stroke:'#e4eaf3'}));const tx=svg('text',{x:l-5,y:yy+3,'text-anchor':'end','font-size':9,fill:'#7b8799'});tx.textContent=fmt(v,0);s.append(tx);}
+   rows.forEach((q,i)=>{const up=Number(q.close)>=Number(q.open),col=up?'#c44d58':'#4775b9',g=svg('g',{opacity:q.provisional?.55:1});g.append(svg('line',{x1:x(i),x2:x(i),y1:y(q.high),y2:y(q.low),stroke:col,'stroke-width':1}));g.append(svg('rect',{x:x(i)-bw/2,y:Math.min(y(q.open),y(q.close)),width:bw,height:Math.max(1,Math.abs(y(q.open)-y(q.close))),fill:up?'#fff':col,stroke:col,'stroke-width':1}));s.append(g);});
+   box.append(s);
+ }
+ async function renderCharts(){
+   const version=++chartRenderVersion,panel=el('section',null,'mos-panel'),ph=el('div',null,'mos-panel-head');ph.append(el('h3','Chart Grid'),el('div','저장된 KRX 3분봉 · 상위 후보 최대 8개','mos-micro'));panel.append(ph,filterBar());const grid=el('div',null,'mos-feedback');panel.append(grid);content.replaceChildren(panel);
+   const xs=candidates().slice(0,8);if(!xs.length){grid.append(el('div','차트로 볼 후보가 없습니다.','mos-empty'));return;}
+   for(const x of xs){const card=el('article');card.style.borderLeftColor=x.watch_tier==='FOCUS'?'#15917d':x.watch_tier==='PREP'?'#d18a26':'#7186b8';const hd=el('div',null,'mos-head'),lt=el('div');lt.append(el('h4',x.name+' · '+x.code),el('div',(x.market_theme||'테마 미확인')+' · '+tierKo(x.watch_tier),'mos-micro'));hd.append(lt,el('strong',pct(x.change_pct),x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':''));const chart=el('div','차트 불러오는 중…','mos-empty');card.append(hd,chart);card.onclick=()=>{selected=x.code;mode='table';syncTabs();renderContent();};grid.append(card);
+     get('/api/flow-chart/'+encodeURIComponent(x.code)).then(info=>{if(version===chartRenderVersion)drawMiniChart(info,chart);}).catch(()=>{if(version===chartRenderVersion)chart.textContent='저장 차트 대기';});
+   }
+ }
+ function renderHeatmap(){
+   const panel=el('section',null,'mos-panel'),ph=el('div',null,'mos-panel-head');ph.append(el('h3','관심종목 Heatmap'),el('div','타일 크기 = 최근 구간 거래대금 순위 · 색상 = 검토 단계','mos-micro'));panel.append(ph,filterBar());
+   const grid=el('div',null,'mos-heat');const xs=candidates().sort((a,b)=>(b.interval_turnover_krw||0)-(a.interval_turnover_krw||0));
+   xs.forEach((x,i)=>{const t=el('article',null,'mos-tile '+tierClass(x.watch_tier)+' '+tileSize(x,i));t.onclick=()=>{selected=x.code;mode='table';syncTabs();renderContent();};t.append(el('div',tierKo(x.watch_tier),'mos-label'),el('h4',x.name),el('div',x.market_theme||'테마 미확인','mos-code'),el('div',pct(x.change_pct),'mos-tile-change '+(x.change_pct>0?'mos-up':x.change_pct<0?'mos-down':'')));const g=el('div',null,'mos-tile-grid');[['R',x.radar_score],['T',x.theme_score],['S',x.setup_score]].forEach(([a,v])=>{const d=el('div');d.append(el('div',a,'mos-label'),el('strong',v));g.append(d);});t.append(g,el('div','Catalyst '+x.catalyst_grade+' · '+money(x.interval_turnover_krw),'mos-micro'));grid.append(t);});
+   if(!xs.length)grid.append(el('div','Heatmap에 표시할 후보가 없습니다.','mos-empty'));panel.append(grid);content.replaceChildren(panel);
+ }
+
+ function sparkDaily(rows){
+   const s=svg('svg',{viewBox:'0 0 360 64',class:'mos-spark'});if(!rows||rows.length<2)return s;const vals=rows.map(x=>Number(x.count||0)),mx=Math.max(1,...vals),w=360/vals.length;rows.forEach((r,i)=>{const h=48*(r.count||0)/mx;s.append(svg('rect',{x:i*w+2,y:56-h,width:Math.max(2,w-5),height:h,rx:2,fill:'#5572d5'}));const tt=svg('title');tt.textContent=r.date+' · '+r.count+' assessments · FOCUS '+r.focus;s.lastChild.append(tt);});return s;
+ }
+
+ function renderLearning(){
+   const learn=DATA?.learning||{},st=learn.status||{},wrap=el('section',null,'mos-panel'),ph=el('div',null,'mos-panel-head');ph.append(el('h3','Learning Lab'),pill('SHADOW LEARNING','purple'));wrap.append(ph);
+   const body=el('div',null,'mos-learning'),k=el('div',null,'mos-learning-grid');
+   const days=(learn.daily_assessments||[]).length,segs=learn.segments||[];
+   for(const [a,b,c] of [['Assessments',st.assessments_total||0,'실시간 판단 스냅샷'],['Outcomes',st.outcomes_total||0,'5m · 30m · 종가 · D+1'],['Days',days,'최근 14일 관찰'],['Stable segments',segs.filter(x=>x.quality!=='탐색').length,'다일·다종목 표본 통과']]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',c,'mos-micro'));k.append(card);}body.append(k,el('div',learn.notice||'결과를 모으는 중입니다.','mos-note'),sparkDaily(learn.daily_assessments||[]));
+   const lh=DATA?.live_health||{},fq=lh.flow_quality||{},rt=lh.realtime||{},cv=lh.coverage||{},dq=el('div',null,'mos-learning-grid');
+   const turnBad=fq.turnover_unresolved_pct,turnOk=turnBad==null?'—':fmt(Math.max(0,100-turnBad),1)+'%';
+   const microN=cv.recent_micro15_assessments||0,assessN=cv.recent_assessments||0,microPct=assessN?fmt(microN/assessN*100,0)+'%':'—';
+   for(const [a,b,note] of [
+     ['Turnover quality',turnOk,'거래대금 단위 검증 통과율'],
+     ['0B stream',rt.connected?('ON · '+(rt.subscribed_count||0)):'OFF',rt.status||'상태 대기'],
+     ['Recent gaps',rt.recent_gap_count_5m??'—','최근 5분 gap 이벤트'],
+     ['Micro coverage',microPct,microN+' / '+assessN+' assessments']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',b),el('div',note,'mos-micro'));dq.append(card);}
+   body.append(el('div','Data Quality','mos-section-title'),dq);
+   if((fq.cap_unresolved_pct??0)>20)body.append(el('div','시가총액 단위는 별도 참조 검증 중입니다. 거래대금·0B 학습의 READY 판정과 분리합니다.','mos-note'));
+   body.append(el('div','Promotion Registry','mos-section-title'));
+   const ps=learn.promotion_summary||{},pr=learn.promotion_registry||[],pe=learn.promotion_events||[],prGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['가설',ps.hypothesis||0,'탐색 단계'],
+     ['형성',ps.forming||0,'초기·누적 검증 대기'],
+     ['검증',ps.validated||0,'누적 gate 통과'],
+     ['안정',ps.stable||0,'walk-forward 통과'],
+     ['승격후보',ps.promotion_candidate||0,'사람 검토 대기'],
+     ['Shadow rule',ps.shadow_rule||0,'수동 승인만 가능']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));prGrid.append(card);}body.append(prGrid);
+   body.append(el('div','가설의 현재 단계와 전이 이력을 지속 보존합니다. 자동 학습은 PROMOTION_CANDIDATE까지만 올릴 수 있으며 SHADOW_RULE은 수동 승인 상태를 별도로 요구합니다.','mos-note'));
+   const stageKo=x=>({HYPOTHESIS:'가설',FORMING:'형성',VALIDATED:'검증',STABLE:'안정',PROMOTION_CANDIDATE:'승격후보',SHADOW_RULE:'Shadow rule'})[x]||x||'—';
+   const actionKo=x=>({PROMOTE:'강화검토',SUPPRESS:'축소검토',NONE:'관찰'})[x]||x||'—';
+   const prScroll=el('div',null,'mos-scroll'),prTable=el('table',null,'mos-learn-table'),prHead=el('tr');
+   ['단계','행동','조건','구간','품질','WF','N','종목','일수','과거평균','최근평균','수동상태'].forEach(v=>prHead.append(el('th',v)));const prThead=el('thead');prThead.append(prHead);const prBody=el('tbody');
+   for(const s of pr.slice(0,60)){const tr=el('tr');const stageCls=s.current_stage==='PROMOTION_CANDIDATE'?'mos-up':s.current_stage==='SHADOW_RULE'?'mos-up':'';tr.append(el('td',stageKo(s.current_stage),stageCls),el('td',actionKo(s.review_action)),el('td',s.segment_type+' · '+s.segment_value),el('td',s.horizon),el('td',s.quality||'—'),el('td',s.walk_forward_status||'—'),el('td',s.samples??'—'),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',pct(s.early_avg_return_pct)),el('td',pct(s.recent_avg_return_pct),s.recent_avg_return_pct>0?'mos-up':s.recent_avg_return_pct<0?'mos-down':''),el('td',s.manual_review_state||'PENDING'));prBody.append(tr);}
+   if(!pr.length){const tr=el('tr'),td=el('td','아직 Promotion Registry에 등록된 장기 horizon 가설이 없습니다.','mos-empty');td.colSpan=12;tr.append(td);prBody.append(tr);}prTable.append(prThead,prBody);prScroll.append(prTable);body.append(prScroll);
+   body.append(el('div','최근 단계 전이','mos-section-title'));const evScroll=el('div',null,'mos-scroll'),evTable=el('table',null,'mos-learn-table'),evHead=el('tr');['시각','조건','구간','이벤트','이전','현재','방향','행동'].forEach(v=>evHead.append(el('th',v)));const evThead=el('thead');evThead.append(evHead);const evBody=el('tbody');
+   for(const e of pe.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.segment_type||'—')+' · '+(e.segment_value||'—')),el('td',e.horizon||'—'),el('td',e.event_type||'—'),el('td',stageKo(e.from_stage)),el('td',stageKo(e.to_stage)),el('td',e.direction||'—'),el('td',actionKo(e.review_action)));evBody.append(tr);}
+   if(!pe.length){const tr=el('tr'),td=el('td','아직 단계 전이 이력이 없습니다.','mos-empty');td.colSpan=8;tr.append(td);evBody.append(tr);}evTable.append(evThead,evBody);evScroll.append(evTable);body.append(evScroll);
+   body.append(el('div','Shadow Rule Lab','mos-section-title'));
+   const sl=learn.shadow_lab||{},ss=sl.stats||{},sr=sl.rules||[],sum=sl.summaries||[],slGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['활성 규칙',ss.enabled_rules||0,'수동 승인된 challenger'],
+     ['관측',ss.observations||0,'승인 이후 prospective snapshots'],
+     ['조건 일치',ss.matched||0,'승인 조건을 실제로 충족'],
+     ['판단 변경',ss.changed||0,'CONTROL과 tier가 달라진 건']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));slGrid.append(card);}body.append(slGrid);
+   body.append(el('div',sl.notice||'승인 이후 새 자료만 A/B shadow로 비교합니다.','mos-note'));
+   const shadowAction=x=>({PROMOTE_ONE_TIER:'한 단계 상향',SUPPRESS_ONE_TIER:'한 단계 하향'})[x]||x||'—';
+   const stateKo=x=>({COMPARABLE:'비교가능',FORMING:'형성',COLLECTING:'수집중',NO_DIFFERENCE:'판단차이 없음'})[x]||x||'—';
+   const srScroll=el('div',null,'mos-scroll'),srTable=el('table',null,'mos-learn-table'),srHead=el('tr');
+   ['Rule','상태','Action','조건','근거구간','승인시각','관측','일치','변경'].forEach(v=>srHead.append(el('th',v)));const srThead=el('thead');srThead.append(srHead);const srBody=el('tbody');
+   for(const r of sr.slice(0,30)){const tr=el('tr');tr.append(el('td',(r.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',r.enabled?'ON':'OFF',r.enabled?'mos-up':'mos-muted'),el('td',shadowAction(r.action)),el('td',r.segment_type+' · '+r.segment_value),el('td',r.source_horizon||'—'),el('td',stamp(r.approved_at)),el('td',r.observations??0),el('td',r.matched??0),el('td',r.changed??0));srBody.append(tr);}
+   if(!sr.length){const tr=el('tr'),td=el('td','승인된 Shadow Rule이 없습니다. Promotion candidate는 자동으로 활성화되지 않습니다.','mos-empty');td.colSpan=9;tr.append(td);srBody.append(tr);}srTable.append(srThead,srBody);srScroll.append(srTable);body.append(srScroll);
+   body.append(el('div','CONTROL vs CHALLENGER','mos-section-title'));
+   body.append(el('div','동일한 episode-anchor와 동일한 이후 가격경로를 사용합니다. 차이는 후보 규칙이 FOCUS 또는 REVIEW(FOCUS+PREP) cohort의 구성원을 바꾼 효과만 비교합니다. Δ는 challenger − control이며, 표본이 적을 때는 우열 판정을 하지 않습니다.','mos-note'));
+   const abScroll=el('div',null,'mos-scroll'),abTable=el('table',null,'mos-learn-table'),abHead=el('tr');
+   ['Rule','구간','Cohort','상태','변경','Control N','Challenger N','Control 평균','Challenger 평균','Δ평균','Δ양(+)','ΔMAE'].forEach(v=>abHead.append(el('th',v)));const abThead=el('thead');abThead.append(abHead);const abBody=el('tbody');
+   for(const s of sum.slice(0,80)){const tr=el('tr');const d=s.delta_avg_return_pct;tr.append(el('td',(s.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',s.horizon),el('td',s.cohort),el('td',stateKo(s.evidence_state)),el('td',s.membership_changes??0),el('td',s.control_samples??0),el('td',s.challenger_samples??0),el('td',pct(s.control_avg_return_pct)),el('td',pct(s.challenger_avg_return_pct)),el('td',d==null?'—':((d>=0?'+':'')+fmt(d,2)+'%p'),d>0?'mos-up':d<0?'mos-down':''),el('td',s.delta_positive_rate_pp==null?'—':((s.delta_positive_rate_pp>=0?'+':'')+fmt(s.delta_positive_rate_pp,1)+'%p')),el('td',s.delta_mae_pct==null?'—':((s.delta_mae_pct>=0?'+':'')+fmt(s.delta_mae_pct,2)+'%p')));abBody.append(tr);}
+   if(!sum.length){const tr=el('tr'),td=el('td','승인 후 outcome이 쌓이면 CONTROL/CHALLENGER 비교가 여기에 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);abBody.append(tr);}abTable.append(abThead,abBody);abScroll.append(abTable);body.append(abScroll);
+   body.append(el('div','Shadow Decision Gate','mos-section-title'));
+   const ds=sl.decision_summary||{},dec=sl.decisions||[],dev=sl.decision_events||[],dg=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['수집중',ds.collecting||0,'30분 비교 문턱 전'],
+     ['비교가능',ds.comparable||0,'30분은 비교 가능'],
+     ['일관',ds.consistent||0,'시간·stance 방향 유지'],
+     ['교체후보',ds.accept_candidate||0,'사람의 교체 검토 자격'],
+     ['추가자료',ds.more_data||0,'혼합 또는 재현성 대기'],
+     ['기각',ds.reject||0,'prospective 악화가 반복']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));dg.append(card);}body.append(dg);
+   body.append(el('div','교체후보는 자동 채택이 아닙니다. 30분·종가 전체 효과, 거래일을 나눈 최근 절반, 실제 membership 변화, 시장 stance 재현성을 모두 검사한 뒤 사람에게 기존 CONTROL 교체 검토 자격만 부여합니다.','mos-note'));
+   const decisionKo=x=>({COLLECTING:'수집중',COMPARABLE:'비교가능',CONSISTENT:'일관',ACCEPT_CANDIDATE:'교체후보',REJECT:'기각',MORE_DATA:'추가자료'})[x]||x||'—';
+   const dcScroll=el('div',null,'mos-scroll'),dcTable=el('table',null,'mos-learn-table'),dcHead=el('tr');
+   ['상태','Rule','Action','조건','근거구간','주 Cohort','30m','종가','시간분할','Stance','검토자격','근거'].forEach(v=>dcHead.append(el('th',v)));const dcThead=el('thead');dcThead.append(dcHead);const dcBody=el('tbody');
+   for(const d of dec.slice(0,40)){const tr=el('tr'),ev=d.evidence||{},tm=ev.temporal||{},stances=ev.stance||[];const stanceText=stances.length?stances.map(x=>x.stance+':'+x.state).join(' / '):(ev.stance_scoped?'target scope':'대기');const timeText=[tm.early_30m,tm.recent_30m,tm.early_close,tm.recent_close].filter(Boolean).join(' / ')||'—';const cls=d.decision_state==='ACCEPT_CANDIDATE'?'mos-up':d.decision_state==='REJECT'?'mos-down':'';tr.append(el('td',decisionKo(d.decision_state),cls),el('td',(d.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',shadowAction(d.action)),el('td',(d.segment_type||'—')+' · '+(d.segment_value||'—')),el('td',d.source_horizon||'—'),el('td',d.primary_cohort||'—'),el('td',ev.overall_30m||'—'),el('td',ev.overall_close||'—'),el('td',timeText,'mos-micro'),el('td',stanceText,'mos-micro'),el('td',d.review_eligible?'YES':'NO',d.review_eligible?'mos-up':''),el('td',(d.reason_codes||[]).join(' · '),'mos-micro'));dcBody.append(tr);}
+   if(!dec.length){const tr=el('tr'),td=el('td','Shadow Rule 결과가 쌓이면 Decision Gate 상태가 여기에 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);dcBody.append(tr);}dcTable.append(dcThead,dcBody);dcScroll.append(dcTable);body.append(dcScroll);
+   body.append(el('div','Decision 전이','mos-section-title'));const deScroll=el('div',null,'mos-scroll'),deTable=el('table',null,'mos-learn-table'),deHead=el('tr');['시각','Rule','조건','이전','현재','검토자격','근거'].forEach(v=>deHead.append(el('th',v)));const deThead=el('thead');deThead.append(deHead);const deBody=el('tbody');
+   for(const e of dev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',(e.segment_type||'—')+' · '+(e.segment_value||'—')),el('td',decisionKo(e.from_state)),el('td',decisionKo(e.to_state),e.to_state==='ACCEPT_CANDIDATE'?'mos-up':e.to_state==='REJECT'?'mos-down':''),el('td',e.review_eligible?'YES':'NO'),el('td',(e.reason_codes||[]).join(' · '),'mos-micro'));deBody.append(tr);}
+   if(!dev.length){const tr=el('tr'),td=el('td','아직 Decision 상태 전이가 없습니다.','mos-empty');td.colSpan=7;tr.append(td);deBody.append(tr);}deTable.append(deThead,deBody);deScroll.append(deTable);body.append(deScroll);
+   body.append(el('div','Adoption Review Dossier','mos-section-title'));
+   const ar=learn.adoption_review||{},ars=ar.summary||{},ads=ar.dossiers||[],are=ar.events||[],ag=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['심사대기',ars.pending||0,'현재 ACCEPT_CANDIDATE 증거 revision'],
+     ['Dry-run 승인',ars.approved_dry_run||0,'사람이 다음 단계만 승인'],
+     ['기각',ars.rejected||0,'사람의 심사 기각'],
+     ['대체됨',ars.superseded||0,'새 증거 revision 생성'],
+     ['Decision 변경',ars.stale_decision||0,'ACCEPT 조건에서 이탈']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));ag.append(card);}body.append(ag);
+   body.append(el('div',ar.notice||'교체후보의 증거를 immutable revision으로 고정해 심사합니다.','mos-note'));
+   const reviewKo=x=>({PENDING:'심사대기',APPROVED_DRY_RUN:'Dry-run 승인',REJECTED:'기각',SUPERSEDED:'대체됨',STALE_DECISION:'Decision 변경'})[x]||x||'—';
+   const adScroll=el('div',null,'mos-scroll'),adTable=el('table',null,'mos-learn-table'),adHead=el('tr');
+   ['심사상태','Dossier','Rev','Rule','조건','Action','Decision','영향건','반례','Rollback','생성시각','Hash'].forEach(v=>adHead.append(el('th',v)));const adThead=el('thead');adThead.append(adHead);const adBody=el('tbody');
+   for(const d of ads.slice(0,40)){const tr=el('tr'),doc=d.dossier||{},impact=doc.impact_surface||{},counter=doc.counterexamples||{},change=doc.proposed_change||{};const cls=d.review_state==='APPROVED_DRY_RUN'?'mos-up':d.review_state==='REJECTED'?'mos-down':'';tr.append(el('td',reviewKo(d.review_state),cls),el('td',d.dossier_id||'—','mos-code'),el('td',d.revision??'—'),el('td',(d.shadow_rule_id||'').slice(0,16),'mos-code'),el('td',(d.segment_type||'—')+' · '+(d.segment_value||'—')),el('td',shadowAction(d.action||change.action)),el('td',d.decision_state||'—'),el('td',impact.changed_episode_count??'—'),el('td',(counter.cases||[]).length),el('td',(doc.rollback_criteria||[]).slice(0,2).join(' / ')||'—','mos-micro'),el('td',stamp(d.generated_at)),el('td',(d.content_hash||'').slice(0,12),'mos-code'));adBody.append(tr);}
+   if(!ads.length){const tr=el('tr'),td=el('td','ACCEPT_CANDIDATE가 생기면 증거·반례·rollback 조건을 고정한 dossier revision이 자동 생성됩니다.','mos-empty');td.colSpan=12;tr.append(td);adBody.append(tr);}adTable.append(adThead,adBody);adScroll.append(adTable);body.append(adScroll);
+   body.append(el('div','Dossier 심사 이력','mos-section-title'));const aeScroll=el('div',null,'mos-scroll'),aeTable=el('table',null,'mos-learn-table'),aeHead=el('tr');['시각','Dossier','이벤트','이전','현재','메모'].forEach(v=>aeHead.append(el('th',v)));const aeThead=el('thead');aeThead.append(aeHead);const aeBody=el('tbody');
+   for(const e of are.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.dossier_id||'—','mos-code'),el('td',e.event_type||'—'),el('td',reviewKo(e.from_review_state)),el('td',reviewKo(e.to_review_state),e.to_review_state==='APPROVED_DRY_RUN'?'mos-up':e.to_review_state==='REJECTED'?'mos-down':''),el('td',e.note||'—','mos-micro'));aeBody.append(tr);}
+   if(!are.length){const tr=el('tr'),td=el('td','아직 dossier 심사 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);aeBody.append(tr);}aeTable.append(aeThead,aeBody);aeScroll.append(aeTable);body.append(aeScroll);
+   body.append(el('div','Versioned Ruleset Dry Run','mos-section-title'));
+   const rd=learn.ruleset_dry_run||{},rds=rd.summary||{},rr=rd.rulesets||[],rsum=rd.summaries||[],rev=rd.events||[],rg=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['Active',rds.active||0,'사람이 시작한 candidate ruleset'],
+     ['Stopped',rds.stopped||0,'수동 중지'],
+     ['Stale',rds.stale_source||0,'source Decision 이탈'],
+     ['관측',rds.observations||0,'activation 이후 prospective'],
+     ['변경',rds.changed||0,'CONTROL과 tier가 달라진 건']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));rg.append(card);}body.append(rg);
+   body.append(el('div',rd.notice||'승인된 candidate ruleset을 CONTROL과 병렬 계산합니다.','mos-note'));
+   const rsScroll=el('div',null,'mos-scroll'),rsTable=el('table',null,'mos-learn-table'),rsHead=el('tr');
+   ['상태','Ruleset','Version','Base','Dossier','관측','변경','활성시각','마지막평가'].forEach(v=>rsHead.append(el('th',v)));const rsThead=el('thead');rsThead.append(rsHead);const rsBody=el('tbody');
+   for(const r of rr.slice(0,30)){const tr=el('tr');const cls=r.status==='DRY_RUN_ACTIVE'?'mos-up':r.status==='STALE_SOURCE'?'mos-down':'';tr.append(el('td',r.status,cls),el('td',r.ruleset_id||'—','mos-code'),el('td',r.version_label||'—','mos-code'),el('td',r.base_rule_version||'—'),el('td',r.source_dossier_id||'—','mos-code'),el('td',r.observations??0),el('td',r.changed??0),el('td',stamp(r.activated_at)),el('td',stamp(r.last_evaluated_at)));rsBody.append(tr);}
+   if(!rr.length){const tr=el('tr'),td=el('td','APPROVED_DRY_RUN dossier를 사람이 dry-run-start 해야 versioned ruleset이 생성됩니다.','mos-empty');td.colSpan=9;tr.append(td);rsBody.append(tr);}rsTable.append(rsThead,rsBody);rsScroll.append(rsTable);body.append(rsScroll);
+   body.append(el('div','Ruleset CONTROL vs CANDIDATE','mos-section-title'));const rcScroll=el('div',null,'mos-scroll'),rcTable=el('table',null,'mos-learn-table'),rcHead=el('tr');
+   ['Ruleset','구간','Cohort','상태','변경','Control N','Candidate N','Control 평균','Candidate 평균','Δ평균','Δ양(+)','ΔMAE'].forEach(v=>rcHead.append(el('th',v)));const rcThead=el('thead');rcThead.append(rcHead);const rcBody=el('tbody');
+   for(const s of rsum.slice(0,80)){const tr=el('tr'),d=s.delta_avg_return_pct;tr.append(el('td',(s.ruleset_id||'').slice(0,16),'mos-code'),el('td',s.horizon),el('td',s.cohort),el('td',stateKo(s.evidence_state)),el('td',s.membership_changes??0),el('td',s.control_samples??0),el('td',s.candidate_samples??0),el('td',pct(s.control_avg_return_pct)),el('td',pct(s.candidate_avg_return_pct)),el('td',d==null?'—':((d>=0?'+':'')+fmt(d,2)+'%p'),d>0?'mos-up':d<0?'mos-down':''),el('td',s.delta_positive_rate_pp==null?'—':((s.delta_positive_rate_pp>=0?'+':'')+fmt(s.delta_positive_rate_pp,1)+'%p')),el('td',s.delta_mae_pct==null?'—':((s.delta_mae_pct>=0?'+':'')+fmt(s.delta_mae_pct,2)+'%p')));rcBody.append(tr);}
+   if(!rsum.length){const tr=el('tr'),td=el('td','Dry Run outcome이 쌓이면 전체 ruleset 비교가 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);rcBody.append(tr);}rcTable.append(rcThead,rcBody);rcScroll.append(rcTable);body.append(rcScroll);
+   body.append(el('div','Ruleset 이력','mos-section-title'));const rvScroll=el('div',null,'mos-scroll'),rvTable=el('table',null,'mos-learn-table'),rvHead=el('tr');['시각','Ruleset','이벤트','이전','현재'].forEach(v=>rvHead.append(el('th',v)));const rvThead=el('thead');rvThead.append(rvHead);const rvBody=el('tbody');
+   for(const e of rev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.ruleset_id||'—','mos-code'),el('td',e.event_type||'—'),el('td',e.from_status||'—'),el('td',e.to_status||'—'));rvBody.append(tr);}
+   if(!rev.length){const tr=el('tr'),td=el('td','아직 ruleset 상태 이력이 없습니다.','mos-empty');td.colSpan=5;tr.append(td);rvBody.append(tr);}rvTable.append(rvThead,rvBody);rvScroll.append(rvTable);body.append(rvScroll);
+   body.append(el('div','Ruleset Succession Gate','mos-section-title'));
+   const sd=rd.succession_summary||{},sdec=rd.succession_decisions||[],sev=rd.succession_events||[],sg=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['수집중',sd.collecting||0,'30분 비교 문턱 전'],
+     ['비교가능',sd.comparable||0,'30분/종가 비교 형성'],
+     ['안정',sd.stable||0,'시간·stance·집중도 통과'],
+     ['승계후보',sd.succession_candidate||0,'사람의 release 검토 자격'],
+     ['추가자료',sd.more_data||0,'집중·효과붕괴·재현성 대기'],
+     ['기각',sd.reject||0,'prospective 악화 반복']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));sg.append(card);}body.append(sg);
+   body.append(el('div','30m·종가 전체 효과, EARLY/RECENT 안정성, stance 재현성, 한 종목·하루 집중도, 승인 당시 Shadow 효과 대비 보존율, D+1 열화를 함께 검사합니다. SUCCESSION_CANDIDATE도 live 전환이 아니라 release 심사 자격입니다.','mos-note'));
+   const successionKo=x=>({RULESET_COLLECTING:'수집중',RULESET_COMPARABLE:'비교가능',RULESET_STABLE:'안정',SUCCESSION_CANDIDATE:'승계후보',RULESET_MORE_DATA:'추가자료',RULESET_REJECT:'기각'})[x]||x||'—';
+   const sgScroll=el('div',null,'mos-scroll'),sgTable=el('table',null,'mos-learn-table'),sgHead=el('tr');
+   ['상태','Ruleset','Version','Ruleset 상태','Cohort','30m','종가','D+1','집중도','Shadow 보존율','검토자격','근거'].forEach(v=>sgHead.append(el('th',v)));const sgThead=el('thead');sgThead.append(sgHead);const sgBody=el('tbody');
+   for(const d of sdec.slice(0,40)){const tr=el('tr'),ev=d.evidence||{},conc=ev.concentration||{},ret=ev.shadow_effect_retention||{};const concText=conc.changed_episodes==null?'—':('N '+conc.changed_episodes+' · stock '+fmt((conc.top_stock_share||0)*100,0)+'% · day '+fmt((conc.top_day_share||0)*100,0)+'%');const retText=(ret['30m']==null&&ret.close==null)?'—':('30m '+(ret['30m']==null?'—':fmt(ret['30m']*100,0)+'%')+' · close '+(ret.close==null?'—':fmt(ret.close*100,0)+'%'));const cls=d.decision_state==='SUCCESSION_CANDIDATE'?'mos-up':d.decision_state==='RULESET_REJECT'?'mos-down':'';tr.append(el('td',successionKo(d.decision_state),cls),el('td',(d.ruleset_id||'').slice(0,16),'mos-code'),el('td',d.version_label||'—','mos-code'),el('td',d.status||'—'),el('td',d.primary_cohort||'—'),el('td',ev.overall_30m||'—'),el('td',ev.overall_close||'—'),el('td',ev.overall_d1||'—'),el('td',concText,'mos-micro'),el('td',retText,'mos-micro'),el('td',d.review_eligible?'YES':'NO',d.review_eligible?'mos-up':''),el('td',(d.reason_codes||[]).join(' · '),'mos-micro'));sgBody.append(tr);}
+   if(!sdec.length){const tr=el('tr'),td=el('td','Versioned Dry Run 결과가 쌓이면 승계 판단이 여기에 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);sgBody.append(tr);}sgTable.append(sgThead,sgBody);sgScroll.append(sgTable);body.append(sgScroll);
+   body.append(el('div','Succession 전이','mos-section-title'));const seScroll=el('div',null,'mos-scroll'),seTable=el('table',null,'mos-learn-table'),seHead=el('tr');['시각','Ruleset','이전','현재','검토자격','근거'].forEach(v=>seHead.append(el('th',v)));const seThead=el('thead');seThead.append(seHead);const seBody=el('tbody');
+   for(const e of sev.slice(0,20)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.ruleset_id||'').slice(0,16),'mos-code'),el('td',successionKo(e.from_state)),el('td',successionKo(e.to_state),e.to_state==='SUCCESSION_CANDIDATE'?'mos-up':e.to_state==='RULESET_REJECT'?'mos-down':''),el('td',e.review_eligible?'YES':'NO'),el('td',(e.reason_codes||[]).join(' · '),'mos-micro'));seBody.append(tr);}
+   if(!sev.length){const tr=el('tr'),td=el('td','아직 Succession 상태 전이가 없습니다.','mos-empty');td.colSpan=6;tr.append(td);seBody.append(tr);}seTable.append(seThead,seBody);seScroll.append(seTable);body.append(seScroll);
+   body.append(el('div','Release Candidate / Canary','mos-section-title'));
+   const cr=learn.release_canary||{},crs=cr.summary||{},rels=cr.releases||[],csum=cr.summaries||[],cdec=cr.decisions||[],crev=cr.events||[],cdev=cr.decision_events||[],cobs=cr.recent_observations||[],cg=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['RC 대기',crs.release_candidate||0,'Canary 시작 전 불변 패키지'],
+     ['Canary Active',crs.active||0,'20% deterministic stock-day preview'],
+     ['중지',crs.stopped||0,'사람이 중지'],
+     ['Source stale',crs.source_stale||0,'승계 근거 이탈'],
+     ['Rollback',crs.rollback_required||0,'Canary 악화로 자동 중단'],
+     ['Promote 후보',crs.promotion_candidate||0,'사람의 full-release 검토 자격']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));cg.append(card);}body.append(cg);
+   body.append(el('div',cr.notice||'Canary preview는 Learning 영역에서만 보이며 기본 CONTROL tier를 대체하지 않습니다.','mos-note'));
+   const canaryKo=x=>({CANARY_COLLECTING:'수집중',CANARY_HEALTHY:'정상',CANARY_PROMOTION_CANDIDATE:'승격검토',CANARY_ROLLBACK_REQUIRED:'롤백필요'})[x]||x||'—';
+   const crScroll=el('div',null,'mos-scroll'),crTable=el('table',null,'mos-learn-table'),crHead=el('tr');
+   ['상태','Release','Version','Ruleset','Canary','관측','변경','시작','마지막평가'].forEach(v=>crHead.append(el('th',v)));const crThead=el('thead');crThead.append(crHead);const crBody=el('tbody');
+   for(const r of rels.slice(0,30)){const tr=el('tr');const cls=r.status==='CANARY_ACTIVE'?'mos-up':(r.status==='CANARY_ROLLBACK_REQUIRED'||r.status==='CANARY_SOURCE_STALE')?'mos-down':'';tr.append(el('td',r.status,cls),el('td',(r.release_candidate_id||'').slice(0,18),'mos-code'),el('td',r.release_version_label||'—','mos-code'),el('td',(r.source_ruleset_id||'').slice(0,16),'mos-code'),el('td',(r.canary_allocation_pct??'—')+'%'),el('td',r.observations??0),el('td',r.changed??0),el('td',stamp(r.canary_started_at)),el('td',stamp(r.last_evaluated_at)));crBody.append(tr);}
+   if(!rels.length){const tr=el('tr'),td=el('td','SUCCESSION_CANDIDATE를 사람이 release-create 해야 Release Candidate가 생성됩니다.','mos-empty');td.colSpan=9;tr.append(td);crBody.append(tr);}crTable.append(crThead,crBody);crScroll.append(crTable);body.append(crScroll);
+   body.append(el('div','Canary Safety Gate','mos-section-title'));const cdScroll=el('div',null,'mos-scroll'),cdTable=el('table',null,'mos-learn-table'),cdHead=el('tr');['상태','Release','Cohort','30m','종가','D+1','최근30m','최근종가','검토자격','근거'].forEach(v=>cdHead.append(el('th',v)));const cdThead=el('thead');cdThead.append(cdHead);const cdBody=el('tbody');
+   for(const d of cdec.slice(0,40)){const tr=el('tr'),ev=d.evidence||{};const cls=d.decision_state==='CANARY_PROMOTION_CANDIDATE'?'mos-up':d.decision_state==='CANARY_ROLLBACK_REQUIRED'?'mos-down':'';tr.append(el('td',canaryKo(d.decision_state),cls),el('td',(d.release_candidate_id||'').slice(0,18),'mos-code'),el('td',d.primary_cohort||'—'),el('td',ev.overall_30m||'—'),el('td',ev.overall_close||'—'),el('td',ev.overall_d1||'—'),el('td',ev.recent_30m||'—'),el('td',ev.recent_close||'—'),el('td',d.review_eligible?'YES':'NO',d.review_eligible?'mos-up':''),el('td',(d.reason_codes||[]).join(' · '),'mos-micro'));cdBody.append(tr);}
+   if(!cdec.length){const tr=el('tr'),td=el('td','Canary outcome이 쌓이면 안전 판정이 나타납니다.','mos-empty');td.colSpan=10;tr.append(td);cdBody.append(tr);}cdTable.append(cdThead,cdBody);cdScroll.append(cdTable);body.append(cdScroll);
+   body.append(el('div','Canary CONTROL vs CANDIDATE','mos-section-title'));const cmScroll=el('div',null,'mos-scroll'),cmTable=el('table',null,'mos-learn-table'),cmHead=el('tr');['Release','구간','Cohort','상태','변경','Control N','Candidate N','Control 평균','Candidate 평균','Δ평균','Δ양(+)','ΔMAE'].forEach(v=>cmHead.append(el('th',v)));const cmThead=el('thead');cmThead.append(cmHead);const cmBody=el('tbody');
+   for(const s of csum.slice(0,80)){const tr=el('tr'),d=s.delta_avg_return_pct;tr.append(el('td',(s.release_candidate_id||'').slice(0,18),'mos-code'),el('td',s.horizon),el('td',s.cohort),el('td',stateKo(s.evidence_state)),el('td',s.membership_changes??0),el('td',s.control_samples??0),el('td',s.candidate_samples??0),el('td',pct(s.control_avg_return_pct)),el('td',pct(s.candidate_avg_return_pct)),el('td',d==null?'—':((d>=0?'+':'')+fmt(d,2)+'%p'),d>0?'mos-up':d<0?'mos-down':''),el('td',s.delta_positive_rate_pp==null?'—':((s.delta_positive_rate_pp>=0?'+':'')+fmt(s.delta_positive_rate_pp,1)+'%p')),el('td',s.delta_mae_pct==null?'—':((s.delta_mae_pct>=0?'+':'')+fmt(s.delta_mae_pct,2)+'%p')));cmBody.append(tr);}
+   if(!csum.length){const tr=el('tr'),td=el('td','Canary 표본의 outcome이 쌓이면 비교 결과가 나타납니다.','mos-empty');td.colSpan=12;tr.append(td);cmBody.append(tr);}cmTable.append(cmThead,cmBody);cmScroll.append(cmTable);body.append(cmScroll);
+   body.append(el('div','최근 Canary Preview','mos-section-title'));body.append(el('div','이 표만 Candidate tier를 미리 보여줍니다. 메인 Market OS shortlist와 실제 watch_tier는 CONTROL 그대로입니다.','mos-note'));const cpScroll=el('div',null,'mos-scroll'),cpTable=el('table',null,'mos-learn-table'),cpHead=el('tr');['시각','종목','Release','Control','Candidate','변경','Bucket','배정률'].forEach(v=>cpHead.append(el('th',v)));const cpThead=el('thead');cpThead.append(cpHead);const cpBody=el('tbody');
+   for(const o of cobs.slice(0,30)){const tr=el('tr');tr.append(el('td',stamp(o.assessment_time)),el('td',(o.stock_name||o.stock_code||'—')+' · '+(o.stock_code||'')),el('td',(o.release_candidate_id||'').slice(0,18),'mos-code'),el('td',tierKo(o.control_tier)),el('td',tierKo(o.candidate_tier),o.changed?'mos-up':''),el('td',o.changed?'YES':'NO'),el('td',o.assignment_bucket??'—'),el('td',(o.allocation_pct??'—')+'%'));cpBody.append(tr);}
+   if(!cobs.length){const tr=el('tr'),td=el('td','선택된 stock-day Canary 표본이 아직 없습니다.','mos-empty');td.colSpan=8;tr.append(td);cpBody.append(tr);}cpTable.append(cpThead,cpBody);cpScroll.append(cpTable);body.append(cpScroll);
+   body.append(el('div','Canary 이력','mos-section-title'));const ceScroll=el('div',null,'mos-scroll'),ceTable=el('table',null,'mos-learn-table'),ceHead=el('tr');['시각','Release','이벤트/결정','이전','현재'].forEach(v=>ceHead.append(el('th',v)));const ceThead=el('thead');ceThead.append(ceHead);const ceBody=el('tbody');
+   for(const e of [...crev.map(x=>({...x,_kind:x.event_type})),...cdev.map(x=>({...x,_kind:'DECISION'}))].sort((a,b)=>String(b.event_time).localeCompare(String(a.event_time))).slice(0,25)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.release_candidate_id||'').slice(0,18),'mos-code'),el('td',e._kind||'—'),el('td',e.from_status||e.from_state||'—'),el('td',e.to_status||e.to_state||'—'));ceBody.append(tr);}
+   if(!crev.length&&!cdev.length){const tr=el('tr'),td=el('td','아직 Canary 이력이 없습니다.','mos-empty');td.colSpan=5;tr.append(td);ceBody.append(tr);}ceTable.append(ceThead,ceBody);ceScroll.append(ceTable);body.append(ceScroll);
+   body.append(el('div','Full Release Review Gate','mos-section-title'));
+   const fr=learn.full_release_review||{},frs=fr.summary||{},frg=fr.gates||[],frr=fr.reviews||[],frge=fr.gate_events||[],frre=fr.review_events||[],frGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['추가자료',frs.more_data||0,'Canary/Dry Run/편향/rollback 검증 대기'],
+     ['심사가능',frs.review_ready||0,'자동 Gate 통과'],
+     ['사람심사',frs.pending||0,'immutable package 검토 중'],
+     ['RELEASE_READY',frs.release_ready||0,'사람 승인 메타데이터'],
+     ['기각',frs.rejected||0,'사람 심사 기각'],
+     ['Stale',frs.stale_canary||0,'Canary 근거 이탈']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));frGrid.append(card);}body.append(frGrid);
+   body.append(el('div',fr.notice||'Canary와 전체 Dry Run, 표본 대표성, rollback identity를 대조합니다.','mos-note'));
+   const fullGateKo=x=>({FULL_RELEASE_MORE_DATA:'추가자료',FULL_RELEASE_REVIEW_READY:'심사가능'})[x]||x||'—';
+   const fullReviewKo=x=>({PENDING:'심사대기',RELEASE_READY:'RELEASE_READY',REJECTED:'기각',STALE_CANARY:'Canary stale',SUPERSEDED:'대체됨'})[x]||x||'—';
+   const fgScroll=el('div',null,'mos-scroll'),fgTable=el('table',null,'mos-learn-table'),fgHead=el('tr');['Gate','Release','상태','30m 효과비','종가 효과비','배정률','Stance TVD','Tier TVD','Rollback target','검토자격','근거'].forEach(v=>fgHead.append(el('th',v)));const fgThead=el('thead');fgThead.append(fgHead);const fgBody=el('tbody');
+   for(const g of frg.slice(0,40)){const tr=el('tr'),ev=g.evidence||{},al=ev.effect_alignment||{},bias=ev.sample_bias||{},rb=(ev.rollback||{}).rollback_target||{};const r30=(al['30m']||{}).avg_effect_ratio,rcl=(al.close||{}).avg_effect_ratio;const cls=g.gate_state==='FULL_RELEASE_REVIEW_READY'?'mos-up':'';tr.append(el('td',fullGateKo(g.gate_state),cls),el('td',(g.release_candidate_id||'').slice(0,18),'mos-code'),el('td',g.status||'—'),el('td',r30==null?'—':fmt(r30*100,0)+'%'),el('td',rcl==null?'—':fmt(rcl*100,0)+'%'),el('td',bias.actual_pct==null?'—':fmt(bias.actual_pct,1)+'% / '+fmt(bias.expected_pct||0,0)+'%'),el('td',bias.stance_tvd==null?'—':fmt(bias.stance_tvd,3)),el('td',bias.tier_tvd==null?'—':fmt(bias.tier_tvd,3)),el('td',rb.target_id||'—','mos-code'),el('td',g.review_eligible?'YES':'NO',g.review_eligible?'mos-up':''),el('td',(g.reason_codes||[]).join(' · ')||'OK','mos-micro'));fgBody.append(tr);}
+   if(!frg.length){const tr=el('tr'),td=el('td','CANARY_PROMOTION_CANDIDATE가 형성되면 Full Release Gate를 계산합니다.','mos-empty');td.colSpan=11;tr.append(td);fgBody.append(tr);}fgTable.append(fgThead,fgBody);fgScroll.append(fgTable);body.append(fgScroll);
+   body.append(el('div','Full Release Review Package','mos-section-title'));const fpScroll=el('div',null,'mos-scroll'),fpTable=el('table',null,'mos-learn-table'),fpHead=el('tr');['심사상태','Review','Rev','Release','Gate','CONTROL','Rollback','배포모드','생성','심사','Hash'].forEach(v=>fpHead.append(el('th',v)));const fpThead=el('thead');fpThead.append(fpHead);const fpBody=el('tbody');
+   for(const r of frr.slice(0,40)){const tr=el('tr'),pkg=r.package||{},dm=pkg.deployment_manifest||{},rb=pkg.rollback_manifest||{};const cls=r.review_state==='RELEASE_READY'?'mos-up':r.review_state==='REJECTED'?'mos-down':'';tr.append(el('td',fullReviewKo(r.review_state),cls),el('td',r.review_id||'—','mos-code'),el('td',r.revision??'—'),el('td',(r.release_candidate_id||'').slice(0,18),'mos-code'),el('td',fullGateKo(r.gate_state)),el('td',dm.control_rule_version||'—','mos-code'),el('td',rb.target_id||'—','mos-code'),el('td',dm.deployment_mode||'—'),el('td',stamp(r.created_at)),el('td',stamp(r.reviewed_at)),el('td',(r.content_hash||'').slice(0,12),'mos-code'));fpBody.append(tr);}
+   if(!frr.length){const tr=el('tr'),td=el('td','Full Release Gate가 REVIEW_READY로 진입하면 immutable 심사 package가 생성됩니다.','mos-empty');td.colSpan=11;tr.append(td);fpBody.append(tr);}fpTable.append(fpThead,fpBody);fpScroll.append(fpTable);body.append(fpScroll);
+   body.append(el('div','Full Release 이력','mos-section-title'));const fhScroll=el('div',null,'mos-scroll'),fhTable=el('table',null,'mos-learn-table'),fhHead=el('tr');['시각','대상','이벤트','이전','현재','근거/메모'].forEach(v=>fhHead.append(el('th',v)));const fhThead=el('thead');fhThead.append(fhHead);const fhBody=el('tbody');
+   for(const e of [...frge.map(x=>({...x,_kind:'GATE'})),...frre.map(x=>({...x,_kind:x.event_type}))].sort((a,b)=>String(b.event_time).localeCompare(String(a.event_time))).slice(0,25)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',e.review_id||e.release_candidate_id||'—','mos-code'),el('td',e._kind||'—'),el('td',e.from_review_state||e.from_state||'—'),el('td',e.to_review_state||e.to_state||'—'),el('td',e.note||(e.reason_codes||[]).join(' · ')||'—','mos-micro'));fhBody.append(tr);}
+   if(!frge.length&&!frre.length){const tr=el('tr'),td=el('td','아직 Full Release Gate/심사 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);fhBody.append(tr);}fhTable.append(fhThead,fhBody);fhScroll.append(fhTable);body.append(fhScroll);
+   body.append(el('div','Reversible CONTROL Switch','mos-section-title'));
+   const sw=learn.control_switch||{},swc=sw.current||{},sws=sw.summary||{},swt=sw.transactions||[],swe=sw.events||[],swGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['Live switch',sw.live_switch_enabled?'ON':'OFF',sw.live_switch_enabled?'commit 명령 허용':'commit kill switch'],
+     ['CONTROL',swc.mode||'BASE',swc.active_version_label||learn.rule_version||'—'],
+     ['Prepared',sws.prepared||0,'CONTROL 미변경'],
+     ['Health window',sws.committed||0,'commit 후 자동 감시'],
+     ['Healthy',sws.healthy||0,'health window 통과'],
+     ['Auto rollback',sws.auto_rolled_back||0,'hard failure 자동 복구']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',String(b)),el('div',note,'mos-micro'));swGrid.append(card);}body.append(swGrid);
+   body.append(el('div',sw.notice||'CONTROL selector는 atomic transaction으로만 변경됩니다.','mos-note'));
+   const swScroll=el('div',null,'mos-scroll'),swTable=el('table',null,'mos-learn-table'),swHead=el('tr');['상태','Switch','Review','Ruleset','기존 CONTROL','후보 CONTROL','준비','Commit','Health deadline','완료/롤백','이유'].forEach(v=>swHead.append(el('th',v)));const swThead=el('thead');swThead.append(swHead);const swBody=el('tbody');
+   for(const t of swt.slice(0,30)){const tr=el('tr'),prev=t.previous_control||{},cand=t.candidate_control||{};const cls=t.state==='HEALTHY'?'mos-up':(t.state==='AUTO_ROLLED_BACK'||t.state==='ROLLED_BACK')?'mos-down':'';tr.append(el('td',t.state,cls),el('td',(t.switch_transaction_id||'').slice(0,18),'mos-code'),el('td',(t.source_review_id||'').slice(0,18),'mos-code'),el('td',(t.ruleset_id||'').slice(0,16),'mos-code'),el('td',prev.active_version_label||'—','mos-code'),el('td',cand.active_version_label||'—','mos-code'),el('td',stamp(t.prepared_at)),el('td',stamp(t.committed_at)),el('td',stamp(t.health_deadline)),el('td',stamp(t.rollback_at||t.completed_at)),el('td',t.rollback_reason||t.note||'—','mos-micro'));swBody.append(tr);}
+   if(!swt.length){const tr=el('tr'),td=el('td','RELEASE_READY review가 있어도 switch-prepare → switch-commit을 사람이 별도로 실행해야 CONTROL이 바뀝니다.','mos-empty');td.colSpan=11;tr.append(td);swBody.append(tr);}swTable.append(swThead,swBody);swScroll.append(swTable);body.append(swScroll);
+   body.append(el('div','Switch 이력','mos-section-title'));const sxScroll=el('div',null,'mos-scroll'),sxTable=el('table',null,'mos-learn-table'),sxHead=el('tr');['시각','Switch','이벤트','이전','현재','근거'].forEach(v=>sxHead.append(el('th',v)));const sxThead=el('thead');sxThead.append(sxHead);const sxBody=el('tbody');
+   for(const e of swe.slice(0,30)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.switch_transaction_id||'').slice(0,18),'mos-code'),el('td',e.event_type||'—'),el('td',e.from_state||'—'),el('td',e.to_state||'—'),el('td',JSON.stringify(e.evidence||{}).slice(0,180),'mos-micro'));sxBody.append(tr);}
+   if(!swe.length){const tr=el('tr'),td=el('td','아직 CONTROL switch 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);sxBody.append(tr);}sxTable.append(sxThead,sxBody);sxScroll.append(sxTable);body.append(sxScroll);
+   body.append(el('div','Execution Firewall','mos-section-title'));
+   const ef=learn.execution_firewall||{},efs=ef.summary||{},efi=ef.intents||[],efe=ef.events||[],efr=ef.runs||[],efGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['Intent engine',ef.enabled?'ON':'OFF',ef.enabled?'human review 후보 생성':'기본 OFF'],
+     ['검토대기',efs.pending||0,'TTL 안에 사람 판단 필요'],
+     ['사람승인',efs.approved||0,'주문 아님'],
+     ['기각',efs.rejected||0,'사람이 거절'],
+     ['만료',efs.expired||0,'TTL 경과'],
+     ['Control stale',efs.stale||0,'CONTROL identity 변경']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',String(b)),el('div',note,'mos-micro'));efGrid.append(card);}body.append(efGrid);
+   body.append(el('div',ef.notice||'실행 후보는 사람 검토용 intent일 뿐 주문이 아닙니다.','mos-note'));
+   const intentKo=x=>({REVIEW_PENDING:'검토대기',HUMAN_APPROVED_INTENT:'사람승인',HUMAN_REJECTED:'기각',EXPIRED:'만료',STALE_CONTROL:'Control stale'})[x]||x||'—';
+   const eiScroll=el('div',null,'mos-scroll'),eiTable=el('table',null,'mos-learn-table'),eiHead=el('tr');['상태','Intent','종목','CONTROL','Tier','Trigger','Stance','Catalyst','기준가','만료','주문생성'].forEach(v=>eiHead.append(el('th',v)));const eiThead=el('thead');eiThead.append(eiHead);const eiBody=el('tbody');
+   for(const x of efi.slice(0,40)){const tr=el('tr'),ex=(x.evidence||{}).execution||{};const cls=x.status==='HUMAN_APPROVED_INTENT'?'mos-up':x.status==='HUMAN_REJECTED'?'mos-down':'';tr.append(el('td',intentKo(x.status),cls),el('td',(x.intent_id||'').slice(0,18),'mos-code'),el('td',(x.stock_name||x.stock_code||'—')+' · '+(x.stock_code||'')),el('td',x.active_version_label||'—','mos-code'),el('td',(x.base_watch_tier||'—')+'→'+(x.watch_tier||'—')),el('td',x.trigger_state||'—'),el('td',x.market_stance||'—'),el('td',x.catalyst_grade||'—'),el('td',x.reference_price_krw==null?'—':fmt(x.reference_price_krw,0)),el('td',stamp(x.expires_at)),el('td',ex.broker_order_created?'YES':'NO',ex.broker_order_created?'mos-down':''));eiBody.append(tr);}
+   if(!efi.length){const tr=el('tr'),td=el('td','HEALTHY RULESET CONTROL + FOCUS + 확정 Trigger 조건을 충족해도 intent 기능이 ON일 때만 생성됩니다.','mos-empty');td.colSpan=11;tr.append(td);eiBody.append(tr);}eiTable.append(eiThead,eiBody);eiScroll.append(eiTable);body.append(eiScroll);
+   body.append(el('div','Firewall 최근 실행','mos-section-title'));const erScroll=el('div',null,'mos-scroll'),erTable=el('table',null,'mos-learn-table'),erHead=el('tr');['시각','ON','Switch','상태','평가','Eligible','생성','Blocked','차단 근거'].forEach(v=>erHead.append(el('th',v)));const erThead=el('thead');erThead.append(erHead);const erBody=el('tbody');
+   for(const r of efr.slice(0,15)){const tr=el('tr');tr.append(el('td',stamp(r.run_time)),el('td',r.enabled?'ON':'OFF'),el('td',(r.switch_transaction_id||'—').slice(0,18),'mos-code'),el('td',r.switch_state||'—'),el('td',r.assessed??0),el('td',r.review_eligible??0),el('td',r.created_intents??0),el('td',r.blocked??0),el('td',Object.entries(r.block_reasons||{}).map(([k,v])=>k+':'+v).join(' · ')||'—','mos-micro'));erBody.append(tr);}
+   if(!efr.length){const tr=el('tr'),td=el('td','Execution Firewall 실행 이력이 없습니다.','mos-empty');td.colSpan=9;tr.append(td);erBody.append(tr);}erTable.append(erThead,erBody);erScroll.append(erTable);body.append(erScroll);
+   body.append(el('div','Intent 이력','mos-section-title'));const eeScroll=el('div',null,'mos-scroll'),eeTable=el('table',null,'mos-learn-table'),eeHead=el('tr');['시각','Intent','이벤트','이전','현재','근거'].forEach(v=>eeHead.append(el('th',v)));const eeThead=el('thead');eeThead.append(eeHead);const eeBody=el('tbody');
+   for(const e of efe.slice(0,25)){const tr=el('tr');tr.append(el('td',stamp(e.event_time)),el('td',(e.intent_id||'').slice(0,18),'mos-code'),el('td',e.event_type||'—'),el('td',e.from_status||'—'),el('td',e.to_status||'—'),el('td',(e.reason_codes||[]).join(' · ')||'—','mos-micro'));eeBody.append(tr);}
+   if(!efe.length){const tr=el('tr'),td=el('td','아직 intent 이력이 없습니다.','mos-empty');td.colSpan=6;tr.append(td);eeBody.append(tr);}eeTable.append(eeThead,eeBody);eeScroll.append(eeTable);body.append(eeScroll);
+   body.append(el('div','Validation Gate','mos-section-title'));
+   const vs=learn.validation_summary||{},vg=learn.validation_candidates||[],vgGrid=el('div',null,'mos-learning-grid');
+   for(const [a,b,note] of [
+     ['승격 검토',vs.promote_review||0,'누적 + walk-forward 모두 통과'],
+     ['축소 검토',vs.suppress_review||0,'음(-) 효과가 시간 분할에서도 유지'],
+     ['시간 안정',vs.stable||0,'과거 절반과 최근 절반 방향 일치'],
+     ['보류',vs.hold||0,'반전·약화·표본 부족 포함']
+   ]){const card=el('div',null,'mos-learn-card');card.append(el('div',a,'mos-label'),el('strong',fmt(b,0)),el('div',note,'mos-micro'));vgGrid.append(card);}body.append(vgGrid);
+   body.append(el('div','30분·종가·D+1만 검토합니다. 누적 효과를 먼저 통과한 뒤 거래일을 과거 절반/최근 절반으로 분리해 같은 방향이 유지되는지 다시 확인합니다. 최근 반전·효과 약화·기간별 비교군 부족은 모두 HOLD입니다.','mos-note'));
+   const vgScroll=el('div',null,'mos-scroll'),vgTable=el('table',null,'mos-learn-table'),vgHead=el('tr');
+   ['상태','조건','구간','N','종목','일수','품질','시계열','과거평균','최근평균','평균','중앙값','양(+)','Δ평균','근거'].forEach(v=>vgHead.append(el('th',v)));const vgThead=el('thead');vgThead.append(vgHead);const vgBody=el('tbody');
+   for(const s of vg.slice(0,40)){const tr=el('tr'),status=({PROMOTE_REVIEW:'승격 검토',SUPPRESS_REVIEW:'축소 검토',HOLD:'보류'})[s.status]||s.status;const cls=s.status==='PROMOTE_REVIEW'?'mos-up':s.status==='SUPPRESS_REVIEW'?'mos-down':'';const wf=s.walk_forward||{},early=wf.early||{},recent=wf.recent||{};const wfLabel=({STABLE:'안정',WEAKENING:'약화',UNSTABLE:'불안정',REVERSAL:'반전',INSUFFICIENT:'표본부족'})[wf.status]||'—';tr.append(el('td',status,cls),el('td',s.segment_type+' · '+s.segment_value),el('td',s.horizon),el('td',s.samples),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',(s.quality||'—')+(s.readiness?' · '+s.readiness:'')),el('td',wfLabel,wf.status==='STABLE'?'mos-up':wf.status==='REVERSAL'?'mos-down':''),el('td',pct(early.avg_return_pct)),el('td',pct(recent.avg_return_pct),recent.avg_return_pct>0?'mos-up':recent.avg_return_pct<0?'mos-down':''),el('td',pct(s.avg_return_pct),s.avg_return_pct>0?'mos-up':s.avg_return_pct<0?'mos-down':''),el('td',pct(s.median_return_pct)),el('td',s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%'),el('td',s.edge_avg_return_pct==null?'—':((s.edge_avg_return_pct>=0?'+':'')+fmt(s.edge_avg_return_pct,2)+'%p')),el('td',(s.reason_codes||[]).join(' · '),'mos-micro'));vgBody.append(tr);}
+   if(!vg.length){const tr=el('tr'),td=el('td','아직 형성 등급 이상의 30분·종가·D+1 검증 후보가 없습니다.','mos-empty');td.colSpan=15;tr.append(td);vgBody.append(tr);}vgTable.append(vgThead,vgBody);vgScroll.append(vgTable);body.append(vgScroll);
+   body.append(el('div','자동 피드백 후보','mos-section-title'));const fb=el('div',null,'mos-feedback');for(const n of learn.notes||[]){const a=el('article');a.dataset.kind=n.kind;a.append(el('h4',(n.kind==='STRENGTH'?'강한 조건 후보 · ':'약한 조건 후보 · ')+n.title),el('div',n.text,'mos-micro'));fb.append(a);}if(!(learn.notes||[]).length)fb.append(el('div','표본 20개 이상이 쌓인 뒤 조건별 강·약 피드백을 냅니다. 아직 규칙을 자동 수정하지 않습니다.','mos-empty'));body.append(fb);
+   body.append(el('div','Interaction Lab','mos-section-title'));
+   body.append(el('div','시장 레짐 × Setup × Trigger × 0B를 미리 정한 조합만 비교합니다. Δ는 같은 부모조건 안에서 해당 child를 제외한 나머지 표본과의 차이이며, 형성/충분 등급 전에는 탐색 가설로만 봅니다.','mos-note'));
+   const inter=(learn.interactions||[]).filter(x=>x.samples>=5).slice(0,100),iscroll=el('div',null,'mos-scroll'),itable=el('table',null,'mos-learn-table'),ith=el('tr');
+   ['상호작용','구간','N','종목','일수','품질','평균','Δ평균','Δ양(+)','ΔMAE','부모조건'].forEach(v=>ith.append(el('th',v)));const ithead=el('thead');ithead.append(ith);const itb=el('tbody');
+   for(const s of inter){const tr=el('tr'),base=s.baseline||{};const cond=el('td');cond.append(el('div',s.segment_type+' · '+s.segment_value),el('div','depth '+(s.interaction_depth||2)+' · '+(s.sample_basis||''),'mos-micro'));tr.append(cond,el('td',s.horizon),el('td',s.samples),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',s.quality),el('td',pct(s.avg_return_pct),s.avg_return_pct>0?'mos-up':s.avg_return_pct<0?'mos-down':''),el('td',s.edge_avg_return_pct==null?'—':((s.edge_avg_return_pct>=0?'+':'')+fmt(s.edge_avg_return_pct,2)+'%p'),s.edge_avg_return_pct>0?'mos-up':s.edge_avg_return_pct<0?'mos-down':''),el('td',s.edge_positive_rate_pp==null?'—':((s.edge_positive_rate_pp>=0?'+':'')+fmt(s.edge_positive_rate_pp,1)+'%p')),el('td',s.edge_mae_pct==null?'—':((s.edge_mae_pct>=0?'+':'')+fmt(s.edge_mae_pct,2)+'%p'),s.edge_mae_pct>0?'mos-up':s.edge_mae_pct<0?'mos-down':''),el('td',base.segment_type?(base.segment_type+' · '+base.segment_value+' · compN '+(base.samples??'—')):'—'));itb.append(tr);}
+   if(!inter.length){const tr=el('tr'),td=el('td','상호작용 표본이 아직 없습니다.','mos-empty');td.colSpan=11;tr.append(td);itb.append(tr);}itable.append(ithead,itb);iscroll.append(itable);body.append(iscroll);
+   body.append(el('div','조건별 실제 결과','mos-section-title'));body.append(el('div','반복 스냅샷을 독립 표본으로 세지 않습니다. 5m는 종목별 5분 비중첩, 30m는 30분 비중첩, 종가·D+1은 종목/일자당 1회만 학습합니다.','mos-note'));const scroll=el('div',null,'mos-scroll'),table=el('table',null,'mos-learn-table'),th=el('tr');['조건','구간','N','종목','일수','품질','평균','중앙값','양(+)','MFE','MAE'].forEach(v=>th.append(el('th',v)));const thead=el('thead');thead.append(th);const tb=el('tbody');for(const s of segs.filter(x=>x.samples>=5).slice(0,120)){const tr=el('tr');const cond=el('td');cond.append(el('div',s.segment_type+' · '+s.segment_value),el('div',s.sample_basis||'','mos-micro'));tr.append(cond,el('td',s.horizon),el('td',s.samples),el('td',s.distinct_stocks??'—'),el('td',s.distinct_days??'—'),el('td',s.quality),el('td',pct(s.avg_return_pct),s.avg_return_pct>0?'mos-up':s.avg_return_pct<0?'mos-down':''),el('td',pct(s.median_return_pct)),el('td',s.positive_rate==null?'—':fmt(s.positive_rate*100,0)+'%'),el('td',pct(s.avg_mfe_pct)),el('td',pct(s.avg_mae_pct)));tb.append(tr);}table.append(thead,tb);scroll.append(table);body.append(scroll);wrap.append(body);content.replaceChildren(wrap);
+ }
+
+ function renderContent(){renderStrip();if(mode==='table')renderTableView();else if(mode==='charts')renderCharts();else if(mode==='heat')renderHeatmap();else renderLearning();}
+ function renderBodyOnly(){if(mode==='table')renderTableView();else if(mode==='charts')renderCharts();else if(mode==='heat')renderHeatmap();}
+ function syncTabs(){tableBtn.setAttribute('aria-pressed',String(mode==='table'));chartBtn.setAttribute('aria-pressed',String(mode==='charts'));heatBtn.setAttribute('aria-pressed',String(mode==='heat'));learnBtn.setAttribute('aria-pressed',String(mode==='learn'));}
+ tableBtn.onclick=()=>{mode='table';syncTabs();renderContent();};chartBtn.onclick=()=>{mode='charts';syncTabs();renderContent();};heatBtn.onclick=()=>{mode='heat';syncTabs();renderContent();};learnBtn.onclick=()=>{mode='learn';syncTabs();renderContent();};refresh.onclick=()=>load(true);syncTabs();
+
+ async function openHistory(code,name){
+   dialog.replaceChildren();const top=el('div',null,'mos-head'),ttl=el('div');ttl.append(el('div','LEARNING HISTORY','mos-kicker'),el('h3',name+' · '+code));const close=el('button','닫기','mos-btn');close.onclick=()=>dialog.close();top.append(ttl,close);dialog.append(top,el('div','과거 스냅샷의 이후 결과를 보는 복기 자료입니다. 현재 매수·매도 판단을 대신하지 않습니다.','mos-note'));if(!dialog.open)dialog.showModal();
+   const holder=el('div','기록 불러오는 중…','mos-empty');dialog.append(holder);
+   try{const d=await get('/api/market-os/history/'+encodeURIComponent(code));holder.replaceChildren();const latest=(d.assessments||[])[0];if(latest){const s=el('div',null,'mos-marketline');s.append(pill(tierKo(latest.watch_tier),tierClass(latest.watch_tier)),pill('Radar '+latest.radar_score),pill('Theme '+latest.theme_score),pill('Setup '+latest.setup_score),pill('Catalyst '+latest.catalyst_grade));holder.append(s);}
+     const table=el('table',null,'mos-history'),th=el('tr');['판단시각','구간','기준가','결과','수익률','MFE','MAE','소스'].forEach(x=>th.append(el('th',x)));const h=el('thead');h.append(th);const tb=el('tbody');for(const o of d.outcomes||[]){const tr=el('tr');tr.append(el('td',stamp(o.assessment_time)),el('td',o.horizon),el('td',money(o.reference_price_krw)),el('td',money(o.outcome_price_krw)),el('td',pct(o.return_pct),o.return_pct>0?'mos-up':o.return_pct<0?'mos-down':''),el('td',pct(o.mfe_pct)),el('td',pct(o.mae_pct)),el('td',o.outcome_source||'—'));tb.append(tr);}table.append(h,tb);holder.append(table);if(!(d.outcomes||[]).length)holder.append(el('div','아직 확정된 outcome이 없습니다.','mos-empty'));
+   }catch(e){holder.textContent='학습 기록 응답 대기 · '+e.message;}
+ }
+
+ async function load(force=false){if(busy||(!force&&(!view.classList.contains('active')||document.hidden||Date.now()-lastLoaded<28000)))return;if(!accessKey()){content.replaceChildren(el('div','대시보드 접속키가 필요합니다.','mos-empty'));return;}busy=true;try{const [d,h]=await Promise.all([get('/api/market-os'),get('/api/market-os/live-health').catch(()=>null)]);d.live_health=h;DATA=d;lastLoaded=Date.now();if(!selected&&(d.market_os_watchlist||[]).length)selected=d.market_os_watchlist[0].code;renderContent();}catch(e){content.replaceChildren(el('div','Market OS 자료 응답 대기 · '+e.message,'mos-empty'));}finally{busy=false;}}
+ setInterval(()=>load(false),30000);load(true);
+})();
