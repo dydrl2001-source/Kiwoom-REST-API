@@ -32,6 +32,7 @@ class ReviewBridgeUnitTests(unittest.TestCase):
             "trigger_spec": {"kind": "ABOVE", "price": 100},
             "theoretical_entry_krw": 101,
             "invalidation_stop_krw": 96,
+            "exit_spec": {"kind": "STOP_OR_CLOSE"},
         }
         bars = [
             {"time": datetime(2026, 10, 6, 0, 20, tzinfo=timezone.utc),
@@ -46,6 +47,8 @@ class ReviewBridgeUnitTests(unittest.TestCase):
         self.assertAlmostEqual(out["mfe_r"], 2.0)
         self.assertAlmostEqual(out["mae_r"], -0.6)
         self.assertAlmostEqual(out["close_r"], 1.0)
+        self.assertAlmostEqual(out["system_r"], 1.0)
+        self.assertEqual(out["system_exit_reason"], "SESSION_CLOSE")
         self.assertFalse(out["stop_hit"])
 
     def test_decision_hash_is_stable(self):
@@ -59,6 +62,7 @@ class ReviewBridgeUnitTests(unittest.TestCase):
             "watch_tier": "FOCUS",
             "side": "LONG",
             "trigger_spec": {"kind": "ABOVE", "price": 100},
+            "exit_spec": {"kind": "STOP_OR_CLOSE"},
             "evidence": {"x": 1},
         }
         self.assertEqual(decision_hash(d), decision_hash(dict(d)))
