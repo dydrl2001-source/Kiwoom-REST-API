@@ -65,6 +65,13 @@ jobs:
             market_radar/market_os_full_release.py \
             market_radar/market_os_control.py \
             market_radar/market_os_execution.py \
+            market_radar/market_os_order_plan.py \
+            market_radar/market_os_broker.py \
+            market_radar/market_os_order_store.py \
+            market_radar/market_os_orders.py \
+            market_radar/market_os_order_recovery.py \
+            market_radar/market_os_order_source.py \
+            market_radar/market_os_order_admin.py \
             market_radar/market_os_budget.py \
             market_radar/market_os_risk.py \
             market_radar/market_os_packet.py \
