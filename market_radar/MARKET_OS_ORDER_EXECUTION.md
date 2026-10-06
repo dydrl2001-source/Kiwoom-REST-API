@@ -40,10 +40,13 @@ bash order_admin.sh paper-event <paper-plan-id> --status PARTIALLY_FILLED \
   --filled-quantity 1 --event-key <unique-event-id> --confirm-plan <paper-plan-id>
 ```
 
-Live plans must use `account-ref` derived from the production credential profile.
-Changing credentials changes that opaque binding and invalidates the old plan.
-The binding assumes one registered Kiwoom account per credential profile; deployments
-supporting multiple accounts must implement a verified account-specific binding.
+Live plans use `account-ref` derived from broker-confirmed `ka00001` actual account
+identity, protected by `MARKET_OS_ACCOUNT_BINDING_SECRET` (private random secret,
+at least 32 characters). The same account shares an execution lock across app keys.
+Every executor using the same journal must use the same persistent secret. An
+immutable journal fingerprint blocks a changed secret until a reviewed migration
+resolves existing order lineage; it cannot quietly create another account lock.
+Unexpected/multiple account identity responses block.
 No token/app key/account number or raw broker response enters an event or CLI result.
 Broker order numbers remain in the private PostgreSQL journal; inspection only
 returns `broker_number_recorded`. Do not export this journal to an LLM/report packet.

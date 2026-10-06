@@ -11,6 +11,10 @@ from psycopg.rows import dict_row
 from market_os_order_plan import OrderPlan, OrderError, advance, digest
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS market_os_order_binding_config (
+ id INTEGER PRIMARY KEY CHECK(id=1), secret_fingerprint TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS market_os_order_plans (
  plan_id TEXT PRIMARY KEY, scope_key TEXT UNIQUE NOT NULL,
  intent_id TEXT NOT NULL, account_ref TEXT NOT NULL, mode TEXT NOT NULL,
@@ -41,6 +45,9 @@ CREATE TRIGGER market_os_order_plan_immutable BEFORE UPDATE OR DELETE ON market_
  FOR EACH ROW EXECUTE FUNCTION market_os_order_immutable();
 DROP TRIGGER IF EXISTS market_os_order_event_immutable ON market_os_order_events;
 CREATE TRIGGER market_os_order_event_immutable BEFORE UPDATE OR DELETE ON market_os_order_events
+ FOR EACH ROW EXECUTE FUNCTION market_os_order_immutable();
+DROP TRIGGER IF EXISTS market_os_order_binding_immutable ON market_os_order_binding_config;
+CREATE TRIGGER market_os_order_binding_immutable BEFORE UPDATE OR DELETE ON market_os_order_binding_config
  FOR EACH ROW EXECUTE FUNCTION market_os_order_immutable();
 """
 
@@ -188,7 +195,8 @@ class Store:
         r = self.attempt(plan.plan_id)
         return {'plan_id':plan.plan_id,'intent_id':plan.intent_id,'parent_plan_id':plan.parent_plan_id,
                 'stock_code':plan.stock_code,'mode':plan.mode,'operation':plan.operation,
-                'quantity':plan.quantity,'limit_price':plan.limit_price,'expires_at':plan.expires_at,
+                'account_binding':plan.account_ref,'quantity':plan.quantity,
+                'limit_price':plan.limit_price,'stop_price':plan.stop_price,'expires_at':plan.expires_at,
                 'status':r['status'] if r else 'PREPARED',
                 'filled_quantity':r['filled_quantity'] if r else 0,
                 'remaining_quantity':r['remaining_quantity'] if r else plan.quantity,

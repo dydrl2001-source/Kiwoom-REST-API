@@ -22,12 +22,18 @@ current daily-loss/session facts are incomplete; default source fails closed.
 CONTROL identity/hash, HEALTHY switch, runtime apply, intent evidence/hash and TTL
 are checked again at send time. Risk is evaluated against the requested limit and
 stop. Quantity is explicit and bounded by verified orderable capacity.
+Actual broker account identity is HMAC-bound with a stable private deployment
+secret; an immutable journal fingerprint rejects secret changes. This preserves
+one account lock across different credential profiles without exposing account IDs.
 
 Cancel/amend are separately confirmed immutable child plans, linked to a known
 broker parent number. No parent state is changed merely because a child request
 was accepted. Cumulative fill updates are monotonic and bounded; duplicate event
 keys are ignored, terminal state regressions blocked. Broker numbers stay in the
-private journal; inspect returns opaque plan IDs/status/quantities only. No
+private journal; inspect returns opaque plan/account IDs, status, quantity and
+limit/stop terms required to review the exact plan. Cancel has its own 120-second
+TTL and a risk-reduction gate so expired entry approval or exhausted entry capacity
+does not prohibit cancellation; current CONTROL/session/parent facts still apply. No
 credentials, raw broker response or account number enters audit/UI/LLM payloads.
 
 Validation: pure policy/adaptor tests, real PostgreSQL integration tests in CI,

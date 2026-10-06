@@ -7,19 +7,36 @@ history(). It must use authenticated broker/exchange feeds, never AI/packet JSON
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import importlib
 import os
+import re
 
 from market_os_order_plan import OrderError
 from market_os_risk import observation_facts
 
 
-def credential_account_ref(env):
+def credential_account_ref(env, *, client=None):
     key = env.get('APP_KEY')
     if env.get('KIWOOM_MODE') != 'real' or not key or not env.get('APP_SECRET'):
         raise OrderError('REAL_ACCOUNT_CREDENTIALS_REQUIRED')
-    # Opaque credential-profile binding; no raw account number or app key is exported.
-    return 'acct-' + hashlib.sha256(('kiwoom-real|'+key).encode()).hexdigest()[:32]
+    secret=env.get('MARKET_OS_ACCOUNT_BINDING_SECRET','')
+    if len(secret)<32:
+        raise OrderError('STABLE_PRIVATE_ACCOUNT_BINDING_SECRET_REQUIRED')
+    if client is None:
+        from market_os_readonly import Client
+        client=Client(env=env)
+    client.read('kt00017',{})  # Authenticate using a permitted read only.
+    # Additional account identity read belongs only to this private execution source.
+    # The public read-only adapter's allowlist/identifier stripping stays unchanged.
+    d,_=client._post('/api/dostk/acnt',{},
+                    {'authorization':'Bearer '+client.token,'api-id':'ka00001'})
+    account=d.get('acctNo')
+    if not isinstance(account,str) or not re.fullmatch(r'[0-9]{8,20}',account):
+        raise OrderError('BROKER_SINGLE_ACCOUNT_IDENTITY_UNVERIFIED')
+    # The same actual account shares one lock even across app keys; HMAC prevents
+    # reversing a low-entropy account number from the persisted alias.
+    return 'acct-' + hmac.new(secret.encode(),('kiwoom-real|'+account).encode(),hashlib.sha256).hexdigest()
 
 
 class DatabaseSource:
@@ -35,6 +52,13 @@ class DatabaseSource:
         # Lock canonical selector, switch state and approval against mutation until send completes.
         # Existing CONTROL switch/rollback SQL needs UPDATE locks on these same rows.
         with connection.transaction():
+            if mode=='live':
+                fingerprint=hashlib.sha256(('binding-v1|'+self.env['MARKET_OS_ACCOUNT_BINDING_SECRET']).encode()).hexdigest()
+                connection.execute('''INSERT INTO market_os_order_binding_config(id,secret_fingerprint)
+                    VALUES(1,%s) ON CONFLICT(id) DO NOTHING''',(fingerprint,))
+                config=connection.execute('SELECT secret_fingerprint FROM market_os_order_binding_config WHERE id=1 FOR SHARE').fetchone()
+                if config['secret_fingerprint'] != fingerprint:
+                    raise OrderError('ACCOUNT_BINDING_SECRET_CHANGED_MIGRATION_REQUIRED')
             c = connection.execute('SELECT * FROM market_os_control_state WHERE id=1 FOR SHARE').fetchone()
             if not c:
                 raise OrderError('CONTROL_STATE_MISSING')
@@ -83,7 +107,6 @@ def live_broker(env):
     # Auth is read-only and has no order side effects. No credentials are printed/persisted.
     from market_os_readonly import Client
     from market_os_broker import KiwoomBroker
-    ref = credential_account_ref(env)
     client = Client(env=env)
-    client.read('kt00017',{})
+    ref = credential_account_ref(env,client=client)
     return KiwoomBroker(client.token,ref,env=env)

@@ -3,6 +3,7 @@ import os
 import sys
 import unittest
 import uuid
+import json
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -163,6 +164,47 @@ class OrderDatabaseTests(unittest.TestCase):
         with self.assertRaisesRegex(OrderError,'DISABLED'):
             self.executor.execute(plan.plan_id,'cmd-'+uuid.uuid4().hex,confirm=plan.plan_id)
         self.assertIsNone(self.store.attempt(plan.plan_id))
+
+    def test_real_source_holds_control_row_lock_through_send_guard(self):
+        import psycopg
+        from psycopg.rows import dict_row
+        from unittest.mock import patch
+        from market_os_order_source import DatabaseSource
+        schema='order_guard_'+uuid.uuid4().hex
+        with self.store.connect() as setup:
+            setup.execute('CREATE SCHEMA '+schema)
+        try:
+            options='-c search_path='+schema
+            with psycopg.connect(DB,row_factory=dict_row,options=options) as c:
+                c.execute('''CREATE TABLE market_os_control_state(id int PRIMARY KEY,control_id text,
+                    mode text,active_version_label text,ruleset_spec jsonb,switch_transaction_id text,control_hash text);
+                    CREATE TABLE market_os_switch_transactions(switch_transaction_id text PRIMARY KEY,
+                    state text,candidate_hash text);
+                    CREATE TABLE market_os_execution_intents(intent_id text PRIMARY KEY,stock_code text);
+                ''')
+                ctrl=self.context['control']
+                c.execute('INSERT INTO market_os_control_state VALUES(1,%s,%s,%s,%s::jsonb,%s,%s)',
+                    (ctrl['control_id'],ctrl['mode'],ctrl['active_version_label'],json.dumps(ctrl['ruleset_spec']),
+                     ctrl['switch_transaction_id'],ctrl['control_hash']))
+                c.execute('INSERT INTO market_os_switch_transactions VALUES(%s,%s,%s)',
+                    (ctrl['switch_transaction_id'],'HEALTHY',ctrl['control_hash']))
+                c.execute('INSERT INTO market_os_execution_intents VALUES(%s,%s)',
+                          (self.plan.intent_id,self.plan.stock_code))
+                c.commit()
+                payload={'market_os_control':ctrl,'sample_time':self.now,
+                         'market_os_watchlist':[self.context['candidate']],'rows':[]}
+                source=DatabaseSource(env={})
+                with patch('flow_store.desk_payload',return_value=payload),patch('market_os_readonly.enrich_payload',side_effect=lambda x:x):
+                    with source.guard(c,self.plan.intent_id,self.plan.account_ref,'paper',None,request={}) as context:
+                        self.assertEqual(context['control']['apply_status'],'APPLIED')
+                        with self.assertRaises(psycopg.errors.LockNotAvailable):
+                            with psycopg.connect(DB,options=options+' -c lock_timeout=100') as competing:
+                                competing.execute("UPDATE market_os_control_state SET control_hash='changed' WHERE id=1")
+                with psycopg.connect(DB,options=options+' -c lock_timeout=100') as after:
+                    after.execute("UPDATE market_os_control_state SET control_hash='changed' WHERE id=1")
+        finally:
+            with self.store.connect() as cleanup:
+                cleanup.execute('DROP SCHEMA '+schema+' CASCADE')
 
 
 if __name__=='__main__': unittest.main()

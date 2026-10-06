@@ -105,6 +105,20 @@ class OrderPolicyTests(unittest.TestCase):
 
 
 class BrokerTests(unittest.TestCase):
+    def test_account_binding_is_same_for_same_broker_account_across_app_keys(self):
+        from market_os_order_source import credential_account_ref
+        class AccountClient:
+            token='private'
+            def read(self,*a): return {}
+            def _post(self,*a,**k): return ({'acctNo':'1234567890'}, {})
+        env={'KIWOOM_MODE':'real','APP_KEY':'key1','APP_SECRET':'secret1',
+             'MARKET_OS_ACCOUNT_BINDING_SECRET':'a'*32}
+        first=credential_account_ref(env,client=AccountClient())
+        second=credential_account_ref({**env,'APP_KEY':'key2'},client=AccountClient())
+        self.assertEqual(first,second)
+        self.assertNotIn('1234567890',first)
+        self.assertNotIn('key1',first)
+
     def test_paper_and_dry_run_do_not_construct_http_client(self):
         from market_os_broker import PaperBroker, DryRunBroker
         for broker in (PaperBroker(), DryRunBroker()):
