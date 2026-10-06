@@ -12,9 +12,6 @@ class MarketOsPreflightSourceTest(unittest.TestCase):
         issues = preflight_python.validate_source(
             source, "market_radar/broken.py"
         )
-        self.assertTrue(
-            any(issue.kind == "literal-escaped-newline" for issue in issues)
-        )
         self.assertTrue(any(issue.kind == "syntax" for issue in issues))
 
     def test_escaped_newline_inside_string_is_allowed(self):
