@@ -85,6 +85,36 @@ services:
       postgres:
         condition: service_healthy
 
+  market-review-journal:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python /app/market_review_journal.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      market-os-learning:
+        condition: service_started
+
+  review-bridge:
+    build:
+      context: ../..
+      dockerfile: market_radar/local/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://market:${POSTGRES_PASSWORD}@postgres:5432/market_radar
+    command: python -m uvicorn market_review_bridge_app:app --host 0.0.0.0 --port 8082
+    ports:
+      - "127.0.0.1:8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   market-os-learning:
     build:
       context: ../..
