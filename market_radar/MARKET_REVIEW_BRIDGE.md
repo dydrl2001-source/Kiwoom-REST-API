@@ -81,6 +81,7 @@ from market_review_journal import append_decision
 
 append_decision({
     "issued_at": datetime.now(ZoneInfo("Asia/Seoul")),
+    "candidate_id": "2026-10-06:005930:leader-pullback:01",
     "stage": "TRADE_CARD",
     "source_kind": "A_GRADE_ENGINE",
     "stock_code": "005930",
@@ -178,3 +179,26 @@ REVIEW_SOURCE_FAMILY_ALIASES_JSON={"family-a":["channel-a","channel-b"]}
 
 없으면 원본 상태를 `UNAVAILABLE`로 표시하고 Telegram 원문 기반 재구성치를 별도 제공한다.
 event-engine 쪽에 summary sink가 연결되면 bridge 코드는 그대로 원본을 우선 사용한다.
+
+
+## Rolling strategy statistics
+
+`/review/session/{date}`는 최근 90일의 **native A-grade TRADE_CARD** 중
+원래 trigger/entry/stop/exit rule이 모두 감사 가능한 카드만 R 통계에 포함한다.
+
+- valid setups
+- win rate
+- average win/loss R
+- expectancy R
+- profit factor
+- LEADER_PULLBACK / RANGE_BREAK / CATALYST
+- market stance별 성과
+- RANGE_BREAK stop-hit 기반 false-break frequency
+- evidence.rule_violations가 있을 때 가장 흔한 rule violation
+
+전체 auditable result가 20건 미만이면 `statistics_ready=false`,
+setup/regime segment가 10건 미만이면 `sample_sufficient=false`로 남긴다.
+숫자는 보여도 자동으로 rule threshold를 바꾸지 않는다.
+
+`candidate_id`는 08:20 → 09:20 → TRADE_CARD에서 동일 setup을 연결하기 위한 키다.
+같은 종목에서 새로운 setup이 발생하면 새로운 candidate_id를 써야 한다.
