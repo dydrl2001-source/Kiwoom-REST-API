@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS market_review_decisions (
     setup_type          TEXT,
     side                TEXT NOT NULL DEFAULT 'LONG',
     trigger_spec        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    exit_spec           JSONB NOT NULL DEFAULT '{}'::jsonb,
     theoretical_entry_krw NUMERIC,
     invalidation_stop_krw NUMERIC,
     expiry_at           TIMESTAMPTZ,
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS market_review_decisions (
     decision_hash       TEXT NOT NULL UNIQUE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE market_review_decisions ADD COLUMN IF NOT EXISTS exit_spec JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_market_review_decisions_session
   ON market_review_decisions(session_date, issued_at, stock_code);
 CREATE INDEX IF NOT EXISTS idx_market_review_decisions_stage
@@ -84,6 +86,7 @@ def decision_hash(decision):
         "setup_type": decision.get("setup_type"),
         "side": decision.get("side") or "LONG",
         "trigger_spec": decision.get("trigger_spec") or {},
+        "exit_spec": decision.get("exit_spec") or {},
         "theoretical_entry_krw": decision.get("theoretical_entry_krw"),
         "invalidation_stop_krw": decision.get("invalidation_stop_krw"),
         "expiry_at": str(decision.get("expiry_at") or ""),
@@ -136,17 +139,17 @@ def append_decision(decision, connection=None):
             cur.execute(
                 """INSERT INTO market_review_decisions(
                     session_date,issued_at,stage,source_kind,stock_code,stock_name,
-                    grade,watch_tier,setup_type,side,trigger_spec,theoretical_entry_krw,
+                    grade,watch_tier,setup_type,side,trigger_spec,exit_spec,theoretical_entry_krw,
                     invalidation_stop_krw,expiry_at,market_stance,catalyst_grade,
                     rule_version,evidence,decision_hash)
-                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
                    ON CONFLICT(decision_hash) DO NOTHING
                    RETURNING id""",
                 (
                     row["session_date"], issued_at, stage, source, code, row.get("stock_name"),
                     row.get("grade"), row.get("watch_tier"), row.get("setup_type"), side,
-                    canonical(row.get("trigger_spec") or {}), row.get("theoretical_entry_krw"),
-                    row.get("invalidation_stop_krw"), row.get("expiry_at"),
+                    canonical(row.get("trigger_spec") or {}), canonical(row.get("exit_spec") or {}),
+                    row.get("theoretical_entry_krw"), row.get("invalidation_stop_krw"), row.get("expiry_at"),
                     row.get("market_stance"), row.get("catalyst_grade"), row.get("rule_version"),
                     canonical(row.get("evidence") or {}), row["decision_hash"],
                 ),
@@ -174,6 +177,7 @@ def _focus_decision(stage, item, issued_at, payload):
         "setup_type": None,
         "side": "OBSERVE",
         "trigger_spec": {"state": item.get("trigger_state")},
+        "exit_spec": {},
         "theoretical_entry_krw": None,
         "invalidation_stop_krw": None,
         "expiry_at": None,
@@ -230,16 +234,16 @@ def capture_focus_snapshot(stage, now=None, payload=None):
                 cur.execute(
                     """INSERT INTO market_review_decisions(
                         session_date,issued_at,stage,source_kind,stock_code,stock_name,
-                        grade,watch_tier,setup_type,side,trigger_spec,theoretical_entry_krw,
+                        grade,watch_tier,setup_type,side,trigger_spec,exit_spec,theoretical_entry_krw,
                         invalidation_stop_krw,expiry_at,market_stance,catalyst_grade,
                         rule_version,evidence,decision_hash)
-                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
                        ON CONFLICT(decision_hash) DO NOTHING""",
                     (
                         d["session_date"], d["issued_at"], d["stage"], d["source_kind"],
                         d["stock_code"], d.get("stock_name"), d.get("grade"), d.get("watch_tier"),
                         d.get("setup_type"), d["side"], canonical(d.get("trigger_spec") or {}),
-                        None, None, None, d.get("market_stance"), d.get("catalyst_grade"),
+                        canonical(d.get("exit_spec") or {}), None, None, None, d.get("market_stance"), d.get("catalyst_grade"),
                         d.get("rule_version"), canonical(d.get("evidence") or {}), d["decision_hash"],
                     ),
                 )
