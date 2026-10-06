@@ -1,7 +1,7 @@
 """Authenticated HTTP surface for the read-only EOD review bridge."""
 import hmac
 import os
-from datetime import date
+from datetime import date, datetime\nfrom zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -46,4 +46,4 @@ def review_latest(x_review_token: str | None = Header(None)):
     authorize(x_review_token)
     # The caller chooses whether today is a market session; this endpoint never
     # fabricates a prior session as today's data.
-    return build_session_export(date.today())
+    return build_session_export(datetime.now(ZoneInfo(\"Asia/Seoul\")).date())
