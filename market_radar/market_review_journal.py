@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS market_review_decisions (
     issued_at           TIMESTAMPTZ NOT NULL,
     stage               TEXT NOT NULL,
     source_kind         TEXT NOT NULL,
+    candidate_id        TEXT,
     stock_code          TEXT NOT NULL,
     stock_name          TEXT,
     grade               TEXT,
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS market_review_decisions (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE market_review_decisions ADD COLUMN IF NOT EXISTS exit_spec JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE market_review_decisions ADD COLUMN IF NOT EXISTS candidate_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_market_review_decisions_session
   ON market_review_decisions(session_date, issued_at, stock_code);
 CREATE INDEX IF NOT EXISTS idx_market_review_decisions_stage
@@ -80,6 +82,7 @@ def decision_hash(decision):
         "issued_at": str(decision.get("issued_at") or ""),
         "stage": str(decision.get("stage") or ""),
         "source_kind": str(decision.get("source_kind") or ""),
+        "candidate_id": decision.get("candidate_id"),
         "stock_code": str(decision.get("stock_code") or ""),
         "grade": decision.get("grade"),
         "watch_tier": decision.get("watch_tier"),
@@ -138,15 +141,15 @@ def append_decision(decision, connection=None):
         with c.cursor() as cur:
             cur.execute(
                 """INSERT INTO market_review_decisions(
-                    session_date,issued_at,stage,source_kind,stock_code,stock_name,
+                    session_date,issued_at,stage,source_kind,candidate_id,stock_code,stock_name,
                     grade,watch_tier,setup_type,side,trigger_spec,exit_spec,theoretical_entry_krw,
                     invalidation_stop_krw,expiry_at,market_stance,catalyst_grade,
                     rule_version,evidence,decision_hash)
-                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
                    ON CONFLICT(decision_hash) DO NOTHING
                    RETURNING id""",
                 (
-                    row["session_date"], issued_at, stage, source, code, row.get("stock_name"),
+                    row["session_date"], issued_at, stage, source, row.get("candidate_id"), code, row.get("stock_name"),
                     row.get("grade"), row.get("watch_tier"), row.get("setup_type"), side,
                     canonical(row.get("trigger_spec") or {}), canonical(row.get("exit_spec") or {}),
                     row.get("theoretical_entry_krw"), row.get("invalidation_stop_krw"), row.get("expiry_at"),
@@ -170,6 +173,7 @@ def _focus_decision(stage, item, issued_at, payload):
         "issued_at": issued_at,
         "stage": stage,
         "source_kind": "MARKET_OS_FOCUS_SNAPSHOT",
+        "candidate_id": f"FOCUS:{issued_at.astimezone(KST).date().isoformat()}:{item.get('code')}",
         "stock_code": item.get("code"),
         "stock_name": item.get("name"),
         "grade": None,
@@ -233,15 +237,15 @@ def capture_focus_snapshot(stage, now=None, payload=None):
             with c.cursor() as cur:
                 cur.execute(
                     """INSERT INTO market_review_decisions(
-                        session_date,issued_at,stage,source_kind,stock_code,stock_name,
+                        session_date,issued_at,stage,source_kind,candidate_id,stock_code,stock_name,
                         grade,watch_tier,setup_type,side,trigger_spec,exit_spec,theoretical_entry_krw,
                         invalidation_stop_krw,expiry_at,market_stance,catalyst_grade,
                         rule_version,evidence,decision_hash)
-                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
                        ON CONFLICT(decision_hash) DO NOTHING""",
                     (
                         d["session_date"], d["issued_at"], d["stage"], d["source_kind"],
-                        d["stock_code"], d.get("stock_name"), d.get("grade"), d.get("watch_tier"),
+                        d.get("candidate_id"), d["stock_code"], d.get("stock_name"), d.get("grade"), d.get("watch_tier"),
                         d.get("setup_type"), d["side"], canonical(d.get("trigger_spec") or {}),
                         canonical(d.get("exit_spec") or {}), None, None, None, d.get("market_stance"), d.get("catalyst_grade"),
                         d.get("rule_version"), canonical(d.get("evidence") or {}), d["decision_hash"],
