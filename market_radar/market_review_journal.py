@@ -202,7 +202,17 @@ def capture_focus_snapshot(stage, now=None, payload=None):
     now = now or datetime.now(timezone.utc)
     payload = payload or desk_payload(include_tracking=False)
     sample = payload.get("sample_time")
-    if not sample:
+    if not sample or not payload.get("recent_trade_count"):
+        return 0
+    try:
+        sample_dt = datetime.fromisoformat(str(sample).replace("Z", "+00:00"))
+        if sample_dt.tzinfo is None:
+            sample_dt = sample_dt.replace(tzinfo=timezone.utc)
+        age = (now.astimezone(timezone.utc) - sample_dt.astimezone(timezone.utc)).total_seconds()
+    except (TypeError, ValueError):
+        return 0
+    # Never turn a holiday/prior-session/stale sample into a fresh decision snapshot.
+    if age < -60 or age > 180:
         return 0
     items = [x for x in (payload.get("market_os_watchlist") or []) if x.get("watch_tier") == "FOCUS"]
     if not items:
