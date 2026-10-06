@@ -80,6 +80,7 @@ jobs:
             market_radar/market_review_journal.py \
             market_radar/market_review_bridge.py \
             market_radar/market_review_bridge_app.py \
+            market_radar/market_review_combined_app.py \
             market_radar/kiwoom_realtime_0b.py
 
       - name: Run Market OS unit tests
